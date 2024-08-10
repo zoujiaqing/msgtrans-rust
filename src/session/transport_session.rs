@@ -1,5 +1,6 @@
 use crate::packet::Packet;
 use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex;
 use async_trait::async_trait;
 
 #[async_trait]
@@ -10,7 +11,7 @@ pub trait TransportSession: Send + Sync {
     fn id(&self) -> usize;
     fn set_message_handler(
         &mut self,
-        handler: Arc<RwLock<Box<dyn Fn(Packet, Arc<RwLock<dyn TransportSession + Send + Sync>>) + Send + Sync>>>,
+        handler: Arc<Mutex<Box<dyn Fn(Packet, Arc<Mutex<dyn TransportSession + Send + Sync>>) + Send + Sync>>>,
     );
-    fn get_message_handler(&self) -> Option<Arc<RwLock<Box<dyn Fn(Packet, Arc<RwLock<dyn TransportSession + Send + Sync>>) + Send + Sync>>>>;
+    fn get_message_handler(&self) -> Option<Arc<Mutex<Box<dyn Fn(Packet, Arc<Mutex<dyn TransportSession + Send + Sync>>) + Send + Sync>>>>;
 }

@@ -1,6 +1,6 @@
-use my_project::client::MessageTransportClient;
-use my_project::channel::TcpClientChannel;
-use my_project::packet::Packet;
+use msgtrans::client::MessageTransportClient;
+use msgtrans::channel::TcpClientChannel;
+use msgtrans::packet::Packet;
 
 #[tokio::main]
 async fn main() {
@@ -8,7 +8,7 @@ async fn main() {
 
     // 创建并设置 TCP 通道
     let tcp_channel = TcpClientChannel::new("127.0.0.1", 9001);
-    client.channel(Box::new(tcp_channel));
+    client.set_channel(tcp_channel);
 
     // 连接服务器
     match client.connect().await {

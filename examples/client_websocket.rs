@@ -1,6 +1,6 @@
-use my_project::client::MessageTransportClient;
-use my_project::channel::WebSocketClientChannel;
-use my_project::packet::Packet;
+use msgtrans::client::MessageTransportClient;
+use msgtrans::channel::WebSocketClientChannel;
+use msgtrans::packet::Packet;
 
 #[tokio::main]
 async fn main() {
@@ -8,7 +8,7 @@ async fn main() {
 
     // 创建并设置 WebSocket 通道
     let ws_channel = WebSocketClientChannel::new("127.0.0.1", 9002);
-    client.channel(Box::new(ws_channel));
+    client.set_channel(ws_channel); // 使用 set_channel 而不是 channel
 
     // 连接服务器
     match client.connect().await {
