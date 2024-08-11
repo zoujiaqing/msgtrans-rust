@@ -26,9 +26,21 @@ impl WebSocketTransportSession {
 
 #[async_trait::async_trait]
 impl TransportSession for WebSocketTransportSession {
-    async fn process_packet(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let data = packet.to_bytes().to_vec();
+    async fn send_packet(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 将 Packet 转换为二进制数据并发送
+        let data = packet.to_bytes().to_vec(); // 确保数据是 Vec<u8> 类型
         self.ws_stream.send(Message::Binary(data)).await?;
+        Ok(())
+    }
+
+    async fn process_packet(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 示例：处理收到的 Packet，比如打印内容
+        println!("Processing packet with ID: {}", packet.message_id);
+    
+        // 假设你需要根据收到的 Packet 发送一个响应
+        let response_packet = Packet::new(42, b"WebSocket Response".to_vec());
+        self.send_packet(response_packet).await?;
+    
         Ok(())
     }
 

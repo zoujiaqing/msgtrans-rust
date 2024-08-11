@@ -25,8 +25,19 @@ impl TcpTransportSession {
 #[async_trait::async_trait]
 impl TransportSession for TcpTransportSession {
 
-    async fn process_packet(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send_packet(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.stream.write_all(&packet.to_bytes()).await?;
+        Ok(())
+    }
+
+    async fn process_packet(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // 处理收到的 Packet，比如打印或执行其他操作
+        println!("Processing packet with ID: {}", packet.message_id);
+    
+        // 假设这是一个请求，并且需要发送一个响应
+        let response_packet = Packet::new(42, b"Response test".to_vec());
+        self.send_packet(response_packet).await?;
+    
         Ok(())
     }
     
