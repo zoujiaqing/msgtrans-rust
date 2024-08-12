@@ -7,16 +7,16 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    // 创建服务器实例
+    // Create the server instance
     let mut server = MessageTransportServer::new();
 
-    // 添加TCP通道
+    // Add TCP channel
     server.add_channel(Arc::new(Mutex::new(TcpServerChannel::new(9001)))).await;
 
-    // 添加WebSocket通道
+    // Add WebSocket channel
     server.add_channel(Arc::new(Mutex::new(WebSocketServerChannel::new(9002, "/ws")))).await;
 
-    // 设置统一的消息处理回调
+    // Set message handler
     server.set_message_handler(Arc::new(Mutex::new(
         Box::new(|context: Arc<Context>, packet: Packet| {
             println!(
@@ -25,9 +25,36 @@ async fn main() {
                 packet.payload,
                 context.session().id()
             );
-        })
+        }),
     ))).await;
 
-    // 启动服务器
+    // Set connection handler
+    server.set_on_connect_handler(Arc::new(Mutex::new(
+        Box::new(|context: Arc<Context>| {
+            println!(
+                "New connection established, Session ID: {}",
+                context.session().id()
+            );
+        }),
+    )));
+
+    // Set disconnection handler
+    server.set_on_disconnect_handler(Arc::new(Mutex::new(
+        Box::new(|context: Arc<Context>| {
+            println!(
+                "Connection closed, Session ID: {}",
+                context.session().id()
+            );
+        }),
+    )));
+
+    // Set error handler
+    server.set_on_error_handler(Arc::new(Mutex::new(
+        Box::new(|error| {
+            eprintln!("Error occurred: {:?}", error);
+        }),
+    )));
+
+    // Start the server
     server.start().await;
 }
