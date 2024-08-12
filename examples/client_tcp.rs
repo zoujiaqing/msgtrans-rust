@@ -1,38 +1,42 @@
 use msgtrans::client::MessageTransportClient;
 use msgtrans::channel::TcpClientChannel;
 use msgtrans::packet::Packet;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
+    // 创建客户端实例
     let mut client = MessageTransportClient::new();
 
-    // 创建并设置 TCP 通道
-    let tcp_channel = TcpClientChannel::new("127.0.0.1", 9001);
+    // 设置TCP通道
+    let address = "127.0.0.1".to_string();
+    let port: u16 = 9001;
+    let tcp_channel = TcpClientChannel::new(&address, port);
     client.set_channel(tcp_channel);
 
-    // 连接服务器
-    match client.connect().await {
-        Ok(_) => println!("Connected to TCP server"),
-        Err(e) => println!("Failed to connect to TCP server: {:?}", e),
-    }
+    // 设置消息处理回调
+    client.set_on_message_handler(|packet: Packet| {
+        println!(
+            "Received packet with ID: {}, Payload: {:?}",
+            packet.message_id,
+            packet.payload
+        );
+    });
 
-    // 发送消息
-    let packet = Packet::new(1, b"Hello TCP Server".to_vec());
-    match client.send(packet).await {
-        Ok(_) => println!("Packet sent successfully"),
-        Err(e) => println!("Failed to send packet: {:?}", e),
-    }
+    // 连接到服务器
+    client.connect().await.unwrap();
 
-    // 接收消息
-    match client.receive().await {
-        Ok(Some(packet)) => {
-            println!(
-                "Received packet with ID: {}, Payload: {:?}",
-                packet.message_id,
-                packet.payload
-            );
-        }
-        Ok(None) => println!("No data received"),
-        Err(e) => println!("Failed to receive packet: {:?}", e),
+    // 发送消息到服务器
+    let packet = Packet::new(1, b"Hello, Server!".to_vec());
+    client.send(packet).await.unwrap();
+
+    // 等待接收服务器的响应
+    while let Ok(Some(packet)) = client.receive().await {
+        println!(
+            "Received packet with ID: {}, Payload: {:?}",
+            packet.message_id,
+            packet.payload
+        );
     }
 }

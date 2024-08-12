@@ -1,7 +1,7 @@
 use msgtrans::server::MessageTransportServer;
 use msgtrans::channel::{TcpServerChannel, WebSocketServerChannel};
 use msgtrans::packet::Packet;
-use msgtrans::session::TransportSession;
+use msgtrans::context::Context;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -11,24 +11,22 @@ async fn main() {
     let mut server = MessageTransportServer::new();
 
     // 添加TCP通道
-    server.add_channel(Arc::new(Mutex::new(TcpServerChannel::new(9001))));
+    server.add_channel(Arc::new(Mutex::new(TcpServerChannel::new(9001)))).await;
 
     // 添加WebSocket通道
-    server.add_channel(Arc::new(Mutex::new(WebSocketServerChannel::new(9002, "/ws"))));
+    server.add_channel(Arc::new(Mutex::new(WebSocketServerChannel::new(9002, "/ws")))).await;
 
     // 设置统一的消息处理回调
-    server.set_message_handler(Arc::new(Mutex::new(Box::new(
-        |packet: Packet, session: Arc<Mutex<dyn TransportSession + Send + Sync>>| {
-            let session_guard = session.blocking_lock(); // 使用 blocking_lock 获取锁
+    server.set_message_handler(Arc::new(Mutex::new(
+        Box::new(|context: Arc<Context>, packet: Packet| {
             println!(
                 "Received packet with ID: {}, Payload: {:?}, from Session ID: {}",
                 packet.message_id,
                 packet.payload,
-                session_guard.id()
+                context.session().id()
             );
-            // 根据 packet.message_id 来分发不同的业务逻辑
-        },
-    ))));
+        })
+    ))).await;
 
     // 启动服务器
     server.start().await;
