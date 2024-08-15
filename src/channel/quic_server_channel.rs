@@ -51,11 +51,14 @@ impl ServerChannel for QuicServerChannel {
             .expect("Failed to configure IO")
             .start()
             .expect("Failed to start QUIC server"));
-
+println!("aaaaa");
         while let Some(connection) = self.server.as_mut().unwrap().accept().await {
             let session_id = next_id.fetch_add(1, Ordering::SeqCst);
             let session: Arc<dyn TransportSession + Send + Sync> =
                 QuicTransportSession::new(connection, session_id);
+
+
+            println!("session_id: {}", session_id);
 
             sessions.lock().await.insert(session_id, Arc::clone(&session));
 

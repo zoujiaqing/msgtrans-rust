@@ -46,21 +46,26 @@ impl MessageTransportServer {
         };
 
         for channel in channels_vec.into_iter() {
-            let channel_clone = Arc::clone(&channel);
             let sessions_clone = Arc::clone(&self.sessions);
             let next_id_clone = Arc::clone(&self.next_id);
             let message_handler = self.message_handler.clone();
+            let on_connect = self.on_connect.clone();
+            let on_disconnect = self.on_disconnect.clone();
+            let on_error = self.on_error.clone();
+            let on_timeout = self.on_timeout.clone();
 
-            let mut channel_guard = channel_clone.lock().await;
-            channel_guard.start(
-                sessions_clone,
-                next_id_clone,
-                message_handler,
-                self.on_connect.clone(),
-                self.on_disconnect.clone(),
-                self.on_error.clone(),
-                self.on_timeout.clone(),
-            ).await;
+            tokio::spawn(async move {
+                let mut channel = channel.lock().await;
+                channel.start(
+                    sessions_clone,
+                    next_id_clone,
+                    message_handler,
+                    on_connect,
+                    on_disconnect,
+                    on_error,
+                    on_timeout,
+                ).await;
+            });
         }
     }
 

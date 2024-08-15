@@ -11,8 +11,9 @@ use bytes::Bytes;
 
 pub struct QuicClientChannel {
     connection: Option<Connection>,
-    address: String,
+    host: String,
     port: u16,
+    cert_path: &'static str,
     on_reconnect: Option<OnReconnectHandler>,
     on_disconnect: Option<OnClientDisconnectHandler>,
     on_error: Option<OnClientErrorHandler>,
@@ -20,11 +21,12 @@ pub struct QuicClientChannel {
 }
 
 impl QuicClientChannel {
-    pub fn new(address: &str, port: u16) -> Self {
+    pub fn new(host: &str, port: u16, cert_path: &'static str) -> Self {
         QuicClientChannel {
             connection: None,
-            address: address.to_string(),
+            host: host.to_string(),
             port,
+            cert_path,
             on_reconnect: None,
             on_disconnect: None,
             on_error: None,
@@ -52,14 +54,16 @@ impl ClientChannel for QuicClientChannel {
     }
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("Connecting ...");
         let client = s2n_quic::Client::builder()
-            .with_tls(Path::new("cert.pem"))?
+            .with_tls(Path::new(self.cert_path))?
             .with_io("0.0.0.0:0")?
             .start()?;
 
-        let addr: SocketAddr = format!("{}:{}", self.address, self.port).parse()?;
+        let addr: SocketAddr = format!("{}:{}", self.host, self.port).parse()?;
         let connect = Connect::new(addr).with_server_name("localhost");
         let connection = client.connect(connect).await?;
+        println!("Connected!");
 
         self.connection = Some(connection);
 

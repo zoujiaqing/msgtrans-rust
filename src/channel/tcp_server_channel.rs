@@ -35,7 +35,12 @@ impl ServerChannel for TcpServerChannel {
         on_error: Option<OnServerErrorHandler>,
         on_timeout: Option<OnServerTimeoutHandler>,
     ) {
+
         let listener = TcpListener::bind(("0.0.0.0", self.port)).await.unwrap();
+
+        tokio::spawn( async {
+
+        });
         while let Ok((stream, _)) = listener.accept().await {
             let session_id = next_id.fetch_add(1, Ordering::SeqCst);
 

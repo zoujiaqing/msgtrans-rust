@@ -65,4 +65,11 @@ async fn main() {
 
     // 启动服务器
     server.start().await;
+
+    println!("MsgTrans server has started!");
+
+    // 监听退出信号
+    tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
+
+    println!("Shutdown signal received, exiting...");
 }

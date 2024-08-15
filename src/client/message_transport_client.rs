@@ -71,6 +71,7 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
             let mut channel_guard = channel.lock().await;
             match channel_guard.connect().await {
                 Ok(_) => {
+                    println!("11111");
                     if let Some(handler) = &self.on_reconnect {
                         let handler_guard = handler.lock().await;
                         handler_guard();
