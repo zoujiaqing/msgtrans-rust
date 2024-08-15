@@ -13,12 +13,13 @@ use tokio::net::TcpListener;
 use std::sync::atomic::Ordering;
 
 pub struct TcpServerChannel {
+    host: String,
     port: u16,
 }
 
 impl TcpServerChannel {
-    pub fn new(port: u16) -> Self {
-        TcpServerChannel { port }
+    pub fn new(host: &str, port: u16) -> Self {
+        TcpServerChannel { host: host.to_string(), port: port }
     }
 }
 

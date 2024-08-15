@@ -13,13 +13,14 @@ use tokio_tungstenite::accept_async;
 use tokio::sync::Mutex;
 
 pub struct WebSocketServerChannel {
+    host: &'static str,
     port: u16,
     path: &'static str,
 }
 
 impl WebSocketServerChannel {
-    pub fn new(port: u16, path: &'static str) -> Self {
-        WebSocketServerChannel { port, path }
+    pub fn new(host: &'static str, port: u16, path: &'static str) -> Self {
+        WebSocketServerChannel { host, port, path }
     }
 }
 
@@ -35,7 +36,7 @@ impl ServerChannel for WebSocketServerChannel {
         on_error: Option<OnServerErrorHandler>,
         on_timeout: Option<OnServerTimeoutHandler>,
     ) {
-        let listener = TcpListener::bind(("0.0.0.0", self.port)).await.unwrap();
+        let listener = TcpListener::bind((self.host, self.port)).await.unwrap();
 
         while let Ok((stream, _)) = listener.accept().await {
             match accept_async(stream).await {
@@ -56,6 +57,7 @@ impl ServerChannel for WebSocketServerChannel {
                     let on_disconnect_clone = on_disconnect.clone();
                     let on_error_clone = on_error.clone();
                     let session_clone = Arc::clone(&session); // 克隆 Arc 以避免移动
+
                     tokio::spawn(async move {
                         while let Some(packet) = session_clone.clone().receive_packet().await {
                             if let Some(ref handler) = message_handler_clone {
