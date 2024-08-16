@@ -1,3 +1,5 @@
+use anyhow::Error;
+use anyhow::Result;
 use super::ClientChannel;
 use crate::callbacks::{
     OnClientDisconnectHandler, OnClientErrorHandler, OnReconnectHandler, OnSendHandler,
@@ -8,6 +10,7 @@ use s2n_quic::connection::Connection;
 use s2n_quic::stream::BidirectionalStream;
 use std::{path::Path, net::SocketAddr};
 use bytes::Bytes;
+use std::io;
 
 pub struct QuicClientChannel {
     connection: Option<Connection>,
@@ -81,21 +84,27 @@ impl ClientChannel for QuicClientChannel {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(connection) = &mut self.connection {
             let mut stream: BidirectionalStream = connection.open_bidirectional_stream().await?;
-
+        
+            let data = Bytes::from(packet.to_bytes());
+            let send_result = stream.send(data).await;
+        
+            // 调用 OnSendHandler 回调，并传递 Packet 和 Result
             if let Some(ref handler) = self.on_send {
                 let handler = handler.lock().await;
-                handler(packet.clone());
+                handler(packet.clone(), send_result.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>));
             }
-
-            let data = Bytes::from(packet.to_bytes());
-            stream.send(data).await?;
-            Ok(())
+        
+            send_result.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
         } else {
+            let err_msg: Box<dyn std::error::Error + Send + Sync> = "No connection established".into();
+            
+            // 调用 OnErrorHandler 回调
             if let Some(ref handler) = self.on_error {
                 let handler = handler.lock().await;
-                handler("No connection established".into());
+                handler(err_msg);
             }
-            Err("No connection established".into())
+            
+            Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")))
         }
     }
 

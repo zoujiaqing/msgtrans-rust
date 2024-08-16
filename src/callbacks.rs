@@ -20,4 +20,5 @@ pub type OnServerTimeoutHandler = Arc<Mutex<dyn Fn(Arc<Context>) + Send + Sync>>
 pub type OnReconnectHandler = Arc<Mutex<dyn Fn() + Send + Sync>>;
 pub type OnClientDisconnectHandler = Arc<Mutex<dyn Fn() + Send + Sync>>;
 pub type OnClientErrorHandler = Arc<Mutex<dyn Fn(Box<dyn std::error::Error + Send + Sync>) + Send + Sync>>;
-pub type OnSendHandler = Arc<Mutex<dyn Fn(Packet) + Send + Sync>>;
+pub type OnSendHandler = Arc<Mutex<dyn Fn(Packet, Result<(), Box<dyn std::error::Error + Send + Sync>>) + Send + Sync>>;
+pub type OnClientMessageHandler = Arc<Mutex<dyn Fn(Packet) + Send + Sync>>;

@@ -8,8 +8,7 @@ use tokio_tungstenite::MaybeTlsStream;
 use futures::stream::StreamExt;
 use url::Url;
 use futures::sink::SinkExt;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::io;
 
 pub struct WebSocketClientChannel {
     ws_stream: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -40,7 +39,7 @@ impl WebSocketClientChannel {
 #[async_trait::async_trait]
 impl ClientChannel for WebSocketClientChannel {
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let url = Url::parse(&format!("ws://{}:{}/ws", self.address, self.port))?;
+        let url = Url::parse(&format!("ws://{}:{}/{}", self.address, self.port, self.path))?;
         match connect_async(url).await {
             Ok((ws_stream, _)) => {
                 self.ws_stream = Some(ws_stream);
@@ -55,26 +54,39 @@ impl ClientChannel for WebSocketClientChannel {
                     let handler = handler.lock().await;
                     handler(Box::new(e));
                 }
-                Err("Failed to connect".into())
+                Err(Box::new(io::Error::new(io::ErrorKind::Other, "Failed to connect")))
             }
         }
     }
 
-    async fn send(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send(
+        &mut self,
+        packet: Packet,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(ws_stream) = &mut self.ws_stream {
+            let send_result = ws_stream
+                .send(Message::Binary(packet.to_bytes().to_vec()))
+                .await;
+    
             if let Some(ref handler) = self.on_send {
                 let handler = handler.lock().await;
-                handler(packet.clone());
+                let send_result_for_handler = send_result
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>);
+                handler(packet.clone(), send_result_for_handler);
             }
-            let data = packet.to_bytes().to_vec();
-            ws_stream.send(Message::Binary(data)).await?;
-            Ok(())
+    
+            send_result.map(|_| ()).map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)
         } else {
+            let err_msg: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established"));
+    
             if let Some(ref handler) = self.on_error {
                 let handler = handler.lock().await;
-                handler("No connection established".into());
+                handler(err_msg);
             }
-            Err("No connection established".into())
+    
+            Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")))
         }
     }
 
@@ -92,14 +104,13 @@ impl ClientChannel for WebSocketClientChannel {
         } else {
             if let Some(ref handler) = self.on_error {
                 let handler = handler.lock().await;
-                handler("No connection established".into());
+                handler(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")));
             }
-            return Err("No connection established".into());
+            return Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")));
         }
         Ok(None)
     }
 
-    // 实现回调设置方法
     fn set_reconnect_handler(&mut self, handler: OnReconnectHandler) {
         self.on_reconnect = Some(handler);
     }

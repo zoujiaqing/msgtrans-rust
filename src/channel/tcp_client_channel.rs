@@ -4,10 +4,9 @@ use crate::callbacks::{
 };
 use crate::packet::Packet;
 use bytes::BytesMut;
-use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use std::io;
 
 pub struct TcpClientChannel {
     stream: Option<TcpStream>,
@@ -76,19 +75,34 @@ impl ClientChannel for TcpClientChannel {
         packet: Packet,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(stream) = &mut self.stream {
+            // 发送数据并捕获可能的错误
+            let send_result = stream.write_all(&packet.to_bytes()).await;
+    
+            // 调用 OnSendHandler 回调，并传递 Packet 和 Result
             if let Some(ref handler) = self.on_send {
                 let handler = handler.lock().await;
-                handler(packet.clone());
+    
+                // 将 send_result 克隆一份给回调函数
+                let send_result_for_handler = send_result
+                    .as_ref() // 使用 as_ref 获取一个 &Result 而不是移动 send_result
+                    .map(|_| ()) // 将 Ok() 映射为 ()
+                    .map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>);
+    
+                handler(packet.clone(), send_result_for_handler);
             }
-            let data = packet.to_bytes();
-            stream.write_all(&data).await?;
-            Ok(())
+    
+            // 直接返回 send_result，但需要映射 Ok() 的内容为 ()
+            send_result.map(|_| ()).map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)
         } else {
+            // 如果连接没有建立，创建错误消息并调用 OnErrorHandler
+            let err_msg: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established"));
+    
             if let Some(ref handler) = self.on_error {
                 let handler = handler.lock().await;
-                handler("No connection established".into());
+                handler(err_msg);
             }
-            Err("No connection established".into())
+    
+            Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")))
         }
     }
 

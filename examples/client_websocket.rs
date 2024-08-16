@@ -1,6 +1,7 @@
 use msgtrans::client::MessageTransportClient;
 use msgtrans::channel::WebSocketClientChannel;
 use msgtrans::packet::Packet;
+use tokio::io::{self, AsyncBufReadExt, BufReader};
 
 #[tokio::main]
 async fn main() {
@@ -25,16 +26,22 @@ async fn main() {
     // 连接到服务器
     client.connect().await.unwrap();
 
-    // 发送消息到服务器
-    let packet = Packet::new(1, b"Hello, WebSocket Server!".to_vec());
-    client.send(packet).await.unwrap();
 
-    // 等待接收服务器的响应
-    while let Ok(Some(packet)) = client.receive().await {
-        println!(
-            "Received packet with ID: {}, Payload: {:?}",
-            packet.message_id,
-            packet.payload
-        );
-    }
+    // 创建异步读取器，用于读取键盘输入
+    let stdin = BufReader::new(io::stdin());
+    let mut lines = stdin.lines();
+
+    // 创建一个任务来读取用户输入
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let packet = Packet::new(2, line.as_bytes().to_vec());
+            if let Err(e) = client.send(packet).await {
+                eprintln!("Failed to send packet: {}", e);
+                return;
+            }
+        }
+    });
+
+    // 监听退出信号
+    tokio::signal::ctrl_c().await.expect("Exit for Ctrl+C");
 }
