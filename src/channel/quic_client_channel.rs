@@ -65,7 +65,6 @@ impl ClientChannel for QuicClientChannel {
     }
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        println!("Connecting ...");
         let client = s2n_quic::Client::builder()
             .with_tls(Path::new(self.cert_path))?
             .with_io("0.0.0.0:0")?
@@ -74,7 +73,6 @@ impl ClientChannel for QuicClientChannel {
         let addr: SocketAddr = format!("{}:{}", self.host, self.port).parse()?;
         let connect = Connect::new(addr).with_server_name("localhost");
         let mut connection = client.connect(connect).await?;
-        println!("Connected!");
 
         connection.keep_alive(true)?;
 
@@ -129,7 +127,6 @@ impl ClientChannel for QuicClientChannel {
         &mut self,
         packet: Packet,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        println!("channel.send()");
 
         if let Some(ref connection) = self.connection {
             // 每次发送数据都打开一个新的流
@@ -138,7 +135,6 @@ impl ClientChannel for QuicClientChannel {
             let data = Bytes::from(packet.to_bytes());
             let (_, mut send_stream) = stream.split();
             send_stream.write_all(&data).await?;
-            println!("Data sent");
 
             // 调用 OnSendHandler 回调，并传递 Packet 和 Result
             if let Some(ref handler) = self.on_send {

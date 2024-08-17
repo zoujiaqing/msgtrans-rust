@@ -34,14 +34,12 @@ async fn main() {
 
 
     let packet = Packet::new(2, "Hello Server1!".as_bytes().to_vec());
-    println!("to packet");
     if let Err(e) = client.send(packet).await {
         eprintln!("Failed to send packet: {}", e);
         return;
     }
 
     let packet = Packet::new(2, "Hello Server2!".as_bytes().to_vec());
-    println!("to packet");
     if let Err(e) = client.send(packet).await {
         eprintln!("Failed to send packet: {}", e);
         return;
@@ -53,7 +51,6 @@ async fn main() {
 
     while let Ok(Some(line)) = lines.next_line().await {
         let packet = Packet::new(2, line.as_bytes().to_vec());
-        println!("to send ..");
         if let Err(e) = client.send(packet).await {
             eprintln!("Failed to send packet: {}", e);
             return;

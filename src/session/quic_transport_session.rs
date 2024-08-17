@@ -1,5 +1,5 @@
 use crate::callbacks::{
-    OnMessageHandler, OnReceiveHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
+    OnMessageHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
 };
 use crate::packet::Packet;
 use crate::context::Context;
@@ -14,7 +14,6 @@ pub struct QuicTransportSession {
     connection: Mutex<Connection>,
     id: usize,
     message_handler: Mutex<Option<OnMessageHandler>>,
-    receive_handler: Mutex<Option<OnReceiveHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,
     error_handler: Mutex<Option<OnSessionErrorHandler>>,
     timeout_handler: Mutex<Option<OnSessionTimeoutHandler>>,
@@ -26,7 +25,6 @@ impl QuicTransportSession {
             connection: Mutex::new(connection),
             id,
             message_handler: Mutex::new(None),
-            receive_handler: Mutex::new(None),
             close_handler: Mutex::new(None),
             error_handler: Mutex::new(None),
             timeout_handler: Mutex::new(None),
@@ -49,19 +47,14 @@ impl TransportSession for QuicTransportSession {
         while let Some(mut stream) = connection.accept_bidirectional_stream().await? {
             while let Some(data) = stream.receive().await? {
                 let packet = Packet::from_bytes(&data);
-                if let Some(handler) = self.get_receive_handler().await {
+                println!("start_receiving QUIC packet with ID: {}", packet.message_id);
+                println!("start_receiving QUIC packet with data: {:?}", packet.payload);
+                if let Some(handler) = self.get_message_handler().await {
                     let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                    handler.lock().await(context, packet.clone());
+                    handler.lock().await(context, packet);
                 }
             }
         }
-        Ok(())
-    }
-
-    async fn process_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        println!("Processing QUIC packet with ID: {}", packet.message_id);
-        let response_packet = Packet::new(42, b"QUIC response test".to_vec());
-        self.send_packet(response_packet).await?;
         Ok(())
     }
 
@@ -88,16 +81,6 @@ impl TransportSession for QuicTransportSession {
     async fn get_message_handler(&self) -> Option<OnMessageHandler> {
         let message_handler = self.message_handler.lock().await;
         message_handler.clone()
-    }
-
-    async fn set_receive_handler(self: Arc<Self>, handler: OnReceiveHandler) {
-        let mut receive_handler = self.receive_handler.lock().await;
-        *receive_handler = Some(handler);
-    }
-
-    async fn get_receive_handler(&self) -> Option<OnReceiveHandler> {
-        let receive_handler = self.receive_handler.lock().await;
-        receive_handler.clone()
     }
 
     async fn set_close_handler(self: Arc<Self>, handler: OnCloseHandler) {

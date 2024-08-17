@@ -14,8 +14,7 @@ use std::io;
 pub struct TcpTransportSession {
     stream: Mutex<TcpStream>, // 使用 Mutex 保护 TcpStream
     id: usize,
-    message_handler: Mutex<Option<OnMessageHandler>>, // 使用 Mutex 保护处理器
-    receive_handler: Mutex<Option<OnReceiveHandler>>,
+    message_handler: Mutex<Option<OnMessageHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,
     error_handler: Mutex<Option<OnSessionErrorHandler>>,
     timeout_handler: Mutex<Option<OnSessionTimeoutHandler>>,
@@ -27,7 +26,6 @@ impl TcpTransportSession {
             stream: Mutex::new(stream),
             id,
             message_handler: Mutex::new(None),
-            receive_handler: Mutex::new(None),
             close_handler: Mutex::new(None),
             error_handler: Mutex::new(None),
             timeout_handler: Mutex::new(None),
@@ -80,13 +78,6 @@ impl TransportSession for TcpTransportSession {
         Ok(())
     }
 
-    async fn process_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        println!("Processing packet with ID: {}", packet.message_id);
-        let response_packet = Packet::new(42, b"Response test".to_vec());
-        self.send_packet(response_packet).await?;
-        Ok(())
-    }
-
     async fn close_session(self: Arc<Self>, context: Arc<Context>) {
         let mut stream = self.stream.lock().await;
         let _ = stream.shutdown().await;
@@ -107,16 +98,6 @@ impl TransportSession for TcpTransportSession {
     async fn get_message_handler(&self) -> Option<OnMessageHandler> {
         let message_handler = self.message_handler.lock().await;
         message_handler.clone()
-    }
-
-    async fn set_receive_handler(self: Arc<Self>, handler: OnReceiveHandler) {
-        let mut receive_handler = self.receive_handler.lock().await;
-        *receive_handler = Some(handler);
-    }
-
-    async fn get_receive_handler(&self) -> Option<OnReceiveHandler> {
-        let receive_handler = self.receive_handler.lock().await;
-        receive_handler.clone()
     }
 
     async fn set_close_handler(self: Arc<Self>, handler: OnCloseHandler) {

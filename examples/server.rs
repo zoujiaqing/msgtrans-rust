@@ -33,6 +33,16 @@ async fn main() {
                 packet.payload,
                 context.session().id()
             );
+            // 发送回显内容给客户端
+            tokio::spawn({
+                let context = Arc::clone(&context);
+                async move {
+                    let send_result = context.session().send_packet(packet).await;
+                    if let Err(e) = send_result {
+                        eprintln!("Failed to send packet: {:?}", e);
+                    }
+                }
+            });
         }),
     ))).await;
 
