@@ -72,25 +72,19 @@ impl ServerChannel for QuicServerChannel {
             let on_error_clone = on_error.clone();
 
             tokio::spawn({
-                let session_clone = Arc::clone(&session); // 在任务内部克隆一次
+                let session_clone = Arc::clone(&session);
                 async move {
-                    while let Some(packet) = session_clone.clone().receive_packet().await {
-                        if let Some(ref handler) = message_handler_clone {
+                    if let Err(e) = session_clone.clone().start_receiving().await {
+                        // 接收数据时发生错误，触发错误处理
+                        if let Some(ref handler) = on_error_clone {
                             let handler = handler.lock().await;
-                            handler(Arc::new(Context::new(Arc::clone(&session_clone))), packet.clone());
+                            handler(e); // 不再需要额外的 Box 包装
                         }
-                        if let Err(e) = session_clone.clone().process_packet(packet).await {
-                            if let Some(ref handler) = on_error_clone {
-                                let handler = handler.lock().await;
-                                handler(e);
-                            }
+                        // 发生错误后退出，可能表示连接关闭
+                        if let Some(ref handler) = on_disconnect_clone {
+                            let handler = handler.lock().await;
+                            handler(Arc::new(Context::new(Arc::clone(&session_clone))));
                         }
-                    }
-
-                    // 触发 OnDisconnectHandler
-                    if let Some(ref handler) = on_disconnect_clone {
-                        let handler = handler.lock().await;
-                        handler(Arc::new(Context::new(Arc::clone(&session_clone))));
                     }
                 }
             });

@@ -9,6 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
+use std::io;
 
 pub struct TcpTransportSession {
     stream: Mutex<TcpStream>, // 使用 Mutex 保护 TcpStream
@@ -43,19 +44,40 @@ impl TransportSession for TcpTransportSession {
         Ok(())
     }
 
-    async fn receive_packet(self: Arc<Self>) -> Option<Packet> {
+    async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut stream = self.stream.lock().await;
         let mut buf = [0; 1024];
-        let n = stream.read(&mut buf).await.ok()?;
-        if n == 0 {
-            return None;
+        
+        loop {
+            match stream.read(&mut buf).await {
+                Ok(n) if n > 0 => {
+                    let packet = Packet::from_bytes(&buf[..n]);
+                    
+                    if let Some(handler) = self.get_message_handler().await {
+                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                        handler.lock().await(context, packet.clone());
+                    }
+                }
+                Ok(_) => {
+                    // 处理连接关闭的情况
+                    if let Some(handler) = self.get_close_handler().await {
+                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                        handler.lock().await(context);
+                    }
+                    break;
+                }
+                Err(e) => {
+                    // 处理接收数据时发生的错误
+                    if let Some(handler) = self.get_error_handler().await {
+                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                        handler.lock().await(context, Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                    break;
+                }
+            }
         }
-        let packet = Packet::from_bytes(&buf[..n]);
-        if let Some(handler) = self.get_receive_handler().await {
-            let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-            handler.lock().await(context, packet.clone());
-        }
-        Some(packet)
+
+        Ok(())
     }
 
     async fn process_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

@@ -3,17 +3,17 @@ use crate::callbacks::{
 };
 use crate::packet::Packet;
 use crate::context::Context;
-use crate::session::TransportSession;
 use s2n_quic::connection::Connection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
+use crate::session::TransportSession;
 
 pub struct QuicTransportSession {
-    connection: Mutex<Connection>, // 使用 Mutex 保护 Connection
+    connection: Mutex<Connection>,
     id: usize,
-    message_handler: Mutex<Option<OnMessageHandler>>, // 使用 Mutex 保护处理器
+    message_handler: Mutex<Option<OnMessageHandler>>,
     receive_handler: Mutex<Option<OnReceiveHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,
     error_handler: Mutex<Option<OnSessionErrorHandler>>,
@@ -43,20 +43,19 @@ impl TransportSession for QuicTransportSession {
         stream.send(Bytes::from(data)).await?;
         Ok(())
     }
-
-    async fn receive_packet(self: Arc<Self>) -> Option<Packet> {
+    
+    async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut connection = self.connection.lock().await;
-        if let Ok(Some(mut stream)) = connection.accept_bidirectional_stream().await {
-            if let Ok(Some(data)) = stream.receive().await {
+        while let Some(mut stream) = connection.accept_bidirectional_stream().await? {
+            while let Some(data) = stream.receive().await? {
                 let packet = Packet::from_bytes(&data);
                 if let Some(handler) = self.get_receive_handler().await {
                     let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                     handler.lock().await(context, packet.clone());
                 }
-                return Some(packet);
             }
         }
-        None
+        Ok(())
     }
 
     async fn process_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

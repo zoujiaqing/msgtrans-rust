@@ -11,6 +11,7 @@ use futures::{StreamExt, SinkExt};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
+use std::io;
 
 pub struct WebSocketTransportSession {
     ws_stream: Mutex<WebSocketStream<TcpStream>>, // 使用 Mutex 保护 ws_stream
@@ -45,23 +46,44 @@ impl TransportSession for WebSocketTransportSession {
         Ok(())
     }
 
-    async fn receive_packet(self: Arc<Self>) -> Option<Packet> {
+    async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut ws_stream = self.ws_stream.lock().await;
-        if let Some(msg) = ws_stream.next().await {
+
+        while let Some(msg) = ws_stream.next().await {
             match msg {
                 Ok(Message::Binary(bin)) => {
                     let packet = Packet::from_bytes(&bin);
+                    
+                    // 如果有接收处理器，调用它
                     if let Some(handler) = self.get_receive_handler().await {
                         let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                         handler.lock().await(context, packet.clone());
                     }
-                    Some(packet)
                 }
-                _ => None,
+                Ok(_) => {
+                    // 接收到非二进制消息时处理错误
+                    if let Some(handler) = self.get_error_handler().await {
+                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                        handler.lock().await(context, Box::new(io::Error::new(io::ErrorKind::InvalidData, "Received non-binary message")) as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                }
+                Err(e) => {
+                    // 处理WebSocket错误
+                    if let Some(handler) = self.get_error_handler().await {
+                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                        handler.lock().await(context, Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                    break;
+                }
             }
-        } else {
-            None
         }
+        
+        if let Some(handler) = self.get_close_handler().await {
+            let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+            handler.lock().await(context);
+        }
+        
+        Ok(())
     }
 
     async fn process_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

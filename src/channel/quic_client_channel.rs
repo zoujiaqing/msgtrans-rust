@@ -6,19 +6,16 @@ use crate::callbacks::{
 use crate::packet::Packet;
 use s2n_quic::client::Connect;
 use s2n_quic::connection::Connection;
-use s2n_quic::stream::ReceiveStream;
-use s2n_quic::stream::SendStream;
+use s2n_quic::stream::{ReceiveStream, SendStream};
 use std::{path::Path, net::SocketAddr};
 use bytes::Bytes;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::sync::{Arc};
+use tokio::sync::Mutex; // 使用 tokio 的异步 Mutex
 use std::io;
-use tokio::io::AsyncReadExt;
-use tokio::io::AsyncWriteExt;
-use std::sync::Arc;
 
 pub struct QuicClientChannel {
-    connection: Option<Connection>,
-    receive_stream: Option<Arc<tokio::sync::Mutex<ReceiveStream>>>,
-    send_stream: Option<Arc<tokio::sync::Mutex<SendStream>>>,
+    connection: Option<Arc<Mutex<Connection>>>,
     host: String,
     port: u16,
     cert_path: &'static str,
@@ -33,8 +30,6 @@ impl QuicClientChannel {
     pub fn new(host: &str, port: u16, cert_path: &'static str) -> Self {
         QuicClientChannel {
             connection: None,
-            receive_stream: None,
-            send_stream: None,
             host: host.to_string(),
             port,
             cert_path,
@@ -83,58 +78,49 @@ impl ClientChannel for QuicClientChannel {
 
         connection.keep_alive(true)?;
 
-        let stream = connection.open_bidirectional_stream().await?;
-        let (receive_stream, send_stream) = stream.split();
-
-        let receive_stream = Arc::new(tokio::sync::Mutex::new(receive_stream));
-        let send_stream = Arc::new(tokio::sync::Mutex::new(send_stream));
-
-        self.connection = Some(connection);
-        self.receive_stream = Some(receive_stream.clone());
-        self.send_stream = Some(send_stream.clone());
+        // let connection = Arc::new(Mutex::new(connection));
 
         if let Some(ref handler) = self.on_reconnect {
             let handler = handler.lock().await;
-            (*handler)();  // 解引用并调用
+            (*handler)();
         }
-
+        
+        let stream = connection.open_bidirectional_stream().await.unwrap();
+        let (mut receive_stream, _) = stream.split();
         let on_message = self.on_message.clone();
         let on_disconnect = self.on_disconnect.clone();
         let on_error = self.on_error.clone();
 
-        // 启动接收任务
-        tokio::spawn({
-            let receive_stream = receive_stream.clone();
-            async move {
-                let mut buf = vec![0u8; 1024];
-                loop {
-                    let mut stream = receive_stream.lock().await;
-                    match stream.read(&mut buf).await {
-                        Ok(n) if n > 0 => {
-                            if let Some(ref handler) = on_message {
-                                let packet = Packet::from_bytes(&buf[..n]);
-                                let handler = handler.lock().await;
-                                (*handler)(packet);
-                            }
+        tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            loop {
+                match receive_stream.read(&mut buf).await {
+                    Ok(n) if n > 0 => {
+                        if let Some(ref handler) = on_message {
+                            let packet = Packet::from_bytes(&buf[..n]);
+                            let handler = handler.lock().await;
+                            (*handler)(packet);
                         }
-                        Ok(_) => {
-                            if let Some(ref handler) = on_disconnect {
-                                let handler = handler.lock().await;
-                                (*handler)();
-                            }
-                            break;
+                    }
+                    Ok(_) => {
+                        if let Some(ref handler) = on_disconnect {
+                            let handler = handler.lock().await;
+                            (*handler)();
                         }
-                        Err(e) => {
-                            if let Some(ref handler) = on_error {
-                                let handler = handler.lock().await;
-                                (*handler)(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
-                            }
-                            break;
+                        break;
+                    }
+                    Err(e) => {
+                        if let Some(ref handler) = on_error {
+                            let handler = handler.lock().await;
+                            (*handler)(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                         }
+                        break;
                     }
                 }
             }
         });
+
+        self.connection = Some(Arc::new(Mutex::new(connection)));
 
         Ok(())
     }
@@ -145,10 +131,13 @@ impl ClientChannel for QuicClientChannel {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!("channel.send()");
 
-        if let Some(ref send_stream) = self.send_stream {
-            let mut stream = send_stream.lock().await;
+        if let Some(ref connection) = self.connection {
+            // 每次发送数据都打开一个新的流
+            let mut conn = connection.lock().await;
+            let mut stream = conn.open_bidirectional_stream().await?;
             let data = Bytes::from(packet.to_bytes());
-            stream.write_all(&data).await?;
+            let (_, mut send_stream) = stream.split();
+            send_stream.write_all(&data).await?;
             println!("Data sent");
 
             // 调用 OnSendHandler 回调，并传递 Packet 和 Result

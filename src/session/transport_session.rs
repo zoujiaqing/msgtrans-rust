@@ -9,12 +9,11 @@ use async_trait::async_trait;
 #[async_trait]
 pub trait TransportSession: Send + Sync {
     async fn send_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
-    async fn receive_packet(self: Arc<Self>) -> Option<Packet>;
     async fn process_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     async fn close_session(self: Arc<Self>, context: Arc<Context>);
     fn id(&self) -> usize;
 
-    async fn set_message_handler(self: Arc<Self>, handler: OnMessageHandler) ;
+    async fn set_message_handler(self: Arc<Self>, handler: OnMessageHandler);
     async fn get_message_handler(&self) -> Option<OnMessageHandler>;
 
     async fn set_receive_handler(self: Arc<Self>, handler: OnReceiveHandler);
@@ -28,4 +27,6 @@ pub trait TransportSession: Send + Sync {
 
     async fn set_timeout_handler(self: Arc<Self>, handler: OnSessionTimeoutHandler);
     async fn get_timeout_handler(&self) -> Option<OnSessionTimeoutHandler>;
+
+    async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }

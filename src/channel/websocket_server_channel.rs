@@ -53,29 +53,23 @@ impl ServerChannel for WebSocketServerChannel {
                         handler(Arc::new(Context::new(Arc::clone(&session))));
                     }
 
-                    let message_handler_clone = message_handler.clone();
                     let on_disconnect_clone = on_disconnect.clone();
                     let on_error_clone = on_error.clone();
-                    let session_clone = Arc::clone(&session); // 克隆 Arc 以避免移动
 
+                    let session_clone = Arc::clone(&session);
                     tokio::spawn(async move {
-                        while let Some(packet) = session_clone.clone().receive_packet().await {
-                            if let Some(ref handler) = message_handler_clone {
+                        let session_for_receiving = Arc::clone(&session_clone);
+                        if let Err(e) = session_for_receiving.start_receiving().await {
+                            // 接收数据时发生错误，触发错误处理
+                            if let Some(ref handler) = on_error_clone {
                                 let handler = handler.lock().await;
-                                handler(Arc::new(Context::new(Arc::clone(&session_clone))), packet.clone());
+                                handler(e);
                             }
-                            if let Err(e) = session_clone.clone().process_packet(packet).await {
-                                if let Some(ref handler) = on_error_clone {
-                                    let handler = handler.lock().await;
-                                    handler(e);
-                                }
+                            // 发生错误后触发断开连接的处理
+                            if let Some(ref handler) = on_disconnect_clone {
+                                let handler = handler.lock().await;
+                                handler(Arc::new(Context::new(Arc::clone(&session_clone))));
                             }
-                        }
-
-                        // 触发 OnDisconnectHandler
-                        if let Some(ref handler) = on_disconnect_clone {
-                            let handler = handler.lock().await;
-                            handler(Arc::new(Context::new(Arc::clone(&session_clone))));
                         }
                     });
                 }
