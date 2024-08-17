@@ -1,11 +1,13 @@
 use super::ClientChannel;
 use crate::callbacks::{
-    OnClientDisconnectHandler, OnClientErrorHandler, OnReconnectHandler, OnSendHandler,
+    OnClientDisconnectHandler, OnClientErrorHandler, OnReconnectHandler, OnSendHandler, OnClientMessageHandler,
 };
 use crate::packet::Packet;
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio::sync::Mutex;
+use std::sync::Arc;
 use std::io;
 
 pub struct TcpClientChannel {
@@ -16,6 +18,7 @@ pub struct TcpClientChannel {
     on_disconnect: Option<OnClientDisconnectHandler>,
     on_error: Option<OnClientErrorHandler>,
     on_send: Option<OnSendHandler>,
+    on_message: Option<Arc<Mutex<OnClientMessageHandler>>>,
 }
 
 impl TcpClientChannel {
@@ -28,6 +31,7 @@ impl TcpClientChannel {
             on_disconnect: None,
             on_error: None,
             on_send: None,
+            on_message: None,
         }
     }
 }
@@ -48,6 +52,10 @@ impl ClientChannel for TcpClientChannel {
 
     fn set_send_handler(&mut self, handler: OnSendHandler) {
         self.on_send = Some(handler);
+    }
+
+    fn set_on_message_handler(&mut self, handler: OnClientMessageHandler) {
+        self.on_message = Some(Arc::new(Mutex::new(handler)));
     }
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -75,57 +83,63 @@ impl ClientChannel for TcpClientChannel {
         packet: Packet,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(stream) = &mut self.stream {
-            // 发送数据并捕获可能的错误
             let send_result = stream.write_all(&packet.to_bytes()).await;
     
-            // 调用 OnSendHandler 回调，并传递 Packet 和 Result
             if let Some(ref handler) = self.on_send {
                 let handler = handler.lock().await;
-    
-                // 将 send_result 克隆一份给回调函数
                 let send_result_for_handler = send_result
-                    .as_ref() // 使用 as_ref 获取一个 &Result 而不是移动 send_result
-                    .map(|_| ()) // 将 Ok() 映射为 ()
+                    .as_ref()
+                    .map(|_| ())
                     .map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>);
-    
                 handler(packet.clone(), send_result_for_handler);
             }
     
-            // 直接返回 send_result，但需要映射 Ok() 的内容为 ()
             send_result.map(|_| ()).map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)
         } else {
-            // 如果连接没有建立，创建错误消息并调用 OnErrorHandler
             let err_msg: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established"));
-    
             if let Some(ref handler) = self.on_error {
                 let handler = handler.lock().await;
                 handler(err_msg);
             }
-    
             Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")))
         }
     }
 
-    async fn receive(
-        &mut self,
-    ) -> Result<Option<Packet>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn start_receiving(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(stream) = &mut self.stream {
-            let mut buf = BytesMut::with_capacity(1024);
-            match stream.read_buf(&mut buf).await {
-                Ok(n) if n > 0 => Ok(Some(Packet::from_bytes(&buf[..n]))),
-                Ok(_) => Ok(None),
-                Err(e) => {
-                    if let Some(ref handler) = self.on_error {
-                        let handler = handler.lock().await;
-                        handler(Box::new(e));
+            loop {
+                let mut buf = BytesMut::with_capacity(1024);
+                match stream.read_buf(&mut buf).await {
+                    Ok(n) if n > 0 => {
+                        let packet = Packet::from_bytes(&buf[..n]);
+                        if let Some(ref handler_arc) = self.on_message {
+                            let handler_arc_guard = handler_arc.lock().await;
+                            let handler = handler_arc_guard.lock().await;
+                            (handler)(packet);
+                        }
                     }
-                    Err("Failed to receive packet".into())
+                    Ok(_) => {
+                        println!("Connection closed by peer.");
+                        if let Some(ref handler_arc) = self.on_disconnect {
+                            let handler_arc_guard = handler_arc.lock().await;
+                            (handler_arc_guard)();
+                        }
+                        break;
+                    }
+                    Err(e) => {
+                        if let Some(ref handler_arc) = self.on_error {
+                            let handler_arc_guard = handler_arc.lock().await;
+                            handler_arc_guard(Box::new(e));
+                        }
+                        break;
+                    }
                 }
             }
+            Ok(())
         } else {
-            if let Some(ref handler) = self.on_error {
-                let handler = handler.lock().await;
-                handler("No connection established".into());
+            if let Some(ref handler_arc) = self.on_error {
+                let handler_arc_guard = handler_arc.lock().await;
+                handler_arc_guard("No connection established".into());
             }
             Err("No connection established".into())
         }

@@ -1,6 +1,6 @@
 use super::ClientChannel;
 use crate::packet::Packet;
-use crate::callbacks::{OnReconnectHandler, OnClientDisconnectHandler, OnClientErrorHandler, OnSendHandler};
+use crate::callbacks::{OnReconnectHandler, OnClientDisconnectHandler, OnClientErrorHandler, OnSendHandler, OnClientMessageHandler};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{connect_async, WebSocketStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -9,6 +9,8 @@ use futures::stream::StreamExt;
 use url::Url;
 use futures::sink::SinkExt;
 use std::io;
+use tokio::sync::Mutex;
+use std::sync::Arc;
 
 pub struct WebSocketClientChannel {
     ws_stream: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
@@ -19,6 +21,7 @@ pub struct WebSocketClientChannel {
     on_disconnect: Option<OnClientDisconnectHandler>,
     on_error: Option<OnClientErrorHandler>,
     on_send: Option<OnSendHandler>,
+    on_message: Option<Arc<Mutex<OnClientMessageHandler>>>,
 }
 
 impl WebSocketClientChannel {
@@ -32,6 +35,7 @@ impl WebSocketClientChannel {
             on_disconnect: None,
             on_error: None,
             on_send: None,
+            on_message: None,
         }
     }
 }
@@ -90,25 +94,40 @@ impl ClientChannel for WebSocketClientChannel {
         }
     }
 
-    async fn receive(&mut self) -> Result<Option<Packet>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn start_receiving(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(ws_stream) = &mut self.ws_stream {
-            if let Some(msg) = ws_stream.next().await {
-                match msg? {
-                    Message::Binary(bin) => {
+            while let Some(msg) = ws_stream.next().await {
+                match msg {
+                    Ok(Message::Binary(bin)) => {
                         let packet = Packet::from_bytes(&bin);
-                        return Ok(Some(packet));
+                        if let Some(ref handler_arc) = self.on_message {
+                            let handler_arc_guard = handler_arc.lock().await;
+                            let handler = handler_arc_guard.lock().await;
+                            (handler)(packet);
+                        }
                     }
-                    _ => return Ok(None),
+                    Ok(_) => continue,
+                    Err(e) => {
+                        if let Some(ref handler_arc) = self.on_error {
+                            let handler_arc_guard = handler_arc.lock().await;
+                            handler_arc_guard(Box::new(e));
+                        }
+                        break;
+                    }
                 }
             }
-        } else {
-            if let Some(ref handler) = self.on_error {
-                let handler = handler.lock().await;
-                handler(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")));
+            if let Some(ref handler_arc) = self.on_disconnect {
+                let handler_arc_guard = handler_arc.lock().await;
+                (handler_arc_guard)();
             }
-            return Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")));
+            Ok(())
+        } else {
+            if let Some(ref handler_arc) = self.on_error {
+                let handler_arc_guard = handler_arc.lock().await;
+                handler_arc_guard("No connection established".into());
+            }
+            Err("No connection established".into())
         }
-        Ok(None)
     }
 
     fn set_reconnect_handler(&mut self, handler: OnReconnectHandler) {
@@ -125,5 +144,9 @@ impl ClientChannel for WebSocketClientChannel {
 
     fn set_send_handler(&mut self, handler: OnSendHandler) {
         self.on_send = Some(handler);
+    }
+
+    fn set_on_message_handler(&mut self, handler: OnClientMessageHandler) {
+        self.on_message = Some(Arc::new(Mutex::new(handler)));
     }
 }
