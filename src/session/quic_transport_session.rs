@@ -4,6 +4,7 @@ use crate::callbacks::{
 use crate::packet::Packet;
 use crate::context::Context;
 use s2n_quic::connection::Connection;
+use s2n_quic::stream::{ReceiveStream, SendStream, BidirectionalStream};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
@@ -12,6 +13,7 @@ use crate::session::TransportSession;
 
 pub struct QuicTransportSession {
     connection: Mutex<Connection>,
+    stream: Option<BidirectionalStream>,
     id: usize,
     message_handler: Mutex<Option<OnMessageHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,
@@ -23,6 +25,7 @@ impl QuicTransportSession {
     pub fn new(connection: Connection, id: usize) -> Arc<Self> {
         Arc::new(QuicTransportSession {
             connection: Mutex::new(connection),
+            stream: None,
             id,
             message_handler: Mutex::new(None),
             close_handler: Mutex::new(None),
@@ -43,16 +46,23 @@ impl TransportSession for QuicTransportSession {
     }
     
     async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut connection = self.connection.lock().await;
-        while let Some(mut stream) = connection.accept_bidirectional_stream().await? {
-            while let Some(data) = stream.receive().await? {
-                let packet = Packet::from_bytes(&data);
-                println!("start_receiving QUIC packet with ID: {}", packet.message_id);
-                println!("start_receiving QUIC packet with data: {:?}", packet.payload);
-                if let Some(handler) = self.get_message_handler().await {
-                    let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                    handler.lock().await(context, packet);
+        loop {
+            println!("clock connection");
+            let mut connection = self.connection.lock().await;
+            if let Some(mut stream) = connection.accept_bidirectional_stream().await? {
+                drop(connection); // 释放锁
+                println!("unclock connection");
+                while let Some(data) = stream.receive().await? {
+                    let packet = Packet::from_bytes(&data);
+                    println!("start_receiving QUIC packet with ID: {}", packet.message_id);
+                    println!("start_receiving QUIC packet with data: {:?}", packet.payload);
+                    if let Some(handler) = self.get_message_handler().await {
+                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                        handler.lock().await(context, packet);
+                    }
                 }
+            } else {
+                break; // 如果没有更多的 stream 可接受，跳出循环
             }
         }
         Ok(())

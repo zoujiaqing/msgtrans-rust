@@ -35,12 +35,13 @@ async fn main() {
             );
             // 发送回显内容给客户端
             tokio::spawn({
-                let context = Arc::clone(&context);
+                let session = Arc::clone(&context.session());
                 async move {
-                    let send_result = context.session().send_packet(packet).await;
+                    let send_result = session.send_packet(packet).await;
                     if let Err(e) = send_result {
                         eprintln!("Failed to send packet: {:?}", e);
                     }
+                    println!("send received data to client.");
                 }
             });
         }),
