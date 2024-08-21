@@ -41,7 +41,6 @@ async fn main() {
                     if let Err(e) = send_result {
                         eprintln!("Failed to send packet: {:?}", e);
                     }
-                    println!("send received data to client.");
                 }
             });
         }),

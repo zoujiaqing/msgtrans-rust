@@ -54,8 +54,12 @@ impl ServerChannel for QuicServerChannel {
         
         while let Some(connection) = self.server.as_mut().unwrap().accept().await {
             let session_id = next_id.fetch_add(1, Ordering::SeqCst);
-            let session: Arc<dyn TransportSession + Send + Sync> =
-                QuicTransportSession::new(connection, session_id);
+            let session: Arc<dyn TransportSession + Send + Sync> = QuicTransportSession::new(connection, session_id) as Arc<dyn TransportSession + Send + Sync>;
+
+            // 设置消息处理器
+            if let Some(ref handler) = message_handler {
+                session.clone().set_message_handler(handler.clone()).await;
+            }
 
             println!("session_id: {}", session_id);
 
@@ -67,24 +71,24 @@ impl ServerChannel for QuicServerChannel {
                 handler(Arc::new(Context::new(Arc::clone(&session))));
             }
 
-            let message_handler_clone = message_handler.clone();
             let on_disconnect_clone = on_disconnect.clone();
             let on_error_clone = on_error.clone();
 
-            // 在进入异步任务之前，复制 session 的引用
-            let session_clone = Arc::clone(&session);
-
-            tokio::spawn(async move {
-                if let Err(e) = session_clone.clone().start_receiving().await {
-                    // 接收数据时发生错误，触发错误处理
-                    if let Some(ref handler) = on_error_clone {
-                        let handler = handler.lock().await;
-                        handler(e);
-                    }
-                    // 发生错误后退出，可能表示连接关闭
-                    if let Some(ref handler) = on_disconnect_clone {
-                        let handler = handler.lock().await;
-                        handler(Arc::new(Context::new(Arc::clone(&session_clone))));
+            tokio::spawn({
+                let session_clone = Arc::clone(&session);
+                async move {
+                    if let Err(e) = session_clone.clone().start_receiving().await {
+                        // 接收数据时发生错误，触发错误处理
+                        if let Some(ref handler) = on_error_clone {
+                            let handler = handler.lock().await;
+                            handler(e); // 不再需要额外的 Box 包装
+                        }
+                        // 发生错误后退出，可能表示连接关闭
+                        if let Some(ref handler) = on_disconnect_clone {
+                            let handler = handler.lock().await;
+                            // 使用克隆后的 session
+                            handler(Arc::new(Context::new(session_clone)));
+                        }
                     }
                 }
             });

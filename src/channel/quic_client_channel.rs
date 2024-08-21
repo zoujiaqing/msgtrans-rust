@@ -65,7 +65,6 @@ impl ClientChannel for QuicClientChannel {
     }
 
     fn set_on_message_handler(&mut self, handler: OnClientMessageHandler) {
-        println!("seted set_on_message_handler");
         self.on_message = Some(handler);
     }
 
@@ -101,10 +100,8 @@ impl ClientChannel for QuicClientChannel {
             let mut receive_stream = receive_stream_clone.lock().await;
 
             loop {
-                println!("Waiting to receive data...");
                 match receive_stream.receive().await {
                     Ok(Some(data)) => {
-                        println!("Received {} bytes", data.len());
                         if let Some(ref handler) = on_message {
                             let packet = Packet::from_bytes(&data);
                             let handler = handler.lock().await;
@@ -138,13 +135,10 @@ impl ClientChannel for QuicClientChannel {
         &mut self,
         packet: Packet,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        println!("Sending..");
         if let Some(ref send_stream) = self.send_stream {
-            println!("writing data ..");
             let mut send_stream = send_stream.lock().await;
             let data = Bytes::from(packet.to_bytes());
             send_stream.write_all(&data).await?;
-            println!("writted data.");
 
             if let Some(ref handler) = self.on_send {
                 let handler = handler.lock().await;
