@@ -78,7 +78,7 @@ impl MessageTransportServer {
         let mut sessions_lock = self.sessions.lock().await;
         for session in sessions_lock.values_mut() {
             let session_guard = session.clone();
-            session_guard.set_message_handler(handler.clone());
+            session_guard.set_message_handler(handler.clone()).await;
         }
         self.message_handler = Some(handler);
     }

@@ -47,6 +47,11 @@ impl ServerChannel for WebSocketServerChannel {
                         WebSocketTransportSession::new(ws_stream, session_id);
                     sessions.lock().await.insert(session_id, Arc::clone(&session));
 
+                    // 设置消息处理器
+                    if let Some(ref handler) = message_handler {
+                        session.clone().set_message_handler(handler.clone()).await;
+                    }
+
                     // 触发 OnConnectHandler
                     if let Some(ref handler) = on_connect {
                         let handler = handler.lock().await;

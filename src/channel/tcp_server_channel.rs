@@ -41,6 +41,11 @@ impl ServerChannel for TcpServerChannel {
                 TcpTransportSession::new(stream, session_id);
             sessions.lock().await.insert(session_id, Arc::clone(&session));
 
+            // 设置消息处理器
+            if let Some(ref handler) = message_handler {
+                session.clone().set_message_handler(handler.clone()).await;
+            }
+
             // 触发 OnConnectHandler
             if let Some(ref handler) = on_connect {
                 let handler = handler.lock().await;
@@ -48,7 +53,6 @@ impl ServerChannel for TcpServerChannel {
             }
 
             // 开始处理会话
-            let message_handler_clone = message_handler.clone();
             let on_disconnect_clone = on_disconnect.clone();
             let on_error_clone = on_error.clone();
 

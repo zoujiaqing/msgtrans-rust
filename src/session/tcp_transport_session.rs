@@ -50,7 +50,9 @@ impl TransportSession for TcpTransportSession {
         let mut buf = vec![0; 1024];
 
         loop {
+            println!("Receiving ..");
             let n = reader.read(&mut buf).await?;
+            println!("Received:{:?}", buf);
             if n == 0 {
                 // 流已关闭
                 if let Some(handler) = self.get_close_handler().await {
@@ -60,10 +62,12 @@ impl TransportSession for TcpTransportSession {
                 break;
             }
 
+            println!("callbacking ..");
             let packet = Packet::from_bytes(&buf[..n]);
             if let Some(handler) = self.get_message_handler().await {
                 let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                 handler.lock().await(context, packet);
+                println!("callbacked!");
             }
         }
 
@@ -81,6 +85,7 @@ impl TransportSession for TcpTransportSession {
     }
 
     async fn set_message_handler(self: Arc<Self>, handler: OnMessageHandler) {
+        println!("setted on message");
         let mut message_handler = self.message_handler.lock().await;
         *message_handler = Some(handler);
     }
