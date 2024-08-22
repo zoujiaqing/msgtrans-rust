@@ -14,8 +14,6 @@ async fn main() {
     let address = "127.0.0.1".to_string();
     let port: u16 = 9001;
     let tcp_channel = TcpClientChannel::new(&address, port);
-    client.set_channel(tcp_channel);
-    println!("set channel");
 
     // 设置消息处理回调
     let message_handler = Arc::new(Mutex::new(|packet: Packet| {
@@ -25,24 +23,22 @@ async fn main() {
             packet.payload
         );
     }));
-    println!("set onmessage");
     client.set_on_message_handler(message_handler);
 
-    println!("seted");
+    client.set_channel(tcp_channel);
+
     // 连接到服务器
     if let Err(e) = client.connect().await {
         eprintln!("Failed to connect: {}", e);
         return;
     }
 
-    println!("send 1.");
     let packet = Packet::new(2, "Hello Server1!".as_bytes().to_vec());
     if let Err(e) = client.send(packet).await {
         eprintln!("Failed to send packet: {}", e);
         return;
     }
 
-    println!("send 2.");
     let packet = Packet::new(2, "Hello Server2!".as_bytes().to_vec());
     if let Err(e) = client.send(packet).await {
         eprintln!("Failed to send packet: {}", e);

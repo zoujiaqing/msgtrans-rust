@@ -7,14 +7,15 @@ use crate::session::TransportSession;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio::net::TcpStream;
-use futures::{StreamExt, SinkExt};
+use futures::{StreamExt, SinkExt, stream::SplitSink, stream::SplitStream};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
 use std::io;
 
 pub struct WebSocketTransportSession {
-    ws_stream: Mutex<WebSocketStream<TcpStream>>, // 使用 Mutex 保护 ws_stream
+    send_stream: Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>, // 发送流
+    receive_stream: Mutex<SplitStream<WebSocketStream<TcpStream>>>, // 接收流
     id: usize,
     message_handler: Mutex<Option<OnMessageHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,
@@ -24,8 +25,10 @@ pub struct WebSocketTransportSession {
 
 impl WebSocketTransportSession {
     pub fn new(ws_stream: WebSocketStream<TcpStream>, id: usize) -> Arc<Self> {
+        let (send_stream, receive_stream) = ws_stream.split();
         Arc::new(WebSocketTransportSession {
-            ws_stream: Mutex::new(ws_stream),
+            send_stream: Mutex::new(send_stream),
+            receive_stream: Mutex::new(receive_stream),
             id,
             message_handler: Mutex::new(None),
             close_handler: Mutex::new(None),
@@ -39,15 +42,15 @@ impl WebSocketTransportSession {
 impl TransportSession for WebSocketTransportSession {
     async fn send_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let data = packet.to_bytes().to_vec();
-        let mut ws_stream = self.ws_stream.lock().await;
-        ws_stream.send(Message::Binary(data)).await?;
+        let mut send_stream = self.send_stream.lock().await;
+        send_stream.send(Message::Binary(data)).await?;
         Ok(())
     }
 
     async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut ws_stream = self.ws_stream.lock().await;
+        let mut receive_stream = self.receive_stream.lock().await;
 
-        while let Some(msg) = ws_stream.next().await {
+        while let Some(msg) = receive_stream.next().await {
             match msg {
                 Ok(Message::Binary(bin)) => {
                     let packet = Packet::from_bytes(&bin);
@@ -85,8 +88,8 @@ impl TransportSession for WebSocketTransportSession {
     }
 
     async fn close_session(self: Arc<Self>, context: Arc<Context>) {
-        let mut ws_stream = self.ws_stream.lock().await;
-        let _ = ws_stream.close(None).await;
+        let mut send_stream = self.send_stream.lock().await;
+        let _ = send_stream.close().await;
         if let Some(handler) = self.get_close_handler().await {
             handler.lock().await(context);
         }

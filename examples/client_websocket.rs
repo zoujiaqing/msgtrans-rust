@@ -14,7 +14,6 @@ async fn main() {
     let address = "127.0.0.1".to_string();
     let port: u16 = 9002;
     let websocket_channel = WebSocketClientChannel::new(&address, port, "/ws".to_string());
-    client.set_channel(websocket_channel);
 
     // 设置消息处理回调
     let message_handler = Arc::new(Mutex::new(|packet: Packet| {
@@ -26,9 +25,23 @@ async fn main() {
     }));
     client.set_on_message_handler(message_handler);
 
+    client.set_channel(websocket_channel);
+
     // 连接到服务器
     if let Err(e) = client.connect().await {
         eprintln!("Failed to connect: {}", e);
+        return;
+    }
+
+    let packet = Packet::new(2, "Hello Server1!".as_bytes().to_vec());
+    if let Err(e) = client.send(packet).await {
+        eprintln!("Failed to send packet: {}", e);
+        return;
+    }
+
+    let packet = Packet::new(2, "Hello Server2!".as_bytes().to_vec());
+    if let Err(e) = client.send(packet).await {
+        eprintln!("Failed to send packet: {}", e);
         return;
     }
 

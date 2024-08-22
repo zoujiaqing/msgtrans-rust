@@ -80,14 +80,11 @@ impl ClientChannel for TcpClientChannel {
                 let on_error = self.on_error.clone();
 
                 tokio::spawn(async move {
-                    println!("Receiving .. 1");
                     let mut stream = read_half_clone.lock().await;
                     loop {
-                        println!("Receiving .. 2");
                         let mut buf = BytesMut::with_capacity(1024);
                         match stream.read_buf(&mut buf).await {
                             Ok(n) if n > 0 => {
-                                println!("Received: {:?}", buf);
                                 let packet = Packet::from_bytes(&buf[..n]);
 
                                 if let Some(ref handler_arc) = on_message {
@@ -133,7 +130,6 @@ impl ClientChannel for TcpClientChannel {
         &mut self,
         packet: Packet,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        println!("Sending ..");
         if let Some(write_half) = &self.write_half {
             let mut stream = write_half.lock().await;
             let send_result = stream.write_all(&packet.to_bytes()).await;
