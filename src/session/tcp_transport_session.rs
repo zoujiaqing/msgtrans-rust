@@ -1,18 +1,18 @@
 use crate::callbacks::{
-    OnMessageHandler, OnReceiveHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
+    OnMessageHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
 };
 use crate::packet::Packet;
 use crate::context::Context;
-use crate::session::TransportSession;
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
-use std::io;
+use crate::session::TransportSession;
 
 pub struct TcpTransportSession {
-    stream: Mutex<TcpStream>, // 使用 Mutex 保护 TcpStream
+    reader: Arc<Mutex<tokio::io::ReadHalf<TcpStream>>>, // 读流
+    writer: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>, // 写流
     id: usize,
     message_handler: Mutex<Option<OnMessageHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,
@@ -22,8 +22,10 @@ pub struct TcpTransportSession {
 
 impl TcpTransportSession {
     pub fn new(stream: TcpStream, id: usize) -> Arc<Self> {
+        let (reader, writer) = tokio::io::split(stream);
         Arc::new(TcpTransportSession {
-            stream: Mutex::new(stream),
+            reader: Arc::new(Mutex::new(reader)),
+            writer: Arc::new(Mutex::new(writer)),
             id,
             message_handler: Mutex::new(None),
             close_handler: Mutex::new(None),
@@ -36,42 +38,32 @@ impl TcpTransportSession {
 #[async_trait]
 impl TransportSession for TcpTransportSession {
     async fn send_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = self.stream.lock().await;
+        let mut writer = self.writer.lock().await;
         let data = packet.to_bytes();
-        stream.write_all(&data).await?;
+        writer.write_all(&data).await?;
+        writer.flush().await?;
         Ok(())
     }
-
+    
     async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = self.stream.lock().await;
-        let mut buf = [0; 1024];
-        
+        let mut reader = self.reader.lock().await;
+        let mut buf = vec![0; 1024];
+
         loop {
-            match stream.read(&mut buf).await {
-                Ok(n) if n > 0 => {
-                    let packet = Packet::from_bytes(&buf[..n]);
-                    
-                    if let Some(handler) = self.get_message_handler().await {
-                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                        handler.lock().await(context, packet.clone());
-                    }
+            let n = reader.read(&mut buf).await?;
+            if n == 0 {
+                // 流已关闭
+                if let Some(handler) = self.get_close_handler().await {
+                    let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                    handler.lock().await(context);
                 }
-                Ok(_) => {
-                    // 处理连接关闭的情况
-                    if let Some(handler) = self.get_close_handler().await {
-                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                        handler.lock().await(context);
-                    }
-                    break;
-                }
-                Err(e) => {
-                    // 处理接收数据时发生的错误
-                    if let Some(handler) = self.get_error_handler().await {
-                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                        handler.lock().await(context, Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
-                    }
-                    break;
-                }
+                break;
+            }
+
+            let packet = Packet::from_bytes(&buf[..n]);
+            if let Some(handler) = self.get_message_handler().await {
+                let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                handler.lock().await(context, packet);
             }
         }
 
@@ -79,8 +71,6 @@ impl TransportSession for TcpTransportSession {
     }
 
     async fn close_session(self: Arc<Self>, context: Arc<Context>) {
-        let mut stream = self.stream.lock().await;
-        let _ = stream.shutdown().await;
         if let Some(handler) = self.get_close_handler().await {
             handler.lock().await(context);
         }

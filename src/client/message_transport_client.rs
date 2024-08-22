@@ -40,9 +40,6 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
                         handler_guard();
                     }
 
-                    // 启动接收任务
-                    channel_guard.start_receiving().await?;
-
                     Ok(())
                 }
                 Err(e) => {
@@ -60,8 +57,11 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
 
     // 直接通过 ClientChannel 发送数据
     pub async fn send(&self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("sending..");
         if let Some(channel) = &self.channel {
+            println!("sending..111");
             let mut channel_guard = channel.lock().await;
+            println!("sent!");
             channel_guard.send(packet).await
         } else {
             Err("No channel set".into())
