@@ -141,11 +141,6 @@ impl ClientChannel for WebSocketClientChannel {
         }
     }
 
-    async fn start_receiving(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // 接收逻辑已被移动到 connect 方法中
-        Ok(())
-    }
-
     fn set_reconnect_handler(&mut self, handler: OnReconnectHandler) {
         self.on_reconnect = Some(handler);
     }

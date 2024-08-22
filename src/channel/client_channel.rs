@@ -12,7 +12,4 @@ pub trait ClientChannel: Send + Sync {
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     async fn send(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
-    
-    // 修改后的接口，用于替换 receive 方法
-    async fn start_receiving(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }

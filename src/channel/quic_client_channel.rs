@@ -157,8 +157,4 @@ impl ClientChannel for QuicClientChannel {
             Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")))
         }
     }
-
-    async fn start_receiving(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
-    }
 }
