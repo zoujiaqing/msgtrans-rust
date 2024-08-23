@@ -47,7 +47,7 @@ async fn main() {
     ))).await;
 
     // 设置连接处理回调
-    server.set_on_connect_handler(Arc::new(Mutex::new(
+    server.set_connect_handler(Arc::new(Mutex::new(
         Box::new(|context: Arc<Context>| {
             println!(
                 "New connection established, Session ID: {}",
@@ -57,7 +57,7 @@ async fn main() {
     )));
 
     // 设置断开连接处理回调
-    server.set_on_disconnect_handler(Arc::new(Mutex::new(
+    server.set_disconnect_handler(Arc::new(Mutex::new(
         Box::new(|context: Arc<Context>| {
             println!(
                 "Connection closed, Session ID: {}",
@@ -67,7 +67,7 @@ async fn main() {
     )));
 
     // 设置错误处理回调
-    server.set_on_error_handler(Arc::new(Mutex::new(
+    server.set_error_handler(Arc::new(Mutex::new(
         Box::new(|error| {
             eprintln!("Error occurred: {:?}", error);
         }),

@@ -8,22 +8,22 @@ use crate::callbacks::{
 
 pub struct MessageTransportClient<C: ClientChannel + Send + Sync> {
     channel: Option<Arc<Mutex<C>>>,  // 使用 Arc<Mutex<C>>
-    on_reconnect: Option<OnReconnectHandler>,
-    on_disconnect: Option<OnClientDisconnectHandler>,
-    on_error: Option<OnClientErrorHandler>,
-    on_send: Option<OnSendHandler>,
-    on_message: Option<OnClientMessageHandler>,
+    reconnect_handler: Option<OnReconnectHandler>,
+    disconnect_handler: Option<OnClientDisconnectHandler>,
+    error_handler: Option<OnClientErrorHandler>,
+    send_handler: Option<OnSendHandler>,
+    message_handler: Option<OnClientMessageHandler>,
 }
 
 impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
     pub fn new() -> Self {
         MessageTransportClient {
             channel: None,
-            on_reconnect: None,
-            on_disconnect: None,
-            on_error: None,
-            on_send: None,
-            on_message: None,
+            reconnect_handler: None,
+            disconnect_handler: None,
+            error_handler: None,
+            send_handler: None,
+            message_handler: None,
         }
     }
 
@@ -35,7 +35,7 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
                 Ok(_) => {
                     println!("Connected successfully!");
 
-                    if let Some(handler) = &self.on_reconnect {
+                    if let Some(handler) = &self.reconnect_handler {
                         let handler_guard = handler.lock().await;
                         handler_guard();
                     }
@@ -43,7 +43,7 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
                     Ok(())
                 }
                 Err(e) => {
-                    if let Some(handler) = &self.on_error {
+                    if let Some(handler) = &self.error_handler {
                         let handler_guard = handler.lock().await;
                         handler_guard(e);
                     }
@@ -67,43 +67,43 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
 
     // 设置 channel 并传递回调
     pub fn set_channel(&mut self, mut channel: C) {
-        if let Some(ref handler) = self.on_reconnect {
+        if let Some(ref handler) = self.reconnect_handler {
             channel.set_reconnect_handler(handler.clone());
         }
-        if let Some(ref handler) = self.on_disconnect {
+        if let Some(ref handler) = self.disconnect_handler {
             channel.set_disconnect_handler(handler.clone());
         }
-        if let Some(ref handler) = self.on_error {
+        if let Some(ref handler) = self.error_handler {
             channel.set_error_handler(handler.clone());
         }
-        if let Some(ref handler) = self.on_send {
+        if let Some(ref handler) = self.send_handler {
             channel.set_send_handler(handler.clone());
         }
-        if let Some(ref handler) = self.on_message {
-            channel.set_on_message_handler(handler.clone());
+        if let Some(ref handler) = self.message_handler {
+            channel.set_message_handler(handler.clone());
         }
 
         self.channel = Some(Arc::new(Mutex::new(channel)));
     }
 
-    pub fn set_on_reconnect_handler(&mut self, handler: OnReconnectHandler) {
-        self.on_reconnect = Some(handler);
+    pub fn set_reconnect_handler_handler(&mut self, handler: OnReconnectHandler) {
+        self.reconnect_handler = Some(handler);
     }
 
-    pub fn set_on_disconnect_handler(&mut self, handler: OnClientDisconnectHandler) {
-        self.on_disconnect = Some(handler);
+    pub fn set_disconnect_handler(&mut self, handler: OnClientDisconnectHandler) {
+        self.disconnect_handler = Some(handler);
     }
 
-    pub fn set_on_error_handler(&mut self, handler: OnClientErrorHandler) {
-        self.on_error = Some(handler);
+    pub fn set_error_handler(&mut self, handler: OnClientErrorHandler) {
+        self.error_handler = Some(handler);
     }
 
-    pub fn set_on_send_handler(&mut self, handler: OnSendHandler) {
-        self.on_send = Some(handler);
+    pub fn set_send_handler_handler(&mut self, handler: OnSendHandler) {
+        self.send_handler = Some(handler);
     }
 
-    pub fn set_on_message_handler(&mut self, handler: OnClientMessageHandler) {
-        self.on_message = Some(handler);
+    pub fn set_message_handler(&mut self, handler: OnClientMessageHandler) {
+        self.message_handler = Some(handler);
     }
 }
 
@@ -111,11 +111,11 @@ impl<C: ClientChannel + Send + Sync> Clone for MessageTransportClient<C> {
     fn clone(&self) -> Self {
         MessageTransportClient {
             channel: self.channel.clone(),
-            on_reconnect: self.on_reconnect.clone(),
-            on_disconnect: self.on_disconnect.clone(),
-            on_error: self.on_error.clone(),
-            on_send: self.on_send.clone(),
-            on_message: self.on_message.clone(),
+            reconnect_handler: self.reconnect_handler.clone(),
+            disconnect_handler: self.disconnect_handler.clone(),
+            error_handler: self.error_handler.clone(),
+            send_handler: self.send_handler.clone(),
+            message_handler: self.message_handler.clone(),
         }
     }
 }

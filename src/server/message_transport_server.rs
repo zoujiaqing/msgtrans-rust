@@ -1,28 +1,23 @@
+use crate::callbacks::{
+    OnMessageHandler, OnServerConnectHandler, OnServerDisconnectHandler, OnServerErrorHandler,
+    OnServerTimeoutHandler,
+};
 use crate::channel::ServerChannel;
 use crate::session::TransportSession;
 use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::context::Context;
-use crate::packet::Packet;
-use crate::callbacks::{
-    OnServerConnectHandler,
-    OnServerDisconnectHandler,
-    OnServerErrorHandler,
-    OnServerTimeoutHandler,
-    OnMessageHandler,
-};
 
 pub struct MessageTransportServer {
     channels: Arc<Mutex<Vec<Arc<Mutex<dyn ServerChannel + Send + Sync>>>>>,
     sessions: Arc<Mutex<HashMap<usize, Arc<dyn TransportSession + Send + Sync>>>>,
     next_id: Arc<AtomicUsize>,
     message_handler: Option<OnMessageHandler>,
-    on_connect: Option<OnServerConnectHandler>,
-    on_disconnect: Option<OnServerDisconnectHandler>,
-    on_error: Option<OnServerErrorHandler>,
-    on_timeout: Option<OnServerTimeoutHandler>,
+    connect_handler: Option<OnServerConnectHandler>,
+    disconnect_handler: Option<OnServerDisconnectHandler>,
+    error_handler: Option<OnServerErrorHandler>,
+    timeout_handler: Option<OnServerTimeoutHandler>,
 }
 
 impl MessageTransportServer {
@@ -32,10 +27,10 @@ impl MessageTransportServer {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicUsize::new(1)),
             message_handler: None,
-            on_connect: None,
-            on_disconnect: None,
-            on_error: None,
-            on_timeout: None,
+            connect_handler: None,
+            disconnect_handler: None,
+            error_handler: None,
+            timeout_handler: None,
         }
     }
 
@@ -49,22 +44,22 @@ impl MessageTransportServer {
             let sessions_clone = Arc::clone(&self.sessions);
             let next_id_clone = Arc::clone(&self.next_id);
             let message_handler = self.message_handler.clone();
-            let on_connect = self.on_connect.clone();
-            let on_disconnect = self.on_disconnect.clone();
-            let on_error = self.on_error.clone();
-            let on_timeout = self.on_timeout.clone();
+            let connect_handler = self.connect_handler.clone();
+            let disconnect_handler = self.disconnect_handler.clone();
+            let error_handler = self.error_handler.clone();
 
             tokio::spawn(async move {
                 let mut channel = channel.lock().await;
-                channel.start(
-                    sessions_clone,
-                    next_id_clone,
-                    message_handler,
-                    on_connect,
-                    on_disconnect,
-                    on_error,
-                    on_timeout,
-                ).await;
+                channel
+                    .start(
+                        sessions_clone,
+                        next_id_clone,
+                        message_handler,
+                        connect_handler,
+                        disconnect_handler,
+                        error_handler,
+                    )
+                    .await;
             });
         }
     }
@@ -83,19 +78,19 @@ impl MessageTransportServer {
         self.message_handler = Some(handler);
     }
 
-    pub fn set_on_connect_handler(&mut self, handler: OnServerConnectHandler) {
-        self.on_connect = Some(handler);
+    pub fn set_connect_handler(&mut self, handler: OnServerConnectHandler) {
+        self.connect_handler = Some(handler);
     }
 
-    pub fn set_on_disconnect_handler(&mut self, handler: OnServerDisconnectHandler) {
-        self.on_disconnect = Some(handler);
+    pub fn set_disconnect_handler(&mut self, handler: OnServerDisconnectHandler) {
+        self.disconnect_handler = Some(handler);
     }
 
-    pub fn set_on_error_handler(&mut self, handler: OnServerErrorHandler) {
-        self.on_error = Some(handler);
+    pub fn set_error_handler(&mut self, handler: OnServerErrorHandler) {
+        self.error_handler = Some(handler);
     }
 
-    pub fn set_on_timeout_handler(&mut self, handler: OnServerTimeoutHandler) {
-        self.on_timeout = Some(handler);
+    pub fn set_timeout_handler_handler(&mut self, handler: OnServerTimeoutHandler) {
+        self.timeout_handler = Some(handler);
     }
 }

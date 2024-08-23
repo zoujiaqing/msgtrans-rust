@@ -21,11 +21,11 @@ pub struct QuicClientChannel {
     host: String,
     port: u16,
     cert_path: &'static str,
-    on_reconnect: Option<OnReconnectHandler>,
-    on_disconnect: Option<OnClientDisconnectHandler>,
-    on_error: Option<OnClientErrorHandler>,
-    on_send: Option<OnSendHandler>,
-    on_message: Option<OnClientMessageHandler>,
+    reconnect_handler: Option<OnReconnectHandler>,
+    disconnect_handler: Option<OnClientDisconnectHandler>,
+    error_handler: Option<OnClientErrorHandler>,
+    send_handler: Option<OnSendHandler>,
+    message_handler: Option<OnClientMessageHandler>,
 }
 
 impl QuicClientChannel {
@@ -37,11 +37,11 @@ impl QuicClientChannel {
             host: host.to_string(),
             port,
             cert_path,
-            on_reconnect: None,
-            on_disconnect: None,
-            on_error: None,
-            on_send: None,
-            on_message: None,
+            reconnect_handler: None,
+            disconnect_handler: None,
+            error_handler: None,
+            send_handler: None,
+            message_handler: None,
         }
     }
 }
@@ -49,23 +49,23 @@ impl QuicClientChannel {
 #[async_trait::async_trait]
 impl ClientChannel for QuicClientChannel {
     fn set_reconnect_handler(&mut self, handler: OnReconnectHandler) {
-        self.on_reconnect = Some(handler);
+        self.reconnect_handler = Some(handler);
     }
 
     fn set_disconnect_handler(&mut self, handler: OnClientDisconnectHandler) {
-        self.on_disconnect = Some(handler);
+        self.disconnect_handler = Some(handler);
     }
 
     fn set_error_handler(&mut self, handler: OnClientErrorHandler) {
-        self.on_error = Some(handler);
+        self.error_handler = Some(handler);
     }
 
     fn set_send_handler(&mut self, handler: OnSendHandler) {
-        self.on_send = Some(handler);
+        self.send_handler = Some(handler);
     }
 
-    fn set_on_message_handler(&mut self, handler: OnClientMessageHandler) {
-        self.on_message = Some(handler);
+    fn set_message_handler(&mut self, handler: OnClientMessageHandler) {
+        self.message_handler = Some(handler);
     }
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -86,15 +86,15 @@ impl ClientChannel for QuicClientChannel {
         self.send_stream = Some(Arc::new(Mutex::new(send_stream)));
         self.connection = Some(Arc::new(Mutex::new(connection)));
 
-        if let Some(ref handler) = self.on_reconnect {
+        if let Some(ref handler) = self.reconnect_handler {
             let handler = handler.lock().await;
             (*handler)();
         }
 
         let receive_stream_clone = Arc::clone(self.receive_stream.as_ref().unwrap());
-        let on_message = self.on_message.clone();
-        let on_disconnect = self.on_disconnect.clone();
-        let on_error = self.on_error.clone();
+        let message_handler = self.message_handler.clone();
+        let disconnect_handler = self.disconnect_handler.clone();
+        let error_handler = self.error_handler.clone();
 
         tokio::spawn(async move {
             let mut receive_stream = receive_stream_clone.lock().await;
@@ -102,7 +102,7 @@ impl ClientChannel for QuicClientChannel {
             loop {
                 match receive_stream.receive().await {
                     Ok(Some(data)) => {
-                        if let Some(ref handler) = on_message {
+                        if let Some(ref handler) = message_handler {
                             let packet = Packet::from_bytes(&data);
                             let handler = handler.lock().await;
                             (*handler)(packet);
@@ -110,7 +110,7 @@ impl ClientChannel for QuicClientChannel {
                     }
                     Ok(None) => {
                         println!("Stream closed");
-                        if let Some(ref handler) = on_disconnect {
+                        if let Some(ref handler) = disconnect_handler {
                             let handler = handler.lock().await;
                             (*handler)();
                         }
@@ -118,7 +118,7 @@ impl ClientChannel for QuicClientChannel {
                     }
                     Err(e) => {
                         eprintln!("Error reading from stream: {:?}", e);
-                        if let Some(ref handler) = on_error {
+                        if let Some(ref handler) = error_handler {
                             let handler = handler.lock().await;
                             (*handler)(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                         }
@@ -140,7 +140,7 @@ impl ClientChannel for QuicClientChannel {
             let data = Bytes::from(packet.to_bytes());
             send_stream.write_all(&data).await?;
 
-            if let Some(ref handler) = self.on_send {
+            if let Some(ref handler) = self.send_handler {
                 let handler = handler.lock().await;
                 (*handler)(packet.clone(), Ok(()));
             }
@@ -149,7 +149,7 @@ impl ClientChannel for QuicClientChannel {
         } else {
             let err_msg: Box<dyn std::error::Error + Send + Sync> = "No connection established".into();
 
-            if let Some(ref handler) = self.on_error {
+            if let Some(ref handler) = self.error_handler {
                 let handler = handler.lock().await;
                 (*handler)(err_msg);
             }

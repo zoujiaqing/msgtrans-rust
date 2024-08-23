@@ -1,6 +1,5 @@
 use crate::callbacks::{
     OnMessageHandler, OnServerConnectHandler, OnServerDisconnectHandler, OnServerErrorHandler,
-    OnServerTimeoutHandler,
 };
 use crate::channel::ServerChannel;
 use crate::context::Context;
@@ -28,10 +27,9 @@ impl ServerChannel for TcpServerChannel {
         sessions: Arc<Mutex<HashMap<usize, Arc<dyn TransportSession + Send + Sync>>>>,
         next_id: Arc<AtomicUsize>,
         message_handler: Option<OnMessageHandler>,
-        on_connect: Option<OnServerConnectHandler>,
-        on_disconnect: Option<OnServerDisconnectHandler>,
-        on_error: Option<OnServerErrorHandler>,
-        on_timeout: Option<OnServerTimeoutHandler>,
+        connect_handler: Option<OnServerConnectHandler>,
+        disconnect_handler: Option<OnServerDisconnectHandler>,
+        error_handler: Option<OnServerErrorHandler>
     ) {
         let listener = TcpListener::bind((self.host.as_str(), self.port)).await.unwrap();
 
@@ -47,26 +45,26 @@ impl ServerChannel for TcpServerChannel {
             }
 
             // 触发 OnConnectHandler
-            if let Some(ref handler) = on_connect {
+            if let Some(ref handler) = connect_handler {
                 let handler = handler.lock().await;
                 handler(Arc::new(Context::new(Arc::clone(&session))));
             }
 
             // 开始处理会话
-            let on_disconnect_clone = on_disconnect.clone();
-            let on_error_clone = on_error.clone();
+            let disconnect_handler_clone = disconnect_handler.clone();
+            let error_handler_clone = error_handler.clone();
 
             let session_clone = Arc::clone(&session);
             tokio::spawn(async move {
                 let session_for_receiving = Arc::clone(&session_clone);
                 if let Err(e) = session_for_receiving.start_receiving().await {
                     // 接收数据时发生错误，触发错误处理
-                    if let Some(ref handler) = on_error_clone {
+                    if let Some(ref handler) = error_handler_clone {
                         let handler = handler.lock().await;
                         handler(e);
                     }
                     // 发生错误后触发断开连接的处理
-                    if let Some(ref handler) = on_disconnect_clone {
+                    if let Some(ref handler) = disconnect_handler_clone {
                         let handler = handler.lock().await;
                         handler(Arc::new(Context::new(Arc::clone(&session_clone))));
                     }

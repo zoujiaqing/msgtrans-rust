@@ -23,7 +23,7 @@ async fn main() {
             packet.payload
         );
     }));
-    client.set_on_message_handler(message_handler);
+    client.set_message_handler(message_handler);
 
     client.set_channel(tcp_channel);
 

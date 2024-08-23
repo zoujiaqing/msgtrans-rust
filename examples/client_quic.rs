@@ -11,14 +11,14 @@ async fn main() {
     let mut client = MessageTransportClient::new();
 
     // 设置消息处理回调
-    let on_message_handler = Arc::new(Mutex::new(|packet: Packet| {
+    let message_handler = Arc::new(Mutex::new(|packet: Packet| {
         println!(
             "Received packet with ID: {}, Payload: {:?}",
             packet.message_id,
             packet.payload
         );
     }));
-    client.set_on_message_handler(on_message_handler);
+    client.set_message_handler(message_handler);
 
     // 设置QUIC通道
     let address = "127.0.0.1".to_string();

@@ -1,5 +1,5 @@
 use crate::callbacks::{
-    OnMessageHandler, OnReceiveHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
+    OnMessageHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
 };
 use crate::packet::Packet;
 use crate::context::Context;

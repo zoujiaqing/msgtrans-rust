@@ -16,11 +16,11 @@ pub struct TcpClientChannel {
     write_half: Option<Arc<Mutex<WriteHalf<TcpStream>>>>,
     address: String,
     port: u16,
-    on_reconnect: Option<OnReconnectHandler>,
-    on_disconnect: Option<OnClientDisconnectHandler>,
-    on_error: Option<OnClientErrorHandler>,
-    on_send: Option<OnSendHandler>,
-    on_message: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    reconnect_handler: Option<OnReconnectHandler>,
+    disconnect_handler: Option<OnClientDisconnectHandler>,
+    error_handler: Option<OnClientErrorHandler>,
+    send_handler: Option<OnSendHandler>,
+    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
 }
 
 impl TcpClientChannel {
@@ -30,11 +30,11 @@ impl TcpClientChannel {
             write_half: None,
             address: address.to_string(),
             port,
-            on_reconnect: None,
-            on_disconnect: None,
-            on_error: None,
-            on_send: None,
-            on_message: None,
+            reconnect_handler: None,
+            disconnect_handler: None,
+            error_handler: None,
+            send_handler: None,
+            message_handler: None,
         }
     }
 }
@@ -42,23 +42,23 @@ impl TcpClientChannel {
 #[async_trait::async_trait]
 impl ClientChannel for TcpClientChannel {
     fn set_reconnect_handler(&mut self, handler: OnReconnectHandler) {
-        self.on_reconnect = Some(handler);
+        self.reconnect_handler = Some(handler);
     }
 
     fn set_disconnect_handler(&mut self, handler: OnClientDisconnectHandler) {
-        self.on_disconnect = Some(handler);
+        self.disconnect_handler = Some(handler);
     }
 
     fn set_error_handler(&mut self, handler: OnClientErrorHandler) {
-        self.on_error = Some(handler);
+        self.error_handler = Some(handler);
     }
 
     fn set_send_handler(&mut self, handler: OnSendHandler) {
-        self.on_send = Some(handler);
+        self.send_handler = Some(handler);
     }
 
-    fn set_on_message_handler(&mut self, handler: OnClientMessageHandler) {
-        self.on_message = Some(Arc::new(Mutex::new(handler)));
+    fn set_message_handler(&mut self, handler: OnClientMessageHandler) {
+        self.message_handler = Some(Arc::new(Mutex::new(handler)));
     }
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -68,16 +68,16 @@ impl ClientChannel for TcpClientChannel {
                 self.read_half = Some(Arc::new(Mutex::new(read_half)));
                 self.write_half = Some(Arc::new(Mutex::new(write_half)));
                 
-                if let Some(ref handler) = self.on_reconnect {
+                if let Some(ref handler) = self.reconnect_handler {
                     let handler = handler.lock().await;
                     handler();
                 }
 
                 // 启动接收数据的任务
                 let read_half_clone = Arc::clone(self.read_half.as_ref().unwrap());
-                let on_message = self.on_message.clone();
-                let on_disconnect = self.on_disconnect.clone();
-                let on_error = self.on_error.clone();
+                let message_handler = self.message_handler.clone();
+                let disconnect_handler = self.disconnect_handler.clone();
+                let error_handler = self.error_handler.clone();
 
                 tokio::spawn(async move {
                     let mut stream = read_half_clone.lock().await;
@@ -87,7 +87,7 @@ impl ClientChannel for TcpClientChannel {
                             Ok(n) if n > 0 => {
                                 let packet = Packet::from_bytes(&buf[..n]);
 
-                                if let Some(ref handler_arc) = on_message {
+                                if let Some(ref handler_arc) = message_handler {
                                     // 解锁外层 Arc
                                     let handler_arc_guard = handler_arc.lock().await;
                                     // 解锁内层 Mutex 并调用函数
@@ -97,14 +97,14 @@ impl ClientChannel for TcpClientChannel {
                             }
                             Ok(_) => {
                                 println!("Connection closed by peer.");
-                                if let Some(ref handler_arc) = on_disconnect {
+                                if let Some(ref handler_arc) = disconnect_handler {
                                     let handler = handler_arc.lock().await;
                                     (handler)();
                                 }
                                 break;
                             }
                             Err(e) => {
-                                if let Some(ref handler_arc) = on_error {
+                                if let Some(ref handler_arc) = error_handler {
                                     let handler = handler_arc.lock().await;
                                     handler(Box::new(e));
                                 }
@@ -117,7 +117,7 @@ impl ClientChannel for TcpClientChannel {
                 Ok(())
             }
             Err(e) => {
-                if let Some(ref handler) = self.on_error {
+                if let Some(ref handler) = self.error_handler {
                     let handler = handler.lock().await;
                     handler(Box::new(e));
                 }
@@ -134,7 +134,7 @@ impl ClientChannel for TcpClientChannel {
             let mut stream = write_half.lock().await;
             let send_result = stream.write_all(&packet.to_bytes()).await;
 
-            if let Some(ref handler) = self.on_send {
+            if let Some(ref handler) = self.send_handler {
                 let handler = handler.lock().await;
                 let send_result_for_handler = send_result
                     .as_ref()
@@ -146,7 +146,7 @@ impl ClientChannel for TcpClientChannel {
             send_result.map(|_| ()).map_err(|e| Box::new(io::Error::new(io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)
         } else {
             let err_msg: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established"));
-            if let Some(ref handler) = self.on_error {
+            if let Some(ref handler) = self.error_handler {
                 let handler = handler.lock().await;
                 handler(err_msg);
             }

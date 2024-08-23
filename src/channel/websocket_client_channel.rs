@@ -21,11 +21,11 @@ pub struct WebSocketClientChannel {
     address: String,
     port: u16,
     path: String,
-    on_reconnect: Option<OnReconnectHandler>,
-    on_disconnect: Option<OnClientDisconnectHandler>,
-    on_error: Option<OnClientErrorHandler>,
-    on_send: Option<OnSendHandler>,
-    on_message: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    reconnect_handler: Option<OnReconnectHandler>,
+    disconnect_handler: Option<OnClientDisconnectHandler>,
+    error_handler: Option<OnClientErrorHandler>,
+    send_handler: Option<OnSendHandler>,
+    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
 }
 
 impl WebSocketClientChannel {
@@ -36,11 +36,11 @@ impl WebSocketClientChannel {
             address: address.to_string(),
             port,
             path,
-            on_reconnect: None,
-            on_disconnect: None,
-            on_error: None,
-            on_send: None,
-            on_message: None,
+            reconnect_handler: None,
+            disconnect_handler: None,
+            error_handler: None,
+            send_handler: None,
+            message_handler: None,
         }
     }
 }
@@ -48,23 +48,23 @@ impl WebSocketClientChannel {
 #[async_trait::async_trait]
 impl ClientChannel for WebSocketClientChannel {
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let url = Url::parse(&format!("ws://{}:{}/{}", self.address, self.port, self.path))?;
+        let url = Url::parse(&format!("ws://{}:{}{}", self.address, self.port, self.path))?;
         match connect_async(url).await {
             Ok((ws_stream, _)) => {
                 let (send_stream, receive_stream) = ws_stream.split();
                 self.send_stream = Some(Arc::new(Mutex::new(send_stream)));
                 self.receive_stream = Some(Arc::new(Mutex::new(receive_stream)));
                 
-                if let Some(ref handler) = self.on_reconnect {
+                if let Some(ref handler) = self.reconnect_handler {
                     let handler = handler.lock().await;
                     handler();
                 }
 
                 // 开始接收数据的任务
                 let receive_stream = self.receive_stream.clone();
-                let on_message = self.on_message.clone();
-                let on_disconnect = self.on_disconnect.clone();
-                let on_error = self.on_error.clone();
+                let message_handler = self.message_handler.clone();
+                let disconnect_handler = self.disconnect_handler.clone();
+                let error_handler = self.error_handler.clone();
 
                 tokio::spawn(async move {
                     if let Some(receive_stream) = receive_stream {
@@ -72,7 +72,7 @@ impl ClientChannel for WebSocketClientChannel {
                         while let Some(msg) = receive_stream.next().await {
                             match msg {
                                 Ok(Message::Binary(bin)) => {
-                                    if let Some(ref handler_arc) = on_message {
+                                    if let Some(ref handler_arc) = message_handler {
                                         let handler_arc_guard = handler_arc.lock().await;
                                         let handler = handler_arc_guard.lock().await;
                                         let packet = Packet::from_bytes(&bin);
@@ -81,7 +81,7 @@ impl ClientChannel for WebSocketClientChannel {
                                 }
                                 Ok(_) => continue,
                                 Err(e) => {
-                                    if let Some(handler_arc) = &on_error {
+                                    if let Some(handler_arc) = &error_handler {
                                         let handler = handler_arc.lock().await;
                                         (handler)(Box::new(e));
                                     }
@@ -90,7 +90,7 @@ impl ClientChannel for WebSocketClientChannel {
                             }
                         }
 
-                        if let Some(handler_arc) = &on_disconnect {
+                        if let Some(handler_arc) = &disconnect_handler {
                             let handler = handler_arc.lock().await;
                             (handler)();
                         }
@@ -100,7 +100,7 @@ impl ClientChannel for WebSocketClientChannel {
                 Ok(())
             }
             Err(e) => {
-                if let Some(ref handler) = self.on_error {
+                if let Some(ref handler) = self.error_handler {
                     let handler = handler.lock().await;
                     handler(Box::new(e));
                 }
@@ -119,7 +119,7 @@ impl ClientChannel for WebSocketClientChannel {
                 .send(Message::Binary(packet.to_bytes().to_vec()))
                 .await;
 
-            if let Some(ref handler) = self.on_send {
+            if let Some(ref handler) = self.send_handler {
                 let handler = handler.lock().await;
                 let send_result_for_handler = send_result
                     .as_ref()
@@ -132,7 +132,7 @@ impl ClientChannel for WebSocketClientChannel {
         } else {
             let err_msg: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established"));
 
-            if let Some(ref handler) = self.on_error {
+            if let Some(ref handler) = self.error_handler {
                 let handler = handler.lock().await;
                 handler(err_msg);
             }
@@ -142,22 +142,22 @@ impl ClientChannel for WebSocketClientChannel {
     }
 
     fn set_reconnect_handler(&mut self, handler: OnReconnectHandler) {
-        self.on_reconnect = Some(handler);
+        self.reconnect_handler = Some(handler);
     }
 
     fn set_disconnect_handler(&mut self, handler: OnClientDisconnectHandler) {
-        self.on_disconnect = Some(handler);
+        self.disconnect_handler = Some(handler);
     }
 
     fn set_error_handler(&mut self, handler: OnClientErrorHandler) {
-        self.on_error = Some(handler);
+        self.error_handler = Some(handler);
     }
 
     fn set_send_handler(&mut self, handler: OnSendHandler) {
-        self.on_send = Some(handler);
+        self.send_handler = Some(handler);
     }
 
-    fn set_on_message_handler(&mut self, handler: OnClientMessageHandler) {
-        self.on_message = Some(Arc::new(Mutex::new(handler)));
+    fn set_message_handler(&mut self, handler: OnClientMessageHandler) {
+        self.message_handler = Some(Arc::new(Mutex::new(handler)));
     }
 }
