@@ -5,3 +5,4 @@ pub mod context;
 pub mod packet;
 pub mod session;
 pub mod callbacks;
+pub mod compression;
