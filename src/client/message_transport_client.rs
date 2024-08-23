@@ -7,7 +7,7 @@ use crate::callbacks::{
 };
 
 pub struct MessageTransportClient<C: ClientChannel + Send + Sync> {
-    channel: Option<Arc<Mutex<C>>>,  // 使用 Arc<Mutex<C>>
+    channel: Option<Arc<Mutex<C>>>,
     reconnect_handler: Option<OnReconnectHandler>,
     disconnect_handler: Option<OnClientDisconnectHandler>,
     error_handler: Option<OnClientErrorHandler>,

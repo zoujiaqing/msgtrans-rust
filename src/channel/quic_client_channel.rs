@@ -10,7 +10,7 @@ use s2n_quic::stream::{ReceiveStream, SendStream};
 use std::{path::Path, net::SocketAddr};
 use bytes::Bytes;
 use tokio::io::AsyncWriteExt;
-use std::sync::{Arc};
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::io;
 
