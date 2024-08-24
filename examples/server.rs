@@ -11,18 +11,18 @@ async fn main() {
     let mut server = MessageTransportServer::new();
 
     // 添加TCP通道
-    server.add_channel(Arc::new(Mutex::new(TcpServerChannel::new("0.0.0.0", 9001)))).await;
+    server.add_channel(TcpServerChannel::new("0.0.0.0", 9001)).await;
 
     // 添加WebSocket通道
-    server.add_channel(Arc::new(Mutex::new(WebSocketServerChannel::new("0.0.0.0", 9002, "/ws")))).await;
+    server.add_channel(WebSocketServerChannel::new("0.0.0.0", 9002, "/ws")).await;
 
     // 添加QUIC通道
-    server.add_channel(Arc::new(Mutex::new(QuicServerChannel::new(
+    server.add_channel(QuicServerChannel::new(
         "0.0.0.0",
         9003,
         "certs/cert.pem",
         "certs/key.pem",
-    )))).await;
+    )).await;
 
     // 设置消息处理回调
     server.set_message_handler(Arc::new(Mutex::new(

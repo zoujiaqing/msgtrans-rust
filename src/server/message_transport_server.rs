@@ -64,9 +64,12 @@ impl MessageTransportServer {
         }
     }
 
-    pub async fn add_channel(&self, channel: Arc<Mutex<dyn ServerChannel + Send + Sync>>) {
+    pub async fn add_channel<T>(&self, channel: T)
+    where
+        T: ServerChannel + Send + Sync + 'static,
+    {
         let mut channels_lock = self.channels.lock().await;
-        channels_lock.push(channel);
+        channels_lock.push(Arc::new(Mutex::new(channel)));
     }
 
     pub async fn set_message_handler(&mut self, handler: OnMessageHandler) {
