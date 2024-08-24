@@ -8,16 +8,18 @@ use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use crate::packet::Packet;
+use crate::context::Context;
 
 pub struct MessageTransportServer {
     channels: Arc<Mutex<Vec<Arc<Mutex<dyn ServerChannel + Send + Sync>>>>>,
     sessions: Arc<Mutex<HashMap<usize, Arc<dyn TransportSession + Send + Sync>>>>,
     next_id: Arc<AtomicUsize>,
-    message_handler: Option<OnMessageHandler>,
-    connect_handler: Option<OnServerConnectHandler>,
-    disconnect_handler: Option<OnServerDisconnectHandler>,
-    error_handler: Option<OnServerErrorHandler>,
-    timeout_handler: Option<OnServerTimeoutHandler>,
+    message_handler: Option<Arc<Mutex<OnMessageHandler>>>,
+    connect_handler: Option<Arc<Mutex<OnServerConnectHandler>>>,
+    disconnect_handler: Option<Arc<Mutex<OnServerDisconnectHandler>>>,
+    error_handler: Option<Arc<Mutex<OnServerErrorHandler>>>,
+    timeout_handler: Option<Arc<Mutex<OnServerTimeoutHandler>>>,
 }
 
 impl MessageTransportServer {
@@ -72,28 +74,46 @@ impl MessageTransportServer {
         channels_lock.push(Arc::new(Mutex::new(channel)));
     }
 
-    pub async fn set_message_handler(&mut self, handler: OnMessageHandler) {
-        let mut sessions_lock = self.sessions.lock().await;
-        for session in sessions_lock.values_mut() {
-            let session_guard = session.clone();
-            session_guard.set_message_handler(handler.clone()).await;
+    pub async fn set_message_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Arc<Context>, Packet) + Send + Sync + 'static,
+    {
+        let handler_arc = Arc::new(Mutex::new(handler));
+
+        let sessions_lock = self.sessions.lock().await;
+        for session in sessions_lock.values() {
+            let handler_clone = Arc::clone(&handler_arc);
+            let session_clone = Arc::clone(session);
+            session_clone.set_message_handler(handler_clone).await;
         }
-        self.message_handler = Some(handler);
+        self.message_handler = Some(handler_arc);
     }
 
-    pub fn set_connect_handler(&mut self, handler: OnServerConnectHandler) {
-        self.connect_handler = Some(handler);
+    pub fn set_connect_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Arc<Context>) + Send + Sync + 'static,
+    {
+        self.connect_handler = Some(Arc::new(Mutex::new(handler)));
     }
 
-    pub fn set_disconnect_handler(&mut self, handler: OnServerDisconnectHandler) {
-        self.disconnect_handler = Some(handler);
+    pub fn set_disconnect_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Arc<Context>) + Send + Sync + 'static,
+    {
+        self.disconnect_handler = Some(Arc::new(Mutex::new(handler)));
     }
 
-    pub fn set_error_handler(&mut self, handler: OnServerErrorHandler) {
-        self.error_handler = Some(handler);
+    pub fn set_error_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Box<dyn std::error::Error + Send + Sync>) + Send + Sync + 'static,
+    {
+        self.error_handler = Some(Arc::new(Mutex::new(handler)));
     }
 
-    pub fn set_timeout_handler_handler(&mut self, handler: OnServerTimeoutHandler) {
-        self.timeout_handler = Some(handler);
+    pub fn set_timeout_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Arc<Context>) + Send + Sync + 'static,
+    {
+        self.timeout_handler = Some(Arc::new(Mutex::new(handler)));
     }
 }

@@ -2,8 +2,6 @@ use msgtrans::client::MessageTransportClient;
 use msgtrans::channel::QuicClientChannel;
 use msgtrans::packet::Packet;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -11,14 +9,13 @@ async fn main() {
     let mut client = MessageTransportClient::new();
 
     // Set the message handler callback
-    let message_handler = Arc::new(Mutex::new(|packet: Packet| {
+    client.set_message_handler(|packet: Packet| {
         println!(
             "Received packet with ID: {}, Payload: {:?}",
             packet.message_id,
             packet.payload
         );
-    }));
-    client.set_message_handler(message_handler);
+    });
 
     // Set up the QUIC channel
     let address = "127.0.0.1".to_string();

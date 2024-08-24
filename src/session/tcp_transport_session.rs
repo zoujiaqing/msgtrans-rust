@@ -14,10 +14,10 @@ pub struct TcpTransportSession {
     reader: Arc<Mutex<tokio::io::ReadHalf<TcpStream>>>,
     writer: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
     id: usize,
-    message_handler: Mutex<Option<OnMessageHandler>>,
-    close_handler: Mutex<Option<OnCloseHandler>>,
-    error_handler: Mutex<Option<OnSessionErrorHandler>>,
-    timeout_handler: Mutex<Option<OnSessionTimeoutHandler>>,
+    message_handler: Mutex<Option<Arc<Mutex<OnMessageHandler>>>>,
+    close_handler: Mutex<Option<Arc<Mutex<OnCloseHandler>>>>,
+    error_handler: Mutex<Option<Arc<Mutex<OnSessionErrorHandler>>>>,
+    timeout_handler: Mutex<Option<Arc<Mutex<OnSessionTimeoutHandler>>>>,
 }
 
 impl TcpTransportSession {
@@ -80,42 +80,42 @@ impl TransportSession for TcpTransportSession {
         self.id
     }
 
-    async fn set_message_handler(self: Arc<Self>, handler: OnMessageHandler) {
+    async fn set_message_handler(self: Arc<Self>, handler: Arc<Mutex<OnMessageHandler>>) {
         let mut message_handler = self.message_handler.lock().await;
         *message_handler = Some(handler);
     }
 
-    async fn get_message_handler(&self) -> Option<OnMessageHandler> {
+    async fn get_message_handler(&self) -> Option<Arc<Mutex<OnMessageHandler>>> {
         let message_handler = self.message_handler.lock().await;
         message_handler.clone()
     }
 
-    async fn set_close_handler(self: Arc<Self>, handler: OnCloseHandler) {
+    async fn set_close_handler(self: Arc<Self>, handler: Arc<Mutex<OnCloseHandler>>) {
         let mut close_handler = self.close_handler.lock().await;
         *close_handler = Some(handler);
     }
 
-    async fn get_close_handler(&self) -> Option<OnCloseHandler> {
+    async fn get_close_handler(&self) -> Option<Arc<Mutex<OnCloseHandler>>> {
         let close_handler = self.close_handler.lock().await;
         close_handler.clone()
     }
 
-    async fn set_error_handler(self: Arc<Self>, handler: OnSessionErrorHandler) {
+    async fn set_error_handler(self: Arc<Self>, handler: Arc<Mutex<OnSessionErrorHandler>>) {
         let mut error_handler = self.error_handler.lock().await;
         *error_handler = Some(handler);
     }
 
-    async fn get_error_handler(&self) -> Option<OnSessionErrorHandler> {
+    async fn get_error_handler(&self) -> Option<Arc<Mutex<OnSessionErrorHandler>>> {
         let error_handler = self.error_handler.lock().await;
         error_handler.clone()
     }
 
-    async fn set_timeout_handler(self: Arc<Self>, handler: OnSessionTimeoutHandler) {
+    async fn set_timeout_handler(self: Arc<Self>, handler: Arc<Mutex<OnSessionTimeoutHandler>>) {
         let mut timeout_handler = self.timeout_handler.lock().await;
         *timeout_handler = Some(handler);
     }
 
-    async fn get_timeout_handler(&self) -> Option<OnSessionTimeoutHandler> {
+    async fn get_timeout_handler(&self) -> Option<Arc<Mutex<OnSessionTimeoutHandler>>> {
         let timeout_handler = self.timeout_handler.lock().await;
         timeout_handler.clone()
     }

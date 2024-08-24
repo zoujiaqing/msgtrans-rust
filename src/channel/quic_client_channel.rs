@@ -21,11 +21,11 @@ pub struct QuicClientChannel {
     host: String,
     port: u16,
     cert_path: &'static str,
-    reconnect_handler: Option<OnReconnectHandler>,
-    disconnect_handler: Option<OnClientDisconnectHandler>,
-    error_handler: Option<OnClientErrorHandler>,
-    send_handler: Option<OnSendHandler>,
-    message_handler: Option<OnClientMessageHandler>,
+    reconnect_handler: Option<Arc<Mutex<OnReconnectHandler>>>,
+    disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
+    error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
+    send_handler: Option<Arc<Mutex<OnSendHandler>>>,
+    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
 }
 
 impl QuicClientChannel {
@@ -48,23 +48,23 @@ impl QuicClientChannel {
 
 #[async_trait::async_trait]
 impl ClientChannel for QuicClientChannel {
-    fn set_reconnect_handler(&mut self, handler: OnReconnectHandler) {
+    fn set_reconnect_handler(&mut self, handler: Arc<Mutex<OnReconnectHandler>>) {
         self.reconnect_handler = Some(handler);
     }
 
-    fn set_disconnect_handler(&mut self, handler: OnClientDisconnectHandler) {
+    fn set_disconnect_handler(&mut self, handler: Arc<Mutex<OnClientDisconnectHandler>>) {
         self.disconnect_handler = Some(handler);
     }
 
-    fn set_error_handler(&mut self, handler: OnClientErrorHandler) {
+    fn set_error_handler(&mut self, handler: Arc<Mutex<OnClientErrorHandler>>) {
         self.error_handler = Some(handler);
     }
 
-    fn set_send_handler(&mut self, handler: OnSendHandler) {
+    fn set_send_handler(&mut self, handler: Arc<Mutex<OnSendHandler>>) {
         self.send_handler = Some(handler);
     }
 
-    fn set_message_handler(&mut self, handler: OnClientMessageHandler) {
+    fn set_message_handler(&mut self, handler: Arc<Mutex<OnClientMessageHandler>>) {
         self.message_handler = Some(handler);
     }
 

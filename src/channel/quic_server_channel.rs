@@ -36,10 +36,10 @@ impl ServerChannel for QuicServerChannel {
         &mut self,
         sessions: Arc<Mutex<HashMap<usize, Arc<dyn TransportSession + Send + Sync>>>>,
         next_id: Arc<AtomicUsize>,
-        message_handler: Option<OnMessageHandler>,
-        connect_handler: Option<OnServerConnectHandler>,
-        disconnect_handler: Option<OnServerDisconnectHandler>,
-        error_handler: Option<OnServerErrorHandler>,
+        message_handler: Option<Arc<Mutex<OnMessageHandler>>>,
+        connect_handler: Option<Arc<Mutex<OnServerConnectHandler>>>,
+        disconnect_handler: Option<Arc<Mutex<OnServerDisconnectHandler>>>,
+        error_handler: Option<Arc<Mutex<OnServerErrorHandler>>>,
     ) {
         let address = format!("{}:{}", self.host, self.port);
         self.server = Some(Server::builder()

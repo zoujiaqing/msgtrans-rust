@@ -3,7 +3,6 @@ use msgtrans::channel::{TcpServerChannel, WebSocketServerChannel, QuicServerChan
 use msgtrans::packet::Packet;
 use msgtrans::context::Context;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -25,8 +24,7 @@ async fn main() {
     )).await;
 
     // Set message handler callback
-    server.set_message_handler(Arc::new(Mutex::new(
-        Box::new(|context: Arc<Context>, packet: Packet| {
+    server.set_message_handler(|context: Arc<Context>, packet: Packet| {
             println!(
                 "Received packet with ID: {}, Payload: {:?}, from Session ID: {}",
                 packet.message_id,
@@ -43,35 +41,32 @@ async fn main() {
                     }
                 }
             });
-        }),
-    ))).await;
+        }
+    ).await;
 
     // Set connection handler callback
-    server.set_connect_handler(Arc::new(Mutex::new(
-        Box::new(|context: Arc<Context>| {
+    server.set_connect_handler(|context: Arc<Context>| {
             println!(
                 "New connection established, Session ID: {}",
                 context.session().id()
             );
-        }),
-    )));
+        }
+    );
 
     // Set disconnect handler callback
-    server.set_disconnect_handler(Arc::new(Mutex::new(
-        Box::new(|context: Arc<Context>| {
+    server.set_disconnect_handler(|context: Arc<Context>| {
             println!(
                 "Connection closed, Session ID: {}",
                 context.session().id()
             );
-        }),
-    )));
+        }
+    );
 
     // Set error handler callback
-    server.set_error_handler(Arc::new(Mutex::new(
-        Box::new(|error| {
+    server.set_error_handler(|error| {
             eprintln!("Error occurred: {:?}", error);
-        }),
-    )));
+        }
+    );
 
     // Start the server
     server.start().await;

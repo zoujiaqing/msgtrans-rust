@@ -8,11 +8,11 @@ use crate::callbacks::{
 
 pub struct MessageTransportClient<C: ClientChannel + Send + Sync> {
     channel: Option<Arc<Mutex<C>>>,
-    reconnect_handler: Option<OnReconnectHandler>,
-    disconnect_handler: Option<OnClientDisconnectHandler>,
-    error_handler: Option<OnClientErrorHandler>,
-    send_handler: Option<OnSendHandler>,
-    message_handler: Option<OnClientMessageHandler>,
+    reconnect_handler: Option<Arc<Mutex<OnReconnectHandler>>>,
+    disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
+    error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
+    send_handler: Option<Arc<Mutex<OnSendHandler>>>,
+    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
 }
 
 impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
@@ -83,24 +83,44 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
         self.channel = Some(Arc::new(Mutex::new(channel)));
     }
 
-    pub fn set_reconnect_handler_handler(&mut self, handler: OnReconnectHandler) {
-        self.reconnect_handler = Some(handler);
+    pub fn set_reconnect_handler<F>(&mut self, handler: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let handler_arc: Arc<Mutex<OnReconnectHandler>> = Arc::new(Mutex::new(handler));
+        self.reconnect_handler = Some(handler_arc);
     }
 
-    pub fn set_disconnect_handler(&mut self, handler: OnClientDisconnectHandler) {
-        self.disconnect_handler = Some(handler);
+    pub fn set_disconnect_handler<F>(&mut self, handler: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let handler_arc: Arc<Mutex<OnClientDisconnectHandler>> = Arc::new(Mutex::new(handler));
+        self.disconnect_handler = Some(handler_arc);
     }
 
-    pub fn set_error_handler(&mut self, handler: OnClientErrorHandler) {
-        self.error_handler = Some(handler);
+    pub fn set_error_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Box<dyn std::error::Error + Send + Sync>) + Send + Sync + 'static,
+    {
+        let handler_arc: Arc<Mutex<OnClientErrorHandler>> = Arc::new(Mutex::new(handler));
+        self.error_handler = Some(handler_arc);
     }
 
-    pub fn set_send_handler_handler(&mut self, handler: OnSendHandler) {
-        self.send_handler = Some(handler);
+    pub fn set_send_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Packet, Result<(), Box<dyn std::error::Error + Send + Sync>>) + Send + Sync + 'static,
+    {
+        let handler_arc: Arc<Mutex<OnSendHandler>> = Arc::new(Mutex::new(handler));
+        self.send_handler = Some(handler_arc);
     }
 
-    pub fn set_message_handler(&mut self, handler: OnClientMessageHandler) {
-        self.message_handler = Some(handler);
+    pub fn set_message_handler<F>(&mut self, handler: F)
+    where
+        F: Fn(Packet) + Send + Sync + 'static,
+    {
+        let handler_arc: Arc<Mutex<OnClientMessageHandler>> = Arc::new(Mutex::new(handler));
+        self.message_handler = Some(handler_arc);
     }
 }
 
