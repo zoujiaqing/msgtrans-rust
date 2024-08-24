@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use std::io;
 
 pub struct WebSocketTransportSession {
-    send_stream: Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>, // 发送流
-    receive_stream: Mutex<SplitStream<WebSocketStream<TcpStream>>>, // 接收流
+    send_stream: Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>,
+    receive_stream: Mutex<SplitStream<WebSocketStream<TcpStream>>>,
     id: usize,
     message_handler: Mutex<Option<OnMessageHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,
@@ -54,22 +54,18 @@ impl TransportSession for WebSocketTransportSession {
             match msg {
                 Ok(Message::Binary(bin)) => {
                     let packet = Packet::from_bytes(&bin);
-                    
-                    // 如果有接收处理器，调用它
                     if let Some(handler) = self.get_message_handler().await {
                         let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                         handler.lock().await(context, packet.clone());
                     }
                 }
                 Ok(_) => {
-                    // 接收到非二进制消息时处理错误
                     if let Some(handler) = self.get_error_handler().await {
                         let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                         handler.lock().await(context, Box::new(io::Error::new(io::ErrorKind::InvalidData, "Received non-binary message")) as Box<dyn std::error::Error + Send + Sync>);
                     }
                 }
                 Err(e) => {
-                    // 处理WebSocket错误
                     if let Some(handler) = self.get_error_handler().await {
                         let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                         handler.lock().await(context, Box::new(e) as Box<dyn std::error::Error + Send + Sync>);

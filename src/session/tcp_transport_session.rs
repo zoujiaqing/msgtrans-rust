@@ -11,8 +11,8 @@ use async_trait::async_trait;
 use crate::session::TransportSession;
 
 pub struct TcpTransportSession {
-    reader: Arc<Mutex<tokio::io::ReadHalf<TcpStream>>>, // 读流
-    writer: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>, // 写流
+    reader: Arc<Mutex<tokio::io::ReadHalf<TcpStream>>>,
+    writer: Arc<Mutex<tokio::io::WriteHalf<TcpStream>>>,
     id: usize,
     message_handler: Mutex<Option<OnMessageHandler>>,
     close_handler: Mutex<Option<OnCloseHandler>>,

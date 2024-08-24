@@ -54,13 +54,10 @@ impl TransportSession for QuicTransportSession {
         let mut connection_guard = self.connection.lock().await;
         if let Some(stream) = connection_guard.accept_bidirectional_stream().await? {
             let (receive_stream, send_stream) = stream.split();
-
-            // 更新 receive_stream 和 send_stream 字段
             *self.receive_stream.lock().await = Some(receive_stream);
             *self.send_stream.lock().await = Some(send_stream);
         }
 
-        // 处理接收数据的逻辑
         if let Some(ref mut stream) = *self.receive_stream.lock().await {
             while let Some(data) = stream.receive().await? {
                 let packet = Packet::from_bytes(&data);

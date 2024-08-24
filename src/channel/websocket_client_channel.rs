@@ -60,7 +60,6 @@ impl ClientChannel for WebSocketClientChannel {
                     handler();
                 }
 
-                // 开始接收数据的任务
                 let receive_stream = self.receive_stream.clone();
                 let message_handler = self.message_handler.clone();
                 let disconnect_handler = self.disconnect_handler.clone();

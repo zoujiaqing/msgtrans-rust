@@ -46,37 +46,37 @@ impl Packet {
     pub fn to_bytes(&self) -> BytesMut {
         let mut buf = BytesMut::with_capacity(16 + self.extend_length as usize + self.payload.len());
 
-        // 序列化头部内容
+        // Serialize the header content
         buf.extend_from_slice(&self.message_id.to_le_bytes());
         buf.extend_from_slice(&self.message_length.to_le_bytes());
         buf.extend_from_slice(&(self.compression_type.clone() as u8).to_le_bytes());
         buf.extend_from_slice(&self.extend_length.to_le_bytes());
 
-        // 序列化扩展头部内容
+        // Serialize the extended header content
         buf.extend_from_slice(&self.extend_header);
 
-        // 序列化payload内容
+        // Serialize the payload content
         buf.extend_from_slice(&self.payload);
 
         buf
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        // 解析头部内容
+        // Parse the header content
         let message_id = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         let message_length = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
         let compression_type = match bytes[8] {
             0 => CompressionMethod::None,
             1 => CompressionMethod::Zstd,
             2 => CompressionMethod::Zlib,
-            _ => CompressionMethod::None, // 默认值
+            _ => CompressionMethod::None, // Default value
         };
         let extend_length = u32::from_le_bytes([bytes[9], bytes[10], bytes[11], bytes[12]]) as usize;
 
-        // 解析扩展头部内容
+        // Parse the extended header content
         let extend_header = BytesMut::from(&bytes[13..13 + extend_length]);
 
-        // 解析payload内容
+        // Parse the payload content
         let payload = BytesMut::from(&bytes[13 + extend_length..]);
 
         Packet {

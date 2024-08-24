@@ -7,15 +7,15 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    // 创建客户端实例
+    // Create a client instance
     let mut client = MessageTransportClient::new();
 
-    // 设置TCP通道
+    // Set up the TCP channel
     let address = "127.0.0.1".to_string();
     let port: u16 = 9001;
     let tcp_channel = TcpClientChannel::new(&address, port);
 
-    // 设置消息处理回调
+    // Set the message handler callback
     let message_handler = Arc::new(Mutex::new(|packet: Packet| {
         println!(
             "Received packet with ID: {}, Payload: {:?}",
@@ -27,7 +27,7 @@ async fn main() {
 
     client.set_channel(tcp_channel);
 
-    // 连接到服务器
+    // Connect to the server
     if let Err(e) = client.connect().await {
         eprintln!("Failed to connect: {}", e);
         return;
@@ -45,11 +45,11 @@ async fn main() {
         return;
     }
 
-    // 创建异步读取器，用于读取键盘输入
+    // Create an asynchronous reader to read keyboard input
     let stdin = BufReader::new(io::stdin());
     let mut lines = stdin.lines();
 
-    // 创建一个任务来读取用户输入
+    // Create a task to read user input
     while let Ok(Some(line)) = lines.next_line().await {
         let packet = Packet::new(2, line.as_bytes().to_vec());
         if let Err(e) = client.send(packet).await {
@@ -58,6 +58,6 @@ async fn main() {
         }
     }
 
-    // 监听退出信号
+    // Listen for the exit signal
     tokio::signal::ctrl_c().await.expect("Exit for Ctrl+C");
 }

@@ -27,7 +27,6 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
         }
     }
 
-    // 连接服务器并启动接收任务
     pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(channel) = &self.channel {
             let mut channel_guard = channel.lock().await;
@@ -55,7 +54,6 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
         }
     }
 
-    // 直接通过 ClientChannel 发送数据
     pub async fn send(&self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(channel) = &self.channel {
             let mut channel_guard = channel.lock().await;
@@ -65,7 +63,6 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
         }
     }
 
-    // 设置 channel 并传递回调
     pub fn set_channel(&mut self, mut channel: C) {
         if let Some(ref handler) = self.reconnect_handler {
             channel.set_reconnect_handler(handler.clone());

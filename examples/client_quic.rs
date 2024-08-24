@@ -7,10 +7,10 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    // 创建客户端实例
+    // Create a client instance
     let mut client = MessageTransportClient::new();
 
-    // 设置消息处理回调
+    // Set the message handler callback
     let message_handler = Arc::new(Mutex::new(|packet: Packet| {
         println!(
             "Received packet with ID: {}, Payload: {:?}",
@@ -20,18 +20,17 @@ async fn main() {
     }));
     client.set_message_handler(message_handler);
 
-    // 设置QUIC通道
+    // Set up the QUIC channel
     let address = "127.0.0.1".to_string();
-    let port: u16 = 9003; // 你的 QUIC 服务器监听的端口
+    let port: u16 = 9003; // The port your QUIC server is listening on
     let quic_channel = QuicClientChannel::new(&address, port, "certs/cert.pem");
     client.set_channel(quic_channel);
 
-    // 尝试连接到服务器
+    // Attempt to connect to the server
     if let Err(e) = client.connect().await {
         eprintln!("Failed to connect: {}", e);
         return;
     }
-
 
     let packet = Packet::new(2, "Hello Server1!".as_bytes().to_vec());
     if let Err(e) = client.send(packet).await {
@@ -45,7 +44,7 @@ async fn main() {
         return;
     }
 
-    // 创建异步读取器，用于读取键盘输入
+    // Create an asynchronous reader to read keyboard input
     let stdin = BufReader::new(io::stdin());
     let mut lines = stdin.lines();
 
@@ -57,6 +56,6 @@ async fn main() {
         }
     }
 
-    // 监听退出信号
+    // Listen for the exit signal
     tokio::signal::ctrl_c().await.expect("Exit for Ctrl+C");
 }

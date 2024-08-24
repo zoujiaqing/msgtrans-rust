@@ -73,7 +73,6 @@ impl ClientChannel for TcpClientChannel {
                     handler();
                 }
 
-                // 启动接收数据的任务
                 let read_half_clone = Arc::clone(self.read_half.as_ref().unwrap());
                 let message_handler = self.message_handler.clone();
                 let disconnect_handler = self.disconnect_handler.clone();
@@ -88,9 +87,7 @@ impl ClientChannel for TcpClientChannel {
                                 let packet = Packet::from_bytes(&buf[..n]);
 
                                 if let Some(ref handler_arc) = message_handler {
-                                    // 解锁外层 Arc
                                     let handler_arc_guard = handler_arc.lock().await;
-                                    // 解锁内层 Mutex 并调用函数
                                     let handler = handler_arc_guard.lock().await;
                                     (*handler)(packet);
                                 }

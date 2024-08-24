@@ -15,7 +15,7 @@ pub struct QuicServerChannel {
     port: u16,
     cert_path: String,
     key_path: String,
-    server: Option<Server>, // 使用 Option 来表示可选的 Server
+    server: Option<Server>,
 }
 
 impl QuicServerChannel {
@@ -25,7 +25,7 @@ impl QuicServerChannel {
             port,
             cert_path: cert_path.to_string(),
             key_path: key_path.to_string(),
-            server: None, // 初始化为 None
+            server: None,
         }
     }
 }
@@ -54,16 +54,12 @@ impl ServerChannel for QuicServerChannel {
             let session_id = next_id.fetch_add(1, Ordering::SeqCst);
             let session: Arc<dyn TransportSession + Send + Sync> = QuicTransportSession::new(connection, session_id) as Arc<dyn TransportSession + Send + Sync>;
 
-            // 设置消息处理器
             if let Some(ref handler) = message_handler {
                 session.clone().set_message_handler(handler.clone()).await;
             }
 
-            println!("session_id: {}", session_id);
-
             sessions.lock().await.insert(session_id, Arc::clone(&session));
 
-            // 触发 OnConnectHandler
             if let Some(ref handler) = connect_handler {
                 let handler = handler.lock().await;
                 handler(Arc::new(Context::new(Arc::clone(&session))));
@@ -76,15 +72,14 @@ impl ServerChannel for QuicServerChannel {
                 let session_clone = Arc::clone(&session);
                 async move {
                     if let Err(e) = session_clone.clone().start_receiving().await {
-                        // 接收数据时发生错误，触发错误处理
+                        // An error occurred while receiving data, triggering the error handler
                         if let Some(ref handler) = error_handler_clone {
                             let handler = handler.lock().await;
-                            handler(e); // 不再需要额外的 Box 包装
+                            handler(e);
                         }
-                        // 发生错误后退出，可能表示连接关闭
+                        // Exit after an error occurs, possibly indicating the connection is closed
                         if let Some(ref handler) = disconnect_handler_clone {
                             let handler = handler.lock().await;
-                            // 使用克隆后的 session
                             handler(Arc::new(Context::new(session_clone)));
                         }
                     }

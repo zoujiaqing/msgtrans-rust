@@ -40,7 +40,6 @@ impl ServerChannel for WebSocketServerChannel {
         while let Ok((stream, _)) = listener.accept().await {
             let path = self.path.to_string();
             match accept_hdr_async(stream, |req: &Request<()>, response| {
-                println!("req.path: {}, server.path: {}", req.uri().path(), path);
                 if req.uri().path() == path {
                     Ok(response)
                 } else {
@@ -57,12 +56,10 @@ impl ServerChannel for WebSocketServerChannel {
                         WebSocketTransportSession::new(ws_stream, session_id);
                     sessions.lock().await.insert(session_id, Arc::clone(&session));
 
-                    // 设置消息处理器
                     if let Some(ref handler) = message_handler {
                         session.clone().set_message_handler(handler.clone()).await;
                     }
 
-                    // 触发 OnConnectHandler
                     if let Some(ref handler) = connect_handler {
                         let handler = handler.lock().await;
                         handler(Arc::new(Context::new(Arc::clone(&session))));
@@ -75,12 +72,12 @@ impl ServerChannel for WebSocketServerChannel {
                     tokio::spawn(async move {
                         let session_for_receiving = Arc::clone(&session_clone);
                         if let Err(e) = session_for_receiving.start_receiving().await {
-                            // 接收数据时发生错误，触发错误处理
+                            // An error occurred while receiving data, trigger the error handler
                             if let Some(ref handler) = error_handler_clone {
                                 let handler = handler.lock().await;
                                 handler(e);
                             }
-                            // 发生错误后触发断开连接的处理
+                            // Trigger the disconnect handler after an error occurs
                             if let Some(ref handler) = disconnect_handler_clone {
                                 let handler = handler.lock().await;
                                 handler(Arc::new(Context::new(Arc::clone(&session_clone))));
@@ -89,7 +86,7 @@ impl ServerChannel for WebSocketServerChannel {
                     });
                 }
                 Err(e) => {
-                    // 触发 OnErrorHandler
+                    // Trigger the ErrorHandler
                     if let Some(ref handler) = error_handler {
                         let handler = handler.lock().await;
                         handler(Box::new(e));

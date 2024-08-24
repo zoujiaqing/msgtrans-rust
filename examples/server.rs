@@ -7,16 +7,16 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    // 创建服务器实例
+    // Create a server instance
     let mut server = MessageTransportServer::new();
 
-    // 添加TCP通道
+    // Add TCP channel
     server.add_channel(TcpServerChannel::new("0.0.0.0", 9001)).await;
 
-    // 添加WebSocket通道
+    // Add WebSocket channel
     server.add_channel(WebSocketServerChannel::new("0.0.0.0", 9002, "/ws")).await;
 
-    // 添加QUIC通道
+    // Add QUIC channel
     server.add_channel(QuicServerChannel::new(
         "0.0.0.0",
         9003,
@@ -24,7 +24,7 @@ async fn main() {
         "certs/key.pem",
     )).await;
 
-    // 设置消息处理回调
+    // Set message handler callback
     server.set_message_handler(Arc::new(Mutex::new(
         Box::new(|context: Arc<Context>, packet: Packet| {
             println!(
@@ -33,7 +33,7 @@ async fn main() {
                 packet.payload,
                 context.session().id()
             );
-            // 发送回显内容给客户端
+            // Send echo content back to the client
             tokio::spawn({
                 let session = Arc::clone(&context.session());
                 async move {
@@ -46,7 +46,7 @@ async fn main() {
         }),
     ))).await;
 
-    // 设置连接处理回调
+    // Set connection handler callback
     server.set_connect_handler(Arc::new(Mutex::new(
         Box::new(|context: Arc<Context>| {
             println!(
@@ -56,7 +56,7 @@ async fn main() {
         }),
     )));
 
-    // 设置断开连接处理回调
+    // Set disconnect handler callback
     server.set_disconnect_handler(Arc::new(Mutex::new(
         Box::new(|context: Arc<Context>| {
             println!(
@@ -66,19 +66,19 @@ async fn main() {
         }),
     )));
 
-    // 设置错误处理回调
+    // Set error handler callback
     server.set_error_handler(Arc::new(Mutex::new(
         Box::new(|error| {
             eprintln!("Error occurred: {:?}", error);
         }),
     )));
 
-    // 启动服务器
+    // Start the server
     server.start().await;
 
     println!("MsgTrans server has started!");
 
-    // 监听退出信号
+    // Listen for exit signal
     tokio::signal::ctrl_c().await.expect("Failed to listen for Ctrl+C");
 
     println!("Shutdown signal received, exiting...");

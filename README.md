@@ -7,7 +7,7 @@ Using MsgTrans to create multiple protocol server.
 ```rust
 let mut server = MessageTransportServer::new();
 
-// Add tcp channel
+// Add TCP channel
 server.add_channel(TcpServerChannel::new("0.0.0.0", 9001)).await;
 
 // Add WebSocket channel
