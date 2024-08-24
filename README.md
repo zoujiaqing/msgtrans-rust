@@ -8,18 +8,18 @@ Using MsgTrans to create multiple protocol server.
 let mut server = MessageTransportServer::new();
 
 // Add tcp channel
-server.add_channel(Arc::new(Mutex::new(TcpServerChannel::new("0.0.0.0", 9001)))).await;
+server.add_channel(TcpServerChannel::new("0.0.0.0", 9001)).await;
 
 // Add WebSocket channel
-server.add_channel(Arc::new(Mutex::new(WebSocketServerChannel::new("0.0.0.0", 9002, "/ws")))).await;
+server.add_channel(WebSocketServerChannel::new("0.0.0.0", 9002, "/ws")).await;
 
 // Add QUIC channel
-server.add_channel(Arc::new(Mutex::new(QuicServerChannel::new(
+server.add_channel(QuicServerChannel::new(
     "0.0.0.0",
     9003,
     "certs/cert.pem",
     "certs/key.pem",
-)))).await;
+)).await;
 
 // set some callback handler for server
 
