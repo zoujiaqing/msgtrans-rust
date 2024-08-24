@@ -1,5 +1,31 @@
 # MsgTrans for rust
 
+## Server sample code
+
+Using MsgTrans to create multiple protocol server.
+
+```rust
+let mut server = MessageTransportServer::new();
+
+// Add tcp channel
+server.add_channel(Arc::new(Mutex::new(TcpServerChannel::new("0.0.0.0", 9001)))).await;
+
+// Add WebSocket channel
+server.add_channel(Arc::new(Mutex::new(WebSocketServerChannel::new("0.0.0.0", 9002, "/ws")))).await;
+
+// Add QUIC channel
+server.add_channel(Arc::new(Mutex::new(QuicServerChannel::new(
+    "0.0.0.0",
+    9003,
+    "certs/cert.pem",
+    "certs/key.pem",
+)))).await;
+
+// set some callback handler for server
+
+server.start().await;
+```
+
 ## Run example for server
 
 ```bash
@@ -35,32 +61,32 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365000 -n
 ## Packet Structure
 
 ```text
-+-------------------------------+
++--------------------------------+
 |         Header Content         |
-|  +-------------------------+  |
+|  +--------------------------+  |
 |  |  Message ID (4 bytes)    |  |
-|  +-------------------------+  |
+|  +--------------------------+  |
 |  |  Message Length (4 bytes)|  |
-|  +-------------------------+  |
+|  +--------------------------+  |
 |  | Compression Type (1 byte)|  |
-|  +-------------------------+  |
+|  +--------------------------+  |
 |  |  Extend Length (4 bytes) |  |
-|  +-------------------------+  |
-+-------------------------------+
+|  +--------------------------+  |
++--------------------------------+
               |
               v
-+-------------------------------+
++--------------------------------+
 |    Extended Header Content     |
 |  (variable length, Extend      |
 |   Length specifies size)       |
-+-------------------------------+
++--------------------------------+
               |
               v
-+-------------------------------+
++--------------------------------+
 |        Payload Content         |
 |    (variable length, Message   |
 |     Length specifies size)     |
-+-------------------------------+
++--------------------------------+
 ```
 
 Structure Explanation:
