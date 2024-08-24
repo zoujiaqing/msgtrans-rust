@@ -1,6 +1,6 @@
 use flate2::{write::ZlibEncoder, read::ZlibDecoder, Compression};
 use zstd::stream::{Encoder as ZstdEncoder, Decoder as ZstdDecoder};
-use std::io::{Read, Write, Result as IoResult};
+use std::io::{Read, Write, Result};
 
 #[derive(Debug, Clone)]
 pub enum CompressionMethod {
@@ -10,7 +10,7 @@ pub enum CompressionMethod {
 }
 
 impl CompressionMethod {
-    pub fn encode(&self, data: &[u8]) -> IoResult<Vec<u8>> {
+    pub fn encode(&self, data: &[u8]) -> Result<Vec<u8>> {
         match self {
             CompressionMethod::None => Ok(data.to_vec()),
             CompressionMethod::Zstd => {
@@ -26,7 +26,7 @@ impl CompressionMethod {
         }
     }
 
-    pub fn decode(&self, data: &[u8]) -> IoResult<Vec<u8>> {
+    pub fn decode(&self, data: &[u8]) -> Result<Vec<u8>> {
         match self {
             CompressionMethod::None => Ok(data.to_vec()),
             CompressionMethod::Zstd => {
