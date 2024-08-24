@@ -9,7 +9,7 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub trait TransportSession: Send + Sync {
-    async fn send_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    async fn send(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     async fn close_session(self: Arc<Self>, context: Arc<Context>);
     fn id(&self) -> usize;
 

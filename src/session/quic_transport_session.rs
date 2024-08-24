@@ -39,7 +39,7 @@ impl QuicTransportSession {
 
 #[async_trait]
 impl TransportSession for QuicTransportSession {
-    async fn send_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut stream_guard = self.send_stream.lock().await;
         if let Some(ref mut send_stream) = *stream_guard {
             let data = packet.to_bytes();

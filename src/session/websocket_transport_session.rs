@@ -40,7 +40,7 @@ impl WebSocketTransportSession {
 
 #[async_trait]
 impl TransportSession for WebSocketTransportSession {
-    async fn send_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let data = packet.to_bytes().to_vec();
         let mut send_stream = self.send_stream.lock().await;
         send_stream.send(Message::Binary(data)).await?;

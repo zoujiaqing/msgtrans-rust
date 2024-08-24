@@ -35,8 +35,7 @@ async fn main() {
             tokio::spawn({
                 let session = Arc::clone(&context.session());
                 async move {
-                    let send_result = session.send_packet(packet).await;
-                    if let Err(e) = send_result {
+                    if let Err(e) = session.send(packet).await {
                         eprintln!("Failed to send packet: {:?}", e);
                     }
                 }

@@ -37,7 +37,7 @@ impl TcpTransportSession {
 
 #[async_trait]
 impl TransportSession for TcpTransportSession {
-    async fn send_packet(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn send(self: Arc<Self>, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut writer = self.writer.lock().await;
         let data = packet.to_bytes();
         writer.write_all(&data).await?;
