@@ -62,7 +62,7 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365000 -n
 
 ```text
 +--------------------------------+
-|         Header Content         |
+|         Packet Header          |
 |  +--------------------------+  |
 |  |  Message ID (4 bytes)    |  |
 |  +--------------------------+  |
@@ -71,6 +71,8 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365000 -n
 |  | Compression Type (1 byte)|  |
 |  +--------------------------+  |
 |  |  Extend Length (4 bytes) |  |
+|  +--------------------------+  |
+|  |  Reserved (3 bytes)      |  |
 |  +--------------------------+  |
 +--------------------------------+
               |
