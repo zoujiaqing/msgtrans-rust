@@ -1,13 +1,14 @@
 use crate::callbacks::{
     OnMessageHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
 };
-use crate::packet::Packet;
+use crate::packet::{Packet, PacketHeader};
 use crate::context::Context;
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
+use bytes::{BytesMut, Buf};
 use crate::session::TransportSession;
 
 pub struct TcpTransportSession {
@@ -47,12 +48,13 @@ impl TransportSession for TcpTransportSession {
     
     async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut reader = self.reader.lock().await;
-        let mut buf = vec![0; 1024];
+        let mut buffer = BytesMut::new();
 
         loop {
-            let n = reader.read(&mut buf).await?;
+            let mut temp_buf = vec![0; 1024];
+            let n = reader.read(&mut temp_buf).await?;
             if n == 0 {
-                // 流已关闭
+                // Stream has been closed
                 if let Some(handler) = self.get_close_handler().await {
                     let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                     handler.lock().await(context);
@@ -60,10 +62,29 @@ impl TransportSession for TcpTransportSession {
                 break;
             }
 
-            let packet = Packet::from_bytes(&buf[..n]);
-            if let Some(handler) = self.get_message_handler().await {
-                let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                handler.lock().await(context, packet);
+            buffer.extend_from_slice(&temp_buf[..n]);
+
+            while buffer.len() >= 16 {
+                // Ensure we have enough data to parse the PacketHeader
+                let header = PacketHeader::from_bytes(&buffer[..16]);
+
+                // Check if the full packet is available
+                let total_length = 16 + header.extend_length as usize + header.message_length as usize;
+                if buffer.len() < total_length {
+                    break; // Not enough data, wait for more
+                }
+
+                // Parse the full packet
+                let packet = Packet::from_bytes(header, &buffer[16..total_length]);
+
+                // Handle the packet
+                if let Some(handler) = self.get_message_handler().await {
+                    let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                    handler.lock().await(context, packet);
+                }
+
+                // Remove the parsed packet from the buffer
+                buffer.advance(total_length);
             }
         }
 

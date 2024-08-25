@@ -26,8 +26,12 @@ async fn main() {
     // Set message handler callback
     server.set_message_handler(|context: Arc<Context>, packet: Packet| {
             println!(
-                "Received packet with ID: {}, Payload: {:?}, from Session ID: {}",
-                packet.message_id,
+                "Received packet with ID: {}, message length: {}, compression type: {:?}, extend length: {}, extend header: {:?}, Payload: {:?}, from Session ID: {}",
+                packet.header.message_id,
+                packet.header.message_length,
+                packet.header.compression_type,
+                packet.header.extend_length,
+                packet.extend_header,
                 packet.payload,
                 context.session().id()
             );

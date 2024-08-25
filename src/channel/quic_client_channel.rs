@@ -3,12 +3,12 @@ use super::ClientChannel;
 use crate::callbacks::{
     OnClientDisconnectHandler, OnClientErrorHandler, OnReconnectHandler, OnSendHandler, OnClientMessageHandler,
 };
-use crate::packet::Packet;
+use crate::packet::{Packet, PacketHeader};
 use s2n_quic::client::Connect;
 use s2n_quic::connection::Connection;
 use s2n_quic::stream::{ReceiveStream, SendStream};
 use std::{path::Path, net::SocketAddr};
-use bytes::Bytes;
+use bytes::{Buf, Bytes, BytesMut};
 use tokio::io::AsyncWriteExt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -98,14 +98,33 @@ impl ClientChannel for QuicClientChannel {
 
         tokio::spawn(async move {
             let mut receive_stream = receive_stream_clone.lock().await;
+            let mut buffer = BytesMut::new();
 
             loop {
                 match receive_stream.receive().await {
                     Ok(Some(data)) => {
-                        if let Some(ref handler) = message_handler {
-                            let packet = Packet::from_bytes(&data);
-                            let handler = handler.lock().await;
-                            (*handler)(packet);
+                        buffer.extend_from_slice(&data);
+
+                        while buffer.len() >= 16 {
+                            // Check if we have enough data to parse the PacketHeader
+                            let header = PacketHeader::from_bytes(&buffer[..16]);
+
+                            // Check if the full packet is available
+                            let total_length = 16 + header.extend_length as usize + header.message_length as usize;
+                            if buffer.len() < total_length {
+                                break; // Not enough data, wait for more
+                            }
+
+                            // Parse the full packet
+                            let packet = Packet::from_bytes(header, &buffer[16..total_length]);
+
+                            if let Some(ref handler) = message_handler {
+                                let handler = handler.lock().await;
+                                (*handler)(packet);
+                            }
+
+                            // Remove the parsed packet from the buffer
+                            buffer.advance(total_length);
                         }
                     }
                     Ok(None) => {

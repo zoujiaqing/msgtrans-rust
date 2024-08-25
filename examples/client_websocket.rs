@@ -1,7 +1,8 @@
 use msgtrans::client::MessageTransportClient;
 use msgtrans::channel::WebSocketClientChannel;
-use msgtrans::packet::Packet;
+use msgtrans::packet::{Packet, PacketHeader};
 use tokio::io::{self, AsyncBufReadExt, BufReader};
+use msgtrans::compression::CompressionMethod;
 
 #[tokio::main]
 async fn main() {
@@ -17,7 +18,7 @@ async fn main() {
     client.set_message_handler(|packet: Packet| {
         println!(
             "Received packet with ID: {}, Payload: {:?}",
-            packet.message_id,
+            packet.header.message_id,
             packet.payload
         );
     });
@@ -30,13 +31,29 @@ async fn main() {
         return;
     }
 
-    let packet = Packet::new(2, "Hello Server1!".as_bytes().to_vec());
+    // Create a PacketHeader for the outgoing packets
+    let packet_header = PacketHeader {
+        message_id: 2,
+        message_length: "Hello Server1!".len() as u32,
+        compression_type: CompressionMethod::None,
+        extend_length: 0, // No extended header
+    };
+
+    // Send the first packet
+    let packet = Packet::new(packet_header.clone(), vec![], "Hello Server1!".as_bytes().to_vec());
     if let Err(e) = client.send(packet).await {
         eprintln!("Failed to send packet: {}", e);
         return;
     }
 
-    let packet = Packet::new(2, "Hello Server2!".as_bytes().to_vec());
+    // Send the second packet
+    let packet_header = PacketHeader {
+        message_id: 2,
+        message_length: "Hello Server2!".len() as u32,
+        compression_type: CompressionMethod::None,
+        extend_length: 0, // No extended header
+    };
+    let packet = Packet::new(packet_header, vec![], "Hello Server2!".as_bytes().to_vec());
     if let Err(e) = client.send(packet).await {
         eprintln!("Failed to send packet: {}", e);
         return;
@@ -48,7 +65,13 @@ async fn main() {
 
     // Create a task to read user input
     while let Ok(Some(line)) = lines.next_line().await {
-        let packet = Packet::new(2, line.as_bytes().to_vec());
+        let packet_header = PacketHeader {
+            message_id: 2,
+            message_length: line.len() as u32,
+            compression_type: CompressionMethod::None,
+            extend_length: 0, // No extended header
+        };
+        let packet = Packet::new(packet_header, vec![], line.as_bytes().to_vec());
         if let Err(e) = client.send(packet).await {
             eprintln!("Failed to send packet: {}", e);
             return;

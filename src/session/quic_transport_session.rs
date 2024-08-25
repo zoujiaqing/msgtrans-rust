@@ -1,14 +1,14 @@
 use crate::callbacks::{
     OnMessageHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
 };
-use crate::packet::Packet;
 use crate::context::Context;
+use crate::packet::{Packet, PacketHeader};
+use bytes::{Buf, Bytes, BytesMut};
 use s2n_quic::connection::Connection;
 use s2n_quic::stream::{ReceiveStream, SendStream};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
-use bytes::Bytes;
 use crate::session::TransportSession;
 
 pub struct QuicTransportSession {
@@ -59,12 +59,32 @@ impl TransportSession for QuicTransportSession {
         }
 
         if let Some(ref mut stream) = *self.receive_stream.lock().await {
+            let mut buffer = BytesMut::new();
             while let Some(data) = stream.receive().await? {
-                let packet = Packet::from_bytes(&data);
+                
+                buffer.extend_from_slice(&data);
 
-                if let Some(handler) = self.get_message_handler().await {
-                    let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                    handler.lock().await(context, packet);
+                while buffer.len() >= 16 {
+                    // Check if we have enough data to parse the PacketHeader
+                    let header = PacketHeader::from_bytes(&buffer[..16]);
+
+                    // Check if the full packet is available
+                    let total_length = 16 + header.extend_length as usize + header.message_length as usize;
+                    if buffer.len() < total_length {
+                        break; // Not enough data, wait for more
+                    }
+
+                    // Parse the full packet
+                    let packet = Packet::from_bytes(header, &buffer[16..total_length]);
+
+
+                    if let Some(handler) = self.get_message_handler().await {
+                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                        handler.lock().await(context, packet);
+                    }
+
+                    // Remove the parsed packet from the buffer
+                    buffer.advance(total_length);
                 }
             }
         } else {

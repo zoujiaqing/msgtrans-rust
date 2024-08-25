@@ -1,7 +1,7 @@
 use crate::callbacks::{
     OnMessageHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
 };
-use crate::packet::Packet;
+use crate::packet::{Packet, PacketHeader};
 use crate::context::Context;
 use crate::session::TransportSession;
 use tokio_tungstenite::WebSocketStream;
@@ -53,7 +53,23 @@ impl TransportSession for WebSocketTransportSession {
         while let Some(msg) = receive_stream.next().await {
             match msg {
                 Ok(Message::Binary(bin)) => {
-                    let packet = Packet::from_bytes(&bin);
+                    if bin.len() < 16 {
+                        println!("Msg length errorr, length: {}", bin.len());
+                        break;
+                    }
+
+                    // Check if we have enough data to parse the PacketHeader
+                    let header = PacketHeader::from_bytes(&bin[..16]);
+
+                    // Check if the full packet is available
+                    let total_length = 16 + header.extend_length as usize + header.message_length as usize;
+                    if bin.len() < total_length {
+                        println!("Not enough data, length: {}", bin.len());
+                        break;
+                    }
+
+                    // Parse the full packet
+                    let packet = Packet::from_bytes(header, &bin[16..total_length]);
                     if let Some(handler) = self.get_message_handler().await {
                         let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                         handler.lock().await(context, packet.clone());

@@ -3,13 +3,14 @@ use super::ClientChannel;
 use crate::callbacks::{
     OnClientDisconnectHandler, OnClientErrorHandler, OnReconnectHandler, OnSendHandler, OnClientMessageHandler,
 };
-use crate::packet::Packet;
+use crate::packet::{Packet, PacketHeader};
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use std::io;
+use bytes::Buf;
 
 pub struct TcpClientChannel {
     read_half: Option<Arc<Mutex<ReadHalf<TcpStream>>>>,
@@ -80,15 +81,33 @@ impl ClientChannel for TcpClientChannel {
 
                 tokio::spawn(async move {
                     let mut stream = read_half_clone.lock().await;
+                    let mut buffer = BytesMut::new();
                     loop {
                         let mut buf = BytesMut::with_capacity(1024);
                         match stream.read_buf(&mut buf).await {
                             Ok(n) if n > 0 => {
-                                let packet = Packet::from_bytes(&buf[..n]);
-
-                                if let Some(ref handler_arc) = message_handler {
-                                    let handler = handler_arc.lock().await;
-                                    (*handler)(packet);
+                                buffer.extend_from_slice(&buf);
+        
+                                while buffer.len() >= 16 {
+                                    // Check if we have enough data to parse the PacketHeader
+                                    let header = PacketHeader::from_bytes(&buffer[..16]);
+        
+                                    // Check if the full packet is available
+                                    let total_length = 16 + header.extend_length as usize + header.message_length as usize;
+                                    if buffer.len() < total_length {
+                                        break; // Not enough data, wait for more
+                                    }
+        
+                                    // Parse the full packet
+                                    let packet = Packet::from_bytes(header, &buffer[16..total_length]);
+        
+                                    if let Some(ref handler) = message_handler {
+                                        let handler = handler.lock().await;
+                                        (*handler)(packet);
+                                    }
+        
+                                    // Remove the parsed packet from the buffer
+                                    buffer.advance(total_length);
                                 }
                             }
                             Ok(_) => {
