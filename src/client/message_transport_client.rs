@@ -12,7 +12,7 @@ pub struct MessageTransportClient<C: ClientChannel + Send + Sync> {
     disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
     error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
     send_handler: Option<Arc<Mutex<OnSendHandler>>>,
-    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>
 }
 
 impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
@@ -23,7 +23,7 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
             disconnect_handler: None,
             error_handler: None,
             send_handler: None,
-            message_handler: None,
+            message_handler: None
         }
     }
 

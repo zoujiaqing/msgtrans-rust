@@ -6,8 +6,9 @@ use crate::callbacks::{
 use crate::packet::{Packet, PacketHeader};
 use bytes::BytesMut;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::sync::Mutex;
+use std::net::{SocketAddr, IpAddr};
 use std::sync::Arc;
 use std::io;
 use bytes::Buf;
@@ -22,6 +23,7 @@ pub struct TcpClientChannel {
     error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
     send_handler: Option<Arc<Mutex<OnSendHandler>>>,
     message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    local_ip: Option<String>
 }
 
 impl TcpClientChannel {
@@ -36,6 +38,7 @@ impl TcpClientChannel {
             error_handler: None,
             send_handler: None,
             message_handler: None,
+            local_ip: None,
         }
     }
 }
@@ -62,8 +65,23 @@ impl ClientChannel for TcpClientChannel {
         self.message_handler = Some(handler);
     }
 
+    fn bind_local_addr(&mut self, ip_addr: String) {
+        self.local_ip = Some(ip_addr);
+    }
+
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        match TcpStream::connect((&self.address[..], self.port)).await {
+        let addr: SocketAddr = format!("{}:{}", self.address, self.port).parse()?;
+        let socket = match self.local_ip {
+            Some(ref local_ip_str) => {
+                let local_ip: IpAddr = local_ip_str.parse()?; // Parse String to IpAddr
+                let local_addr = SocketAddr::new(local_ip, 0); // Bind to a random port
+                let socket = TcpSocket::new_v4()?;
+                socket.bind(local_addr)?;
+                socket
+            }
+            None => TcpSocket::new_v4()?,
+        };
+        match socket.connect(addr).await {
             Ok(stream) => {
                 let (read_half, write_half) = tokio::io::split(stream);
                 self.read_half = Some(Arc::new(Mutex::new(read_half)));

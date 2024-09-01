@@ -3,6 +3,8 @@ use async_trait::async_trait;
 use crate::callbacks::{OnReconnectHandler, OnClientDisconnectHandler, OnClientErrorHandler, OnSendHandler, OnClientMessageHandler};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use std::net::Ipv4Addr;
+
 #[async_trait]
 pub trait ClientChannel: Send + Sync {
     fn set_reconnect_handler(&mut self, handler: Arc<Mutex<OnReconnectHandler>>);
@@ -10,6 +12,8 @@ pub trait ClientChannel: Send + Sync {
     fn set_error_handler(&mut self, handler: Arc<Mutex<OnClientErrorHandler>>);
     fn set_send_handler(&mut self, handler: Arc<Mutex<OnSendHandler>>);
     fn set_message_handler(&mut self, handler: Arc<Mutex<OnClientMessageHandler>>);
+
+    fn bind_local_addr(&mut self, ip_addr: String);
 
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     async fn send(&mut self, packet: Packet) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;

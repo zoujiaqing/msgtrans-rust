@@ -12,6 +12,7 @@ use futures::stream::StreamExt;
 use futures::sink::SinkExt;
 use url::Url;
 use tokio::sync::Mutex;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::io;
 
@@ -26,6 +27,7 @@ pub struct WebSocketClientChannel {
     error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
     send_handler: Option<Arc<Mutex<OnSendHandler>>>,
     message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    local_ip: Option<String>
 }
 
 impl WebSocketClientChannel {
@@ -41,12 +43,18 @@ impl WebSocketClientChannel {
             error_handler: None,
             send_handler: None,
             message_handler: None,
+            local_ip: None
         }
     }
 }
 
 #[async_trait::async_trait]
 impl ClientChannel for WebSocketClientChannel {
+
+    fn bind_local_addr(&mut self, ip_addr: String) {
+        self.local_ip = Some(ip_addr);
+    }
+
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let url = Url::parse(&format!("ws://{}:{}{}", self.address, self.port, self.path))?;
         match connect_async(url).await {

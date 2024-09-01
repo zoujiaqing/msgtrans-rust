@@ -26,6 +26,7 @@ pub struct QuicClientChannel {
     error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
     send_handler: Option<Arc<Mutex<OnSendHandler>>>,
     message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    local_ip: Option<String>,
 }
 
 impl QuicClientChannel {
@@ -42,6 +43,7 @@ impl QuicClientChannel {
             error_handler: None,
             send_handler: None,
             message_handler: None,
+            local_ip: None,
         }
     }
 }
@@ -68,12 +70,24 @@ impl ClientChannel for QuicClientChannel {
         self.message_handler = Some(handler);
     }
 
+    fn bind_local_addr(&mut self, ip_addr: String) {
+        self.local_ip = Some(ip_addr);
+    }
+
     async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // Create the UDP socket, possibly binding to a specific local IP
+        let local_addr = match &self.local_ip {
+            Some(local_ip) => format!("{}:0", local_ip),
+            None => "0.0.0.0:0".to_string(),
+        };
+
+        // Initialize the QUIC client
         let client = s2n_quic::Client::builder()
             .with_tls(Path::new(self.cert_path))?
-            .with_io("0.0.0.0:0")?
+            .with_io(local_addr.as_str())?
             .start()?;
 
+        // Connect to the server
         let addr: SocketAddr = format!("{}:{}", self.host, self.port).parse()?;
         let connect = Connect::new(addr).with_server_name("localhost");
         let mut connection = client.connect(connect).await?;
