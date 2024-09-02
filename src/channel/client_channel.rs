@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use crate::callbacks::{OnReconnectHandler, OnClientDisconnectHandler, OnClientErrorHandler, OnSendHandler, OnClientMessageHandler};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::net::Ipv4Addr;
 
 #[async_trait]
 pub trait ClientChannel: Send + Sync {
