@@ -49,13 +49,6 @@ cargo run --example client_quic
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365000 -nodes -subj "/CN=localhost"
 ```
 
-## Place needs improving
-
- 1. The callback method can be set after startup.
- 2. Processing after disconnection.
- 3. Heartbeat.
- 4. Add rpc function and timeout.
-
 ## Packet Structure
 
 ```text
