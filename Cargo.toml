@@ -1,6 +1,6 @@
 [package]
 name = "msgtrans"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Support for a variety of communication protocols such as TCP / QUIC / WebSocket, easy to create server and client network library."
 license = "Apache-2.0"
