@@ -130,7 +130,7 @@ impl ClientChannel for QuicClientChannel {
                             }
 
                             // Parse the full packet
-                            let packet = Packet::from_bytes(header, &buffer[16..total_length]);
+                            let packet = Packet::by_header_from_bytes(header, &buffer[16..total_length]);
 
                             if let Some(ref handler) = message_handler {
                                 let handler = handler.lock().await;

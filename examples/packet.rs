@@ -24,7 +24,6 @@ fn main() {
     println!("Serialized Packet: {:?}", serialized);
 
     // Deserialize the packet (assuming the header is extracted first)
-    let deserialized_header = PacketHeader::from_bytes(&serialized[..16]);
-    let deserialized_packet = Packet::from_bytes(deserialized_header, &serialized[16..]);
+    let deserialized_packet = Packet::from_bytes(&serialized);
     println!("Deserialized Packet: {:?}", deserialized_packet);
 }

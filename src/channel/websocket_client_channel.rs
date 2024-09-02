@@ -112,7 +112,7 @@ impl ClientChannel for WebSocketClientChannel {
                                 }
         
                                 // Parse the full packet
-                                let packet = Packet::from_bytes(header, &bin[16..total_length]);
+                                let packet = Packet::by_header_from_bytes(header, &bin[16..total_length]);
                                 (*handler)(packet);
                             }
                         }

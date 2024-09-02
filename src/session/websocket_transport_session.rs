@@ -69,7 +69,7 @@ impl TransportSession for WebSocketTransportSession {
                     }
 
                     // Parse the full packet
-                    let packet = Packet::from_bytes(header, &bin[16..total_length]);
+                    let packet = Packet::by_header_from_bytes(header, &bin[16..total_length]);
                     if let Some(handler) = self.get_message_handler().await {
                         let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
                         handler.lock().await(context, packet.clone());

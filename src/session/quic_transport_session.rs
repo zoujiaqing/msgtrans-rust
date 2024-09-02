@@ -75,7 +75,7 @@ impl TransportSession for QuicTransportSession {
                     }
 
                     // Parse the full packet
-                    let packet = Packet::from_bytes(header, &buffer[16..total_length]);
+                    let packet = Packet::by_header_from_bytes(header, &buffer[16..total_length]);
 
 
                     if let Some(handler) = self.get_message_handler().await {
