@@ -7,7 +7,7 @@ license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/zoujiaqing/msgtrans-rust"
 categories = ["asynchronous", "network-programming"]
-keywords = ["tcp", "quic", "websocket", "tokio"]
+keywords = ["tcp", "udp", "quic", "websocket", "tokio"]
 description = "Support for a variety of communication protocols such as TCP / QUIC / WebSocket, easy to create server and client network library."
 
 [dependencies]
