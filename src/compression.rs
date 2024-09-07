@@ -2,7 +2,7 @@ use flate2::{write::ZlibEncoder, read::ZlibDecoder, Compression};
 use zstd::stream::{Encoder as ZstdEncoder, Decoder as ZstdDecoder};
 use std::io::{Read, Write, Result};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum CompressionMethod {
     None = 0,
     Zstd = 1,
