@@ -21,7 +21,7 @@ async fn main() {
     // Set up the QUIC channel
     let address = "127.0.0.1".to_string();
     let port: u16 = 9003; // The port your QUIC server is listening on
-    let quic_channel = QuicClientChannel::new(&address, port, "certs/cert.pem");
+    let quic_channel = QuicClientChannel::new(&address, port, "certs/cert.pem".to_string());
     client.set_channel(quic_channel);
 
     // Attempt to connect to the server

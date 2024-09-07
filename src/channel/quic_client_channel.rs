@@ -20,7 +20,7 @@ pub struct QuicClientChannel {
     connection: Option<Arc<Mutex<Connection>>>,
     host: String,
     port: u16,
-    cert_path: &'static str,
+    cert_path: String,
     reconnect_handler: Option<Arc<Mutex<OnReconnectHandler>>>,
     disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
     error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
@@ -30,7 +30,7 @@ pub struct QuicClientChannel {
 }
 
 impl QuicClientChannel {
-    pub fn new(host: &str, port: u16, cert_path: &'static str) -> Self {
+    pub fn new(host: &str, port: u16, cert_path: String) -> Self {
         QuicClientChannel {
             receive_stream: None,
             send_stream: None,
@@ -83,7 +83,7 @@ impl ClientChannel for QuicClientChannel {
 
         // Initialize the QUIC client
         let client = s2n_quic::Client::builder()
-            .with_tls(Path::new(self.cert_path))?
+            .with_tls(Path::new(self.cert_path.as_str()))?
             .with_io(local_addr.as_str())?
             .start()?;
 
