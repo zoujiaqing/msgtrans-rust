@@ -31,13 +31,13 @@ pub struct WebSocketClientChannel {
 }
 
 impl WebSocketClientChannel {
-    pub fn new(address: &str, port: u16, path: String) -> Self {
+    pub fn new(address: &str, port: u16, path: &str) -> Self {
         WebSocketClientChannel {
             send_stream: None,
             receive_stream: None,
             address: address.to_string(),
             port,
-            path,
+            path: path.to_string(),
             reconnect_handler: None,
             disconnect_handler: None,
             error_handler: None,

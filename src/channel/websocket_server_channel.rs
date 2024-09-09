@@ -13,14 +13,14 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::http::{Request, Response};
 
 pub struct WebSocketServerChannel {
-    host: &'static str,
+    host: String,
     port: u16,
-    path: &'static str,
+    path: String,
 }
 
 impl WebSocketServerChannel {
-    pub fn new(host: &'static str, port: u16, path: &'static str) -> Self {
-        WebSocketServerChannel { host, port, path }
+    pub fn new(host: &str, port: u16, path: &str) -> Self {
+        WebSocketServerChannel { host: host.to_string(), port, path: path.to_string() }
     }
 }
 
@@ -35,7 +35,7 @@ impl ServerChannel for WebSocketServerChannel {
         disconnect_handler: Option<Arc<Mutex<OnServerDisconnectHandler>>>,
         error_handler: Option<Arc<Mutex<OnServerErrorHandler>>>,
     ) {
-        let listener = TcpListener::bind((self.host, self.port)).await.unwrap();
+        let listener = TcpListener::bind((self.host.to_string(), self.port)).await.unwrap();
 
         while let Ok((stream, _)) = listener.accept().await {
             let path = self.path.to_string();

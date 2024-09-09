@@ -12,7 +12,7 @@ async fn main() {
     // Set up the WebSocket channel
     let address = "127.0.0.1".to_string();
     let port: u16 = 9002;
-    let websocket_channel = WebSocketClientChannel::new(&address, port, "/ws".to_string());
+    let websocket_channel = WebSocketClientChannel::new(&address, port, "/ws");
 
     // Set the message handler callback
     client.set_message_handler(|packet: Packet| {

@@ -30,14 +30,14 @@ pub struct QuicClientChannel {
 }
 
 impl QuicClientChannel {
-    pub fn new(host: &str, port: u16, cert_path: String) -> Self {
+    pub fn new(host: &str, port: u16, cert_path: &str) -> Self {
         QuicClientChannel {
             receive_stream: None,
             send_stream: None,
             connection: None,
             host: host.to_string(),
             port,
-            cert_path,
+            cert_path: cert_path.to_string(),
             reconnect_handler: None,
             disconnect_handler: None,
             error_handler: None,
