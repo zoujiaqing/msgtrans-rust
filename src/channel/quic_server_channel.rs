@@ -87,4 +87,8 @@ impl ServerChannel for QuicServerChannel {
             });
         }
     }
+
+    async fn shutdown(&mut self) {
+        // TODO: close and clear
+    }
 }

@@ -66,6 +66,15 @@ impl MessageTransportServer {
         }
     }
 
+    pub async fn shutdown(&mut self) {
+        let mut channels_lock = self.channels.lock().await;
+    
+        for channel in channels_lock.iter_mut() {
+            let mut channel_lock = channel.lock().await;
+            channel_lock.shutdown().await;
+        }
+    }
+
     pub async fn add_channel<T>(&self, channel: T)
     where
         T: ServerChannel + Send + Sync + 'static,

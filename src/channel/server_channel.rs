@@ -18,4 +18,5 @@ pub trait ServerChannel: Send + Sync {
         disconnect_handler: Option<Arc<Mutex<OnServerDisconnectHandler>>>,
         error_handler: Option<Arc<Mutex<OnServerErrorHandler>>>
     );
+    async fn shutdown(&mut self);
 }

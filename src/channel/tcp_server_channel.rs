@@ -72,4 +72,8 @@ impl ServerChannel for TcpServerChannel {
             });
         }
     }
+
+    async fn shutdown(&mut self) {
+        // TODO: close and clear
+    }
 }
