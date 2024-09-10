@@ -67,6 +67,15 @@ impl MessageTransportServer {
     }
 
     pub async fn shutdown(&mut self) {
+        let sessions = self.sessions.lock().await;
+        let sessions_cloned: Vec<_> = sessions.iter().map(|(_, session)| Arc::clone(session)).collect();
+    
+        for session in sessions_cloned {
+            session.close().await;
+        }
+    
+        self.sessions.lock().await.clear();
+        
         let mut channels_lock = self.channels.lock().await;
     
         for channel in channels_lock.iter_mut() {

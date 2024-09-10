@@ -11,16 +11,19 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::accept_hdr_async;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::http::{Request, Response};
+use tokio::sync::Notify;
 
 pub struct WebSocketServerChannel {
     host: String,
     port: u16,
     path: String,
+    shutdown_notify: Arc<Notify>,
 }
 
 impl WebSocketServerChannel {
     pub fn new(host: &str, port: u16, path: &str) -> Self {
-        WebSocketServerChannel { host: host.to_string(), port, path: path.to_string() }
+        let shutdown_notify = Arc::new(Notify::new());
+        WebSocketServerChannel { host: host.to_string(), port, path: path.to_string(), shutdown_notify }
     }
 }
 
@@ -97,6 +100,6 @@ impl ServerChannel for WebSocketServerChannel {
     }
 
     async fn shutdown(&mut self) {
-        // TODO: close and clear
+        self.shutdown_notify.notify_waiters();
     }
 }

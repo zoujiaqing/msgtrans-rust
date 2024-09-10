@@ -99,12 +99,9 @@ impl TransportSession for WebSocketTransportSession {
         Ok(())
     }
 
-    async fn close_session(self: Arc<Self>, context: Arc<Context>) {
+    async fn close(self: Arc<Self>) {
         let mut send_stream = self.send_stream.lock().await;
         let _ = send_stream.close().await;
-        if let Some(handler) = self.get_close_handler().await {
-            handler.lock().await(context);
-        }
     }
 
     fn id(&self) -> usize {

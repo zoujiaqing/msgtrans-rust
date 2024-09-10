@@ -94,14 +94,10 @@ impl TransportSession for QuicTransportSession {
         Ok(())
     }
 
-    async fn close_session(self: Arc<Self>, context: Arc<Context>) {
+    async fn close(self: Arc<Self>) {
         let connection = self.connection.lock().await;
         const MY_ERROR_CODE: u32 = 99;
         connection.close(MY_ERROR_CODE.into());
-
-        if let Some(handler) = self.get_close_handler().await {
-            handler.lock().await(context);
-        }
     }
 
     fn id(&self) -> usize {

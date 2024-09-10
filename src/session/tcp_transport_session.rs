@@ -91,10 +91,9 @@ impl TransportSession for TcpTransportSession {
         Ok(())
     }
 
-    async fn close_session(self: Arc<Self>, context: Arc<Context>) {
-        if let Some(handler) = self.get_close_handler().await {
-            handler.lock().await(context);
-        }
+    async fn close(self: Arc<Self>) {
+        let mut send_stream = self.writer.lock().await;
+        let _ = send_stream.shutdown().await.unwrap();
     }
 
     fn id(&self) -> usize {

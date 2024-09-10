@@ -8,15 +8,18 @@ use std::collections::HashMap;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use tokio::sync::Mutex;
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
 pub struct TcpServerChannel {
     host: String,
     port: u16,
+    shutdown_notify: Arc<Notify>,
 }
 
 impl TcpServerChannel {
     pub fn new(host: &str, port: u16) -> Self {
-        TcpServerChannel { host: host.to_string(), port }
+        let shutdown_notify = Arc::new(Notify::new());
+        TcpServerChannel { host: host.to_string(), port, shutdown_notify }
     }
 }
 
@@ -74,6 +77,6 @@ impl ServerChannel for TcpServerChannel {
     }
 
     async fn shutdown(&mut self) {
-        // TODO: close and clear
+        self.shutdown_notify.notify_waiters();
     }
 }
