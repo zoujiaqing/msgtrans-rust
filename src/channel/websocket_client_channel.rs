@@ -22,11 +22,11 @@ pub struct WebSocketClientChannel {
     address: String,
     port: u16,
     path: String,
-    reconnect_handler: Option<Arc<Mutex<OnReconnectHandler>>>,
-    disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
-    error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
-    send_handler: Option<Arc<Mutex<OnSendHandler>>>,
-    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    reconnect_handler: Option<Arc<OnReconnectHandler>>,
+    disconnect_handler: Option<Arc<OnClientDisconnectHandler>>,
+    error_handler: Option<Arc<OnClientErrorHandler>>,
+    send_handler: Option<Arc<OnSendHandler>>,
+    message_handler: Option<Arc<OnClientMessageHandler>>,
     local_ip: Option<String>,
 }
 
@@ -78,7 +78,6 @@ impl ClientChannel for WebSocketClientChannel {
         self.receive_stream = Some(Arc::new(Mutex::new(receive_stream)));
     
         if let Some(ref handler) = self.reconnect_handler {
-            let handler = handler.lock().await;
             handler();
         }
     
@@ -93,8 +92,7 @@ impl ClientChannel for WebSocketClientChannel {
                 while let Some(msg) = receive_stream.next().await {
                     match msg {
                         Ok(Message::Binary(bin)) => {
-                            if let Some(ref handler_arc) = message_handler {
-                                let handler = handler_arc.lock().await;
+                            if let Some(ref handler) = message_handler {
                                 
                                 if bin.len() < 16 {
                                     println!("Msg length error, length: {}", bin.len());
@@ -118,8 +116,7 @@ impl ClientChannel for WebSocketClientChannel {
                         }
                         Ok(_) => continue,
                         Err(e) => {
-                            if let Some(handler_arc) = &error_handler {
-                                let handler = handler_arc.lock().await;
+                            if let Some(handler) = &error_handler {
                                 (handler)(Box::new(e));
                             }
                             break;
@@ -127,8 +124,7 @@ impl ClientChannel for WebSocketClientChannel {
                     }
                 }
     
-                if let Some(handler_arc) = &disconnect_handler {
-                    let handler = handler_arc.lock().await;
+                if let Some(handler) = &disconnect_handler {
                     (handler)();
                 }
             }
@@ -148,7 +144,6 @@ impl ClientChannel for WebSocketClientChannel {
                 .await;
 
             if let Some(ref handler) = self.send_handler {
-                let handler = handler.lock().await;
                 let send_result_for_handler = send_result
                     .as_ref()
                     .map(|_| ())
@@ -161,7 +156,6 @@ impl ClientChannel for WebSocketClientChannel {
             let err_msg: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established"));
 
             if let Some(ref handler) = self.error_handler {
-                let handler = handler.lock().await;
                 handler(err_msg);
             }
 
@@ -169,23 +163,23 @@ impl ClientChannel for WebSocketClientChannel {
         }
     }
 
-    fn set_reconnect_handler(&mut self, handler: Arc<Mutex<OnReconnectHandler>>) {
+    fn set_reconnect_handler(&mut self, handler: Arc<OnReconnectHandler>) {
         self.reconnect_handler = Some(handler);
     }
 
-    fn set_disconnect_handler(&mut self, handler: Arc<Mutex<OnClientDisconnectHandler>>) {
+    fn set_disconnect_handler(&mut self, handler: Arc<OnClientDisconnectHandler>) {
         self.disconnect_handler = Some(handler);
     }
 
-    fn set_error_handler(&mut self, handler: Arc<Mutex<OnClientErrorHandler>>) {
+    fn set_error_handler(&mut self, handler: Arc<OnClientErrorHandler>) {
         self.error_handler = Some(handler);
     }
 
-    fn set_send_handler(&mut self, handler: Arc<Mutex<OnSendHandler>>) {
+    fn set_send_handler(&mut self, handler: Arc<OnSendHandler>) {
         self.send_handler = Some(handler);
     }
 
-    fn set_message_handler(&mut self, handler: Arc<Mutex<OnClientMessageHandler>>) {
+    fn set_message_handler(&mut self, handler: Arc<OnClientMessageHandler>) {
         self.message_handler = Some(handler);
     }
 }

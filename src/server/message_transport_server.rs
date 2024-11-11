@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use crate::packet::Packet;
 use crate::context::Context;
 
+#[derive(Clone)]
 pub struct MessageTransportServer {
     channels: Arc<Mutex<Vec<Arc<Mutex<dyn ServerChannel + Send + Sync>>>>>,
     sessions: Arc<Mutex<HashMap<usize, Arc<dyn TransportSession + Send + Sync>>>>,

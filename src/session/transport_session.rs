@@ -2,7 +2,6 @@ use crate::callbacks::{
     OnMessageHandler, OnCloseHandler, OnSessionErrorHandler, OnSessionTimeoutHandler,
 };
 use crate::packet::Packet;
-use crate::context::Context;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;

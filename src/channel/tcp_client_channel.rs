@@ -18,11 +18,11 @@ pub struct TcpClientChannel {
     write_half: Option<Arc<Mutex<WriteHalf<TcpStream>>>>,
     address: String,
     port: u16,
-    reconnect_handler: Option<Arc<Mutex<OnReconnectHandler>>>,
-    disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
-    error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
-    send_handler: Option<Arc<Mutex<OnSendHandler>>>,
-    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    reconnect_handler: Option<Arc<OnReconnectHandler>>,
+    disconnect_handler: Option<Arc<OnClientDisconnectHandler>>,
+    error_handler: Option<Arc<OnClientErrorHandler>>,
+    send_handler: Option<Arc<OnSendHandler>>,
+    message_handler: Option<Arc<OnClientMessageHandler>>,
     local_ip: Option<String>
 }
 
@@ -45,23 +45,23 @@ impl TcpClientChannel {
 
 #[async_trait::async_trait]
 impl ClientChannel for TcpClientChannel {
-    fn set_reconnect_handler(&mut self, handler: Arc<Mutex<OnReconnectHandler>>) {
+    fn set_reconnect_handler(&mut self, handler: Arc<OnReconnectHandler>) {
         self.reconnect_handler = Some(handler);
     }
 
-    fn set_disconnect_handler(&mut self, handler: Arc<Mutex<OnClientDisconnectHandler>>) {
+    fn set_disconnect_handler(&mut self, handler: Arc<OnClientDisconnectHandler>) {
         self.disconnect_handler = Some(handler);
     }
 
-    fn set_error_handler(&mut self, handler: Arc<Mutex<OnClientErrorHandler>>) {
+    fn set_error_handler(&mut self, handler: Arc<OnClientErrorHandler>) {
         self.error_handler = Some(handler);
     }
 
-    fn set_send_handler(&mut self, handler: Arc<Mutex<OnSendHandler>>) {
+    fn set_send_handler(&mut self, handler: Arc<OnSendHandler>) {
         self.send_handler = Some(handler);
     }
 
-    fn set_message_handler(&mut self, handler: Arc<Mutex<OnClientMessageHandler>>) {
+    fn set_message_handler(&mut self, handler: Arc<OnClientMessageHandler>) {
         self.message_handler = Some(handler);
     }
 
@@ -88,7 +88,6 @@ impl ClientChannel for TcpClientChannel {
                 self.write_half = Some(Arc::new(Mutex::new(write_half)));
                 
                 if let Some(ref handler) = self.reconnect_handler {
-                    let handler = handler.lock().await;
                     handler();
                 }
 
@@ -120,7 +119,6 @@ impl ClientChannel for TcpClientChannel {
                                     let packet = Packet::by_header_from_bytes(header, &buffer[16..total_length]);
         
                                     if let Some(ref handler) = message_handler {
-                                        let handler = handler.lock().await;
                                         (*handler)(packet);
                                     }
         
@@ -130,15 +128,13 @@ impl ClientChannel for TcpClientChannel {
                             }
                             Ok(_) => {
                                 println!("Connection closed by peer.");
-                                if let Some(ref handler_arc) = disconnect_handler {
-                                    let handler = handler_arc.lock().await;
+                                if let Some(ref handler) = disconnect_handler {
                                     (handler)();
                                 }
                                 break;
                             }
                             Err(e) => {
-                                if let Some(ref handler_arc) = error_handler {
-                                    let handler = handler_arc.lock().await;
+                                if let Some(ref handler) = error_handler {
                                     handler(Box::new(e));
                                 }
                                 break;
@@ -151,7 +147,6 @@ impl ClientChannel for TcpClientChannel {
             }
             Err(e) => {
                 if let Some(ref handler) = self.error_handler {
-                    let handler = handler.lock().await;
                     handler(Box::new(e));
                 }
                 Err("Failed to connect".into())
@@ -168,7 +163,6 @@ impl ClientChannel for TcpClientChannel {
             let send_result = stream.write_all(&packet.to_bytes()).await;
 
             if let Some(ref handler) = self.send_handler {
-                let handler = handler.lock().await;
                 let send_result_for_handler = send_result
                     .as_ref()
                     .map(|_| ())
@@ -180,7 +174,6 @@ impl ClientChannel for TcpClientChannel {
         } else {
             let err_msg: Box<dyn std::error::Error + Send + Sync> = Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established"));
             if let Some(ref handler) = self.error_handler {
-                let handler = handler.lock().await;
                 handler(err_msg);
             }
             Err(Box::new(io::Error::new(io::ErrorKind::NotConnected, "No connection established")))

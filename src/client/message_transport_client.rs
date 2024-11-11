@@ -8,11 +8,11 @@ use crate::callbacks::{
 
 pub struct MessageTransportClient<C: ClientChannel + Send + Sync> {
     channel: Option<Arc<Mutex<C>>>,
-    reconnect_handler: Option<Arc<Mutex<OnReconnectHandler>>>,
-    disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
-    error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
-    send_handler: Option<Arc<Mutex<OnSendHandler>>>,
-    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>
+    reconnect_handler: Option<Arc<OnReconnectHandler>>,
+    disconnect_handler: Option<Arc<OnClientDisconnectHandler>>,
+    error_handler: Option<Arc<OnClientErrorHandler>>,
+    send_handler: Option<Arc<OnSendHandler>>,
+    message_handler: Option<Arc<OnClientMessageHandler>>,
 }
 
 impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
@@ -23,7 +23,7 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
             disconnect_handler: None,
             error_handler: None,
             send_handler: None,
-            message_handler: None
+            message_handler: None,
         }
     }
 
@@ -35,16 +35,14 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
                     println!("Connected successfully!");
 
                     if let Some(handler) = &self.reconnect_handler {
-                        let handler_guard = handler.lock().await;
-                        handler_guard();
+                        handler();
                     }
 
                     Ok(())
                 }
                 Err(e) => {
                     if let Some(handler) = &self.error_handler {
-                        let handler_guard = handler.lock().await;
-                        handler_guard(e);
+                        handler(e);
                     }
                     Err("Failed to connect".into())
                 }
@@ -87,40 +85,35 @@ impl<C: ClientChannel + Send + Sync + 'static> MessageTransportClient<C> {
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let handler_arc: Arc<Mutex<OnReconnectHandler>> = Arc::new(Mutex::new(handler));
-        self.reconnect_handler = Some(handler_arc);
+        self.reconnect_handler = Some(Arc::new(handler));
     }
 
     pub fn set_disconnect_handler<F>(&mut self, handler: F)
     where
         F: Fn() + Send + Sync + 'static,
     {
-        let handler_arc: Arc<Mutex<OnClientDisconnectHandler>> = Arc::new(Mutex::new(handler));
-        self.disconnect_handler = Some(handler_arc);
+        self.disconnect_handler = Some(Arc::new(handler));
     }
 
     pub fn set_error_handler<F>(&mut self, handler: F)
     where
         F: Fn(Box<dyn std::error::Error + Send + Sync>) + Send + Sync + 'static,
     {
-        let handler_arc: Arc<Mutex<OnClientErrorHandler>> = Arc::new(Mutex::new(handler));
-        self.error_handler = Some(handler_arc);
+        self.error_handler = Some(Arc::new(handler));
     }
 
     pub fn set_send_handler<F>(&mut self, handler: F)
     where
         F: Fn(Packet, Result<(), Box<dyn std::error::Error + Send + Sync>>) + Send + Sync + 'static,
     {
-        let handler_arc: Arc<Mutex<OnSendHandler>> = Arc::new(Mutex::new(handler));
-        self.send_handler = Some(handler_arc);
+        self.send_handler = Some(Arc::new(handler));
     }
 
     pub fn set_message_handler<F>(&mut self, handler: F)
     where
         F: Fn(Packet) + Send + Sync + 'static,
     {
-        let handler_arc: Arc<Mutex<OnClientMessageHandler>> = Arc::new(Mutex::new(handler));
-        self.message_handler = Some(handler_arc);
+        self.message_handler = Some(Arc::new(handler));
     }
 }
 

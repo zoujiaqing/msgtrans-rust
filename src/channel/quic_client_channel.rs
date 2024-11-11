@@ -21,11 +21,11 @@ pub struct QuicClientChannel {
     host: String,
     port: u16,
     cert_path: String,
-    reconnect_handler: Option<Arc<Mutex<OnReconnectHandler>>>,
-    disconnect_handler: Option<Arc<Mutex<OnClientDisconnectHandler>>>,
-    error_handler: Option<Arc<Mutex<OnClientErrorHandler>>>,
-    send_handler: Option<Arc<Mutex<OnSendHandler>>>,
-    message_handler: Option<Arc<Mutex<OnClientMessageHandler>>>,
+    reconnect_handler: Option<Arc<OnReconnectHandler>>,
+    disconnect_handler: Option<Arc<OnClientDisconnectHandler>>,
+    error_handler: Option<Arc<OnClientErrorHandler>>,
+    send_handler: Option<Arc<OnSendHandler>>,
+    message_handler: Option<Arc<OnClientMessageHandler>>,
     local_ip: Option<String>,
 }
 
@@ -50,23 +50,23 @@ impl QuicClientChannel {
 
 #[async_trait::async_trait]
 impl ClientChannel for QuicClientChannel {
-    fn set_reconnect_handler(&mut self, handler: Arc<Mutex<OnReconnectHandler>>) {
+    fn set_reconnect_handler(&mut self, handler: Arc<OnReconnectHandler>) {
         self.reconnect_handler = Some(handler);
     }
 
-    fn set_disconnect_handler(&mut self, handler: Arc<Mutex<OnClientDisconnectHandler>>) {
+    fn set_disconnect_handler(&mut self, handler: Arc<OnClientDisconnectHandler>) {
         self.disconnect_handler = Some(handler);
     }
 
-    fn set_error_handler(&mut self, handler: Arc<Mutex<OnClientErrorHandler>>) {
+    fn set_error_handler(&mut self, handler: Arc<OnClientErrorHandler>) {
         self.error_handler = Some(handler);
     }
 
-    fn set_send_handler(&mut self, handler: Arc<Mutex<OnSendHandler>>) {
+    fn set_send_handler(&mut self, handler: Arc<OnSendHandler>) {
         self.send_handler = Some(handler);
     }
 
-    fn set_message_handler(&mut self, handler: Arc<Mutex<OnClientMessageHandler>>) {
+    fn set_message_handler(&mut self, handler: Arc<OnClientMessageHandler>) {
         self.message_handler = Some(handler);
     }
 
@@ -101,7 +101,6 @@ impl ClientChannel for QuicClientChannel {
         self.connection = Some(Arc::new(Mutex::new(connection)));
 
         if let Some(ref handler) = self.reconnect_handler {
-            let handler = handler.lock().await;
             (*handler)();
         }
 
@@ -133,7 +132,6 @@ impl ClientChannel for QuicClientChannel {
                             let packet = Packet::by_header_from_bytes(header, &buffer[16..total_length]);
 
                             if let Some(ref handler) = message_handler {
-                                let handler = handler.lock().await;
                                 (*handler)(packet);
                             }
 
@@ -144,7 +142,6 @@ impl ClientChannel for QuicClientChannel {
                     Ok(None) => {
                         println!("Stream closed");
                         if let Some(ref handler) = disconnect_handler {
-                            let handler = handler.lock().await;
                             (*handler)();
                         }
                         break;
@@ -152,7 +149,6 @@ impl ClientChannel for QuicClientChannel {
                     Err(e) => {
                         eprintln!("Error reading from stream: {:?}", e);
                         if let Some(ref handler) = error_handler {
-                            let handler = handler.lock().await;
                             (*handler)(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                         }
                         break;
@@ -174,7 +170,6 @@ impl ClientChannel for QuicClientChannel {
             send_stream.write_all(&data).await?;
 
             if let Some(ref handler) = self.send_handler {
-                let handler = handler.lock().await;
                 (*handler)(packet.clone(), Ok(()));
             }
 
@@ -183,7 +178,6 @@ impl ClientChannel for QuicClientChannel {
             let err_msg: Box<dyn std::error::Error + Send + Sync> = "No connection established".into();
 
             if let Some(ref handler) = self.error_handler {
-                let handler = handler.lock().await;
                 (*handler)(err_msg);
             }
 

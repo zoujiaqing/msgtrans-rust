@@ -19,7 +19,6 @@ pub struct QuicServerChannel {
     port: u16,
     cert_path: String,
     key_path: String,
-    server: Option<Server>,
     shutdown_notify: Arc<Notify>,
 }
 
@@ -31,7 +30,6 @@ impl QuicServerChannel {
             port,
             cert_path: cert_path.to_string(),
             key_path: key_path.to_string(),
-            server: None,
             shutdown_notify,
         }
     }
