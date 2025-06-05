@@ -16,6 +16,8 @@ pub mod stream;
 pub mod config;
 pub mod error;
 pub mod api;
+pub mod protocol;
+pub mod protocol_adapter;
 
 // 重新导出核心类型
 pub use packet::{UnifiedPacket, PacketType, PacketError};
@@ -28,6 +30,8 @@ pub use stream::{EventStream, GenericReceiver};
 pub use config::{ConfigBuilder, TransportConfig, GlobalConfig};
 pub use error::{TransportError, RecoveryStrategy, ErrorHandler};
 pub use api::{Transport, TransportBuilder, ConnectionManager, ServerManager};
+pub use protocol::{ProtocolFactory, ProtocolRegistry, Connection, Server, ProtocolConfig as ProtocolConfigTrait};
+pub use protocol_adapter::ProtocolConnectionAdapter;
 
 // 核心类型别名
 pub type SessionId = u64;

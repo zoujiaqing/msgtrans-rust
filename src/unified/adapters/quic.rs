@@ -80,7 +80,7 @@ impl QuicAdapter {
         connection_info.state = ConnectionState::Connected;
         connection_info.established_at = std::time::SystemTime::now();
         
-        Self {
+        let mut adapter = Self {
             session_id: 0,
             config,
             stats: AdapterStats::new(),
@@ -88,7 +88,19 @@ impl QuicAdapter {
             is_connected: true,
             receive_buffer: Vec::new(),
             send_buffer: Vec::new(),
-        }
+        };
+        
+        // 为演示目的，预填充一些模拟数据
+        adapter.simulate_receive_heartbeat();
+        
+        adapter
+    }
+    
+    /// 模拟接收心跳包
+    fn simulate_receive_heartbeat(&mut self) {
+        use crate::unified::packet::UnifiedPacket;
+        let heartbeat = UnifiedPacket::heartbeat();
+        self.receive_buffer.push(heartbeat);
     }
     
     /// 模拟连接到QUIC服务器
@@ -181,18 +193,25 @@ impl ProtocolAdapter for QuicAdapter {
         // 在实际实现中，这里会从QUIC流接收数据
         // 目前我们从缓冲区模拟接收
         
-        if let Some(packet) = self.receive_buffer.pop() {
-            let packet_size = packet.payload.len() + 5; // +5 for header
+        // 使用循环等待数据，而不是返回None（None表示连接关闭）
+        loop {
+            if let Some(packet) = self.receive_buffer.pop() {
+                let packet_size = packet.payload.len() + 5; // +5 for header
+                
+                // 记录统计信息
+                self.stats.record_packet_received(packet_size);
+                self.connection_info.record_packet_received(packet_size);
+                
+                return Ok(Some(packet));
+            }
             
-            // 记录统计信息
-            self.stats.record_packet_received(packet_size);
-            self.connection_info.record_packet_received(packet_size);
+            // 检查连接状态
+            if !self.is_connected {
+                return Ok(None);
+            }
             
-            Ok(Some(packet))
-        } else {
-            // 模拟没有数据的情况
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            Ok(None)
+            // 模拟等待数据到达
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
     

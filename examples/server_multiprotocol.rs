@@ -1,693 +1,523 @@
-/// 多协议服务器演示
+/// 多协议服务器演示 - 使用新的协议注册机制
 /// 
-/// 展示msgtrans统一架构如何同时支持TCP、WebSocket和QUIC协议
-/// 提供统一的消息处理和回显功能
+/// 展示msgtrans统一架构的新协议注册系统：
+/// 1. 统一的Transport API - connect() 和 listen()
+/// 2. 协议模块化 - 支持TCP、WebSocket、QUIC和自定义协议
+/// 3. 向后兼容 - 保持现有API的同时提供新的简化接口
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::SystemTime;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, Mutex};
-use tokio::time::{Duration, sleep};
+use tokio::sync::{Mutex, RwLock};
+use tokio::time::{Duration, sleep, timeout};
 
-/// 数据包类型枚举
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum PacketType {
-    /// 心跳包
-    Heartbeat = 0,
-    /// 数据消息
-    Data = 1,
-    /// 控制消息
-    Control = 2,
-    /// 错误消息
-    Error = 3,
-    /// 认证消息
-    Auth = 4,
-    /// 回显消息（用于测试）
-    Echo = 255,
-}
-
-impl From<u8> for PacketType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => PacketType::Heartbeat,
-            1 => PacketType::Data,
-            2 => PacketType::Control,
-            3 => PacketType::Error,
-            4 => PacketType::Auth,
-            255 => PacketType::Echo,
-            _ => PacketType::Data,
-        }
-    }
-}
-
-impl From<PacketType> for u8 {
-    fn from(packet_type: PacketType) -> Self {
-        packet_type as u8
-    }
-}
-
-/// 统一架构数据包
-#[derive(Debug, Clone, PartialEq)]
-pub struct UnifiedPacket {
-    /// 数据包类型
-    pub packet_type: PacketType,
-    /// 消息ID（用于请求-响应匹配）
-    pub message_id: u32,
-    /// 负载数据
-    pub payload: Vec<u8>,
-}
-
-impl UnifiedPacket {
-    /// 创建新的数据包
-    pub fn new(packet_type: PacketType, message_id: u32, payload: Vec<u8>) -> Self {
-        Self {
-            packet_type,
-            message_id,
-            payload,
-        }
-    }
-    
-    /// 创建数据消息包
-    pub fn data(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
-        Self::new(PacketType::Data, message_id, payload.into())
-    }
-    
-    /// 创建回显包
-    pub fn echo(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
-        Self::new(PacketType::Echo, message_id, payload.into())
-    }
-    
-    /// 创建心跳包
-    pub fn heartbeat() -> Self {
-        Self::new(PacketType::Heartbeat, 0, Vec::new())
-    }
-    
-    /// 序列化为字节
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buffer = Vec::with_capacity(9 + self.payload.len());
-        
-        // 写入包类型（1字节）
-        buffer.push(self.packet_type.into());
-        
-        // 写入消息ID（4字节，大端序）
-        buffer.extend_from_slice(&self.message_id.to_be_bytes());
-        
-        // 写入负载长度（4字节，大端序）
-        buffer.extend_from_slice(&(self.payload.len() as u32).to_be_bytes());
-        
-        // 写入负载
-        buffer.extend_from_slice(&self.payload);
-        
-        buffer
-    }
-    
-    /// 从字节反序列化
-    pub fn from_bytes(data: &[u8]) -> Result<Self, String> {
-        if data.len() < 9 {
-            return Err("数据太短".to_string());
-        }
-        
-        // 读取包类型
-        let packet_type = PacketType::from(data[0]);
-        
-        // 读取消息ID
-        let message_id = u32::from_be_bytes([data[1], data[2], data[3], data[4]]);
-        
-        // 读取负载长度
-        let payload_len = u32::from_be_bytes([data[5], data[6], data[7], data[8]]) as usize;
-        
-        // 检查数据完整性
-        if data.len() != 9 + payload_len {
-            return Err("数据长度不匹配".to_string());
-        }
-        
-        // 读取负载
-        let payload = data[9..].to_vec();
-        
-        Ok(Self {
-            packet_type,
-            message_id,
-            payload,
-        })
-    }
-    
-    /// 获取负载的字符串表示
-    pub fn payload_as_string(&self) -> Option<String> {
-        String::from_utf8(self.payload.clone()).ok()
-    }
-}
-
-/// 协议类型
-#[derive(Debug, Clone, PartialEq)]
-pub enum ProtocolType {
-    Tcp,
-    WebSocket,
-    Quic,
-}
-
-impl std::fmt::Display for ProtocolType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProtocolType::Tcp => write!(f, "TCP"),
-            ProtocolType::WebSocket => write!(f, "WebSocket"),
-            ProtocolType::Quic => write!(f, "QUIC"),
-        }
-    }
-}
-
-/// 客户端连接信息
-#[derive(Debug, Clone)]
-pub struct ClientInfo {
-    pub id: u64,
-    pub protocol: ProtocolType,
-    pub remote_addr: String,
-    pub connected_at: SystemTime,
-    pub packets_received: u64,
-    pub packets_sent: u64,
-    pub bytes_received: u64,
-    pub bytes_sent: u64,
-}
+use msgtrans::unified::{
+    Transport, TransportBuilder,
+    packet::UnifiedPacket,
+    error::TransportError,
+    config::TransportConfig,
+};
+use futures::StreamExt;
 
 /// 服务器统计信息
 #[derive(Debug, Clone)]
 pub struct ServerStats {
     pub active_connections: usize,
     pub total_connections: u64,
-    pub tcp_connections: usize,
-    pub websocket_connections: usize,
-    pub quic_connections: usize,
+    pub protocol_stats: HashMap<String, u64>, // 按协议统计连接数
     pub total_packets: u64,
     pub total_bytes: u64,
 }
 
-/// 统一多协议服务器
+impl Default for ServerStats {
+    fn default() -> Self {
+        Self {
+            active_connections: 0,
+            total_connections: 0,
+            protocol_stats: HashMap::new(),
+            total_packets: 0,
+            total_bytes: 0,
+        }
+    }
+}
+
+/// 客户端连接管理器
+#[derive(Debug)]
+pub struct ClientManager {
+    tcp_sessions: Arc<RwLock<Vec<u64>>>,
+    ws_sessions: Arc<RwLock<Vec<u64>>>,
+    quic_sessions: Arc<RwLock<Vec<u64>>>,
+}
+
+impl ClientManager {
+    pub fn new() -> Self {
+        Self {
+            tcp_sessions: Arc::new(RwLock::new(Vec::new())),
+            ws_sessions: Arc::new(RwLock::new(Vec::new())),
+            quic_sessions: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+    
+    pub async fn add_tcp_session(&self, session_id: u64) {
+        self.tcp_sessions.write().await.push(session_id);
+    }
+    
+    pub async fn add_ws_session(&self, session_id: u64) {
+        self.ws_sessions.write().await.push(session_id);
+    }
+    
+    pub async fn add_quic_session(&self, session_id: u64) {
+        self.quic_sessions.write().await.push(session_id);
+    }
+    
+    pub async fn get_all_sessions(&self) -> (Vec<u64>, Vec<u64>, Vec<u64>) {
+        let tcp = self.tcp_sessions.read().await.clone();
+        let ws = self.ws_sessions.read().await.clone();
+        let quic = self.quic_sessions.read().await.clone();
+        (tcp, ws, quic)
+    }
+}
+
+/// 统一多协议服务器 - 新架构版本
 pub struct MultiProtocolServer {
-    clients: Arc<Mutex<HashMap<u64, ClientInfo>>>,
-    next_client_id: Arc<Mutex<u64>>,
+    transport: Transport,
     stats: Arc<Mutex<ServerStats>>,
-    message_tx: mpsc::UnboundedSender<(u64, UnifiedPacket)>,
-    message_rx: Option<mpsc::UnboundedReceiver<(u64, UnifiedPacket)>>,
+    client_manager: Arc<ClientManager>,
 }
 
 impl MultiProtocolServer {
     /// 创建新的多协议服务器
-    pub fn new() -> Self {
-        let (message_tx, message_rx) = mpsc::unbounded_channel();
+    pub async fn new() -> Result<Self, TransportError> {
+        // 使用新的协议注册机制创建传输层
+        let config = TransportConfig::default();
+        let transport = TransportBuilder::new()
+            .config(config)
+            .build()
+            .await?;
         
-        Self {
-            clients: Arc::new(Mutex::new(HashMap::new())),
-            next_client_id: Arc::new(Mutex::new(1)),
-            stats: Arc::new(Mutex::new(ServerStats {
-                active_connections: 0,
-                total_connections: 0,
-                tcp_connections: 0,
-                websocket_connections: 0,
-                quic_connections: 0,
-                total_packets: 0,
-                total_bytes: 0,
-            })),
-            message_tx,
-            message_rx: Some(message_rx),
-        }
+        let stats = Arc::new(Mutex::new(ServerStats::default()));
+        let client_manager = Arc::new(ClientManager::new());
+        
+        // 显示已注册的协议
+        let protocols = transport.list_protocols().await;
+        println!("🔧 已注册的协议: {:?}", protocols);
+        
+        Ok(Self {
+            transport,
+            stats,
+            client_manager,
+        })
     }
     
-    /// 启动服务器
-    pub async fn start(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🚀 启动msgtrans多协议服务器");
-        println!("=============================");
+    /// 启动多协议服务器
+    pub async fn start(&self) -> Result<(), TransportError> {
+        println!("🚀 启动多协议服务器（新架构版本）");
+        println!("===============================");
         
-        // 获取消息接收器
-        let mut message_rx = self.message_rx.take().unwrap();
-        let clients = self.clients.clone();
-        let stats = self.stats.clone();
+        // 使用新的统一API启动多个协议服务器
+        let servers = vec![
+            ("TCP", "127.0.0.1:9001", None),
+            ("WebSocket", "127.0.0.1:9002", None),
+            ("QUIC", "127.0.0.1:9003", None),
+        ];
+        
+        let mut server_handles = Vec::new();
+        
+        for (protocol_name, bind_addr, config) in servers {
+            match self.start_protocol_server(protocol_name, bind_addr, config).await {
+                Ok(session_id) => {
+                    println!("✅ {} 服务器启动成功: {} (会话ID: {})", 
+                             protocol_name, bind_addr, session_id);
+                    server_handles.push((protocol_name, session_id));
+                }
+                Err(e) => {
+                    println!("❌ {} 服务器启动失败: {:?}", protocol_name, e);
+                    // 如果是端口占用，尝试其他端口
+                    if let TransportError::ProtocolConfiguration(msg) = &e {
+                        if msg.contains("Address already in use") {
+                            println!("   💡 提示：端口 {} 被占用，请检查是否有其他程序在使用", 
+                                   bind_addr.split(':').last().unwrap_or(""));
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 等待服务器稳定启动
+        sleep(Duration::from_millis(500)).await;
+        
+        // 启动统计报告
+        self.start_stats_reporter().await;
+        
+        // 模拟客户端连接和消息处理
+        self.simulate_client_connections().await?;
+        
+        // 等待连接稳定
+        sleep(Duration::from_secs(1)).await;
+        
+        // 发送测试消息
+        self.send_test_messages_to_active_sessions().await?;
+        
+        // 保持服务器运行
+        println!("\n🔄 服务器正在运行，按 Ctrl+C 退出...");
+        tokio::signal::ctrl_c().await.map_err(|e| 
+            TransportError::Connection(format!("Signal error: {}", e)))?;
+        
+        println!("\n👋 服务器正在关闭...");
+        Ok(())
+    }
+    
+    /// 使用统一API启动特定协议的服务器
+    async fn start_protocol_server(
+        &self,
+        protocol_name: &str,
+        bind_addr: &str,
+        config: Option<Box<dyn std::any::Any + Send + Sync>>
+    ) -> Result<u64, TransportError> {
+        let protocol = protocol_name.to_lowercase();
+        
+        // 使用新的统一listen API
+        let session_id = if let Some(config) = config {
+            self.transport.listen_with_config(&protocol, bind_addr, config).await?
+        } else {
+            self.transport.listen(&protocol, bind_addr).await?
+        };
+        
+        // 更新统计信息
+        {
+            let mut stats = self.stats.lock().await;
+            stats.total_connections += 1;
+            *stats.protocol_stats.entry(protocol_name.to_string()).or_insert(0) += 1;
+        }
         
         // 启动消息处理任务
-        let message_handler = tokio::spawn(async move {
-            while let Some((client_id, packet)) = message_rx.recv().await {
-                Self::handle_message(client_id, packet, &clients, &stats).await;
+        let transport = self.transport.clone();
+        let stats = self.stats.clone();
+        let protocol_name = protocol_name.to_string();
+        
+        tokio::spawn(async move {
+            let mut events = transport.events();
+            
+            loop {
+                match events.next().await {
+                    Some(event) => {
+                        if let Err(e) = Self::handle_transport_event(
+                            event, 
+                            &transport, 
+                            &stats, 
+                            &protocol_name
+                        ).await {
+                            println!("❌ 处理{}事件时出错: {:?}", protocol_name, e);
+                        }
+                    }
+                    None => {
+                        println!("❌ {}事件流结束", protocol_name);
+                        break;
+                    }
+                }
             }
         });
         
-        // 启动TCP服务器
-        let tcp_task = self.start_tcp_server().await?;
+        Ok(session_id)
+    }
+    
+    /// 处理传输事件（新架构版本）
+    async fn handle_transport_event(
+        event: msgtrans::unified::event::TransportEvent,
+        transport: &Transport,
+        stats: &Arc<Mutex<ServerStats>>,
+        protocol_name: &str,
+    ) -> Result<(), TransportError> {
+        use msgtrans::unified::event::TransportEvent;
         
-        // 启动WebSocket服务器（模拟）
-        let websocket_task = self.start_websocket_server().await?;
-        
-        // 启动QUIC服务器（模拟）
-        let quic_task = self.start_quic_server().await?;
-        
-        // 启动统计报告任务
-        let stats_task = self.start_stats_reporter().await?;
-        
-        println!("\n✅ 所有协议服务器启动完成！");
-        println!("📊 等待客户端连接...");
-        
-        // 等待所有任务
-        tokio::select! {
-            _ = message_handler => println!("消息处理器退出"),
-            _ = tcp_task => println!("TCP服务器退出"),
-            _ = websocket_task => println!("WebSocket服务器退出"),
-            _ = quic_task => println!("QUIC服务器退出"),
-            _ = stats_task => println!("统计报告器退出"),
+        match event {
+            TransportEvent::PacketReceived { session_id, packet } => {
+                println!("📨 {}服务器收到消息: 会话{}, 类型{:?}, ID{}", 
+                         protocol_name, session_id, packet.packet_type, packet.message_id);
+                
+                // 更新统计
+                {
+                    let mut stats = stats.lock().await;
+                    stats.total_packets += 1;
+                    stats.total_bytes += packet.payload.len() as u64;
+                }
+                
+                // 创建回显响应
+                if let Some(content) = packet.payload_as_string() {
+                    let response = UnifiedPacket::echo(
+                        packet.message_id, 
+                        format!("{}回显: {}", protocol_name, content).as_str()
+                    );
+                    
+                    if let Err(e) = transport.send_to_session(session_id, response).await {
+                        println!("❌ 发送回显响应失败: {:?}", e);
+                    } else {
+                        println!("📤 {}服务器发送回显响应", protocol_name);
+                    }
+                }
+            }
+            TransportEvent::ConnectionEstablished { session_id, info } => {
+                println!("🔗 {}新连接建立: 会话{}, 地址{:?}", 
+                         protocol_name, session_id, info.peer_addr);
+                
+                // 更新活跃连接数
+                {
+                    let mut stats = stats.lock().await;
+                    stats.active_connections += 1;
+                }
+            }
+            TransportEvent::ConnectionClosed { session_id, reason } => {
+                println!("❌ {}连接关闭: 会话{}, 原因: {:?}", 
+                         protocol_name, session_id, reason);
+                
+                // 更新活跃连接数
+                {
+                    let mut stats = stats.lock().await;
+                    if stats.active_connections > 0 {
+                        stats.active_connections -= 1;
+                    }
+                }
+            }
+            _ => {
+                println!("📡 {}其他事件: {:?}", protocol_name, event);
+            }
         }
         
         Ok(())
     }
     
-    /// 启动TCP服务器
-    async fn start_tcp_server(&self) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error>> {
-        let listener = TcpListener::bind("127.0.0.1:9001").await?;
-        println!("📡 TCP服务器启动在 127.0.0.1:9001");
-        
-        let clients = self.clients.clone();
-        let next_client_id = self.next_client_id.clone();
-        let stats = self.stats.clone();
-        let message_tx = self.message_tx.clone();
-        
-        let task = tokio::spawn(async move {
-            while let Ok((stream, addr)) = listener.accept().await {
-                let client_id = {
-                    let mut id_gen = next_client_id.lock().await;
-                    let id = *id_gen;
-                    *id_gen += 1;
-                    id
-                };
-                
-                // 添加客户端信息
-                {
-                    let mut clients_map = clients.lock().await;
-                    let mut stats_map = stats.lock().await;
-                    
-                    clients_map.insert(client_id, ClientInfo {
-                        id: client_id,
-                        protocol: ProtocolType::Tcp,
-                        remote_addr: addr.to_string(),
-                        connected_at: SystemTime::now(),
-                        packets_received: 0,
-                        packets_sent: 0,
-                        bytes_received: 0,
-                        bytes_sent: 0,
-                    });
-                    
-                    stats_map.active_connections += 1;
-                    stats_map.total_connections += 1;
-                    stats_map.tcp_connections += 1;
-                }
-                
-                println!("🔗 TCP客户端 {} 连接: {}", client_id, addr);
-                
-                // 处理客户端连接
-                let clients_ref = clients.clone();
-                let stats_ref = stats.clone();
-                let tx = message_tx.clone();
-                
-                tokio::spawn(async move {
-                    Self::handle_tcp_client(client_id, stream, clients_ref, stats_ref, tx).await;
-                });
-            }
-        });
-        
-        Ok(task)
-    }
-    
-    /// 启动WebSocket服务器（模拟）
-    async fn start_websocket_server(&self) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error>> {
-        println!("📡 WebSocket服务器启动在 127.0.0.1:9002 (模拟)");
-        
-        let clients = self.clients.clone();
-        let next_client_id = self.next_client_id.clone();
-        let stats = self.stats.clone();
-        let message_tx = self.message_tx.clone();
-        
-        let task = tokio::spawn(async move {
-            // 模拟WebSocket连接
-            for i in 1..=3 {
-                let client_id = {
-                    let mut id_gen = next_client_id.lock().await;
-                    let id = *id_gen;
-                    *id_gen += 1;
-                    id
-                };
-                
-                // 添加模拟WebSocket客户端
-                {
-                    let mut clients_map = clients.lock().await;
-                    let mut stats_map = stats.lock().await;
-                    
-                    clients_map.insert(client_id, ClientInfo {
-                        id: client_id,
-                        protocol: ProtocolType::WebSocket,
-                        remote_addr: format!("ws://127.0.0.1:9002/client{}", i),
-                        connected_at: SystemTime::now(),
-                        packets_received: 0,
-                        packets_sent: 0,
-                        bytes_received: 0,
-                        bytes_sent: 0,
-                    });
-                    
-                    stats_map.active_connections += 1;
-                    stats_map.total_connections += 1;
-                    stats_map.websocket_connections += 1;
-                }
-                
-                println!("🔗 WebSocket客户端 {} 连接 (模拟)", client_id);
-                
-                // 模拟发送消息
-                let tx = message_tx.clone();
-                tokio::spawn(async move {
-                    sleep(Duration::from_secs(2)).await;
-                    let packet = UnifiedPacket::data(1, format!("WebSocket客户端 {} 的消息", client_id));
-                    let _ = tx.send((client_id, packet));
-                    
-                    // 定期发送心跳
-                    let mut interval = tokio::time::interval(Duration::from_secs(30));
-                    loop {
-                        interval.tick().await;
-                        let heartbeat = UnifiedPacket::heartbeat();
-                        if tx.send((client_id, heartbeat)).is_err() {
-                            break;
-                        }
-                    }
-                });
-                
-                sleep(Duration::from_millis(500)).await;
-            }
-            
-            // 保持运行
-            loop {
-                sleep(Duration::from_secs(1)).await;
-            }
-        });
-        
-        Ok(task)
-    }
-    
-    /// 启动QUIC服务器（模拟）
-    async fn start_quic_server(&self) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error>> {
-        println!("📡 QUIC服务器启动在 127.0.0.1:9003 (模拟)");
-        
-        let clients = self.clients.clone();
-        let next_client_id = self.next_client_id.clone();
-        let stats = self.stats.clone();
-        let message_tx = self.message_tx.clone();
-        
-        let task = tokio::spawn(async move {
-            // 模拟QUIC连接
-            for i in 1..=2 {
-                let client_id = {
-                    let mut id_gen = next_client_id.lock().await;
-                    let id = *id_gen;
-                    *id_gen += 1;
-                    id
-                };
-                
-                // 添加模拟QUIC客户端
-                {
-                    let mut clients_map = clients.lock().await;
-                    let mut stats_map = stats.lock().await;
-                    
-                    clients_map.insert(client_id, ClientInfo {
-                        id: client_id,
-                        protocol: ProtocolType::Quic,
-                        remote_addr: format!("quic://127.0.0.1:9003/client{}", i),
-                        connected_at: SystemTime::now(),
-                        packets_received: 0,
-                        packets_sent: 0,
-                        bytes_received: 0,
-                        bytes_sent: 0,
-                    });
-                    
-                    stats_map.active_connections += 1;
-                    stats_map.total_connections += 1;
-                    stats_map.quic_connections += 1;
-                }
-                
-                println!("🔗 QUIC客户端 {} 连接 (模拟)", client_id);
-                
-                // 模拟发送消息
-                let tx = message_tx.clone();
-                tokio::spawn(async move {
-                    sleep(Duration::from_secs(3)).await;
-                    let packet = UnifiedPacket::data(1, format!("QUIC客户端 {} 的高速消息", client_id));
-                    let _ = tx.send((client_id, packet));
-                    
-                    // 定期发送心跳
-                    let mut interval = tokio::time::interval(Duration::from_secs(20));
-                    loop {
-                        interval.tick().await;
-                        let heartbeat = UnifiedPacket::heartbeat();
-                        if tx.send((client_id, heartbeat)).is_err() {
-                            break;
-                        }
-                    }
-                });
-                
-                sleep(Duration::from_millis(300)).await;
-            }
-            
-            // 保持运行
-            loop {
-                sleep(Duration::from_secs(1)).await;
-            }
-        });
-        
-        Ok(task)
-    }
-    
     /// 启动统计报告任务
-    async fn start_stats_reporter(&self) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error>> {
+    async fn start_stats_reporter(&self) {
         let stats = self.stats.clone();
-        
-        let task = tokio::spawn(async move {
+        tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
-            
             loop {
                 interval.tick().await;
-                
-                let stats_snapshot = {
-                    let stats_lock = stats.lock().await;
-                    stats_lock.clone()
-                };
-                
-                println!("\n📊 === 服务器统计报告 ===");
-                println!("  活跃连接: {}", stats_snapshot.active_connections);
-                println!("  总连接数: {}", stats_snapshot.total_connections);
-                println!("  协议分布:");
-                println!("    TCP: {}", stats_snapshot.tcp_connections);
-                println!("    WebSocket: {}", stats_snapshot.websocket_connections);
-                println!("    QUIC: {}", stats_snapshot.quic_connections);
-                println!("  总数据包: {}", stats_snapshot.total_packets);
-                println!("  总字节数: {:.2} KB", stats_snapshot.total_bytes as f64 / 1024.0);
-                println!("========================\n");
+                let stats = stats.lock().await;
+                println!("\n📊 服务器统计信息:");
+                println!("   活跃连接: {}", stats.active_connections);
+                println!("   总连接数: {}", stats.total_connections);
+                println!("   协议分布: {:?}", stats.protocol_stats);
+                println!("   总数据包: {}", stats.total_packets);
+                println!("   总字节数: {}", stats.total_bytes);
+                println!();
             }
         });
-        
-        Ok(task)
     }
     
-    /// 处理TCP客户端连接
-    async fn handle_tcp_client(
-        client_id: u64,
-        mut stream: TcpStream,
-        clients: Arc<Mutex<HashMap<u64, ClientInfo>>>,
-        stats: Arc<Mutex<ServerStats>>,
-        message_tx: mpsc::UnboundedSender<(u64, UnifiedPacket)>,
-    ) {
-        let mut buffer = vec![0u8; 1024];
+    /// 模拟客户端连接（展示新的connect API）
+    async fn simulate_client_connections(&self) -> Result<(), TransportError> {
+        println!("\n🎭 开始模拟客户端连接...");
         
-        loop {
-            match stream.read(&mut buffer).await {
-                Ok(0) => {
-                    // 连接关闭
-                    println!("🔌 TCP客户端 {} 断开连接", client_id);
-                    break;
-                }
-                Ok(n) => {
-                    // 尝试解析数据包
-                    if n >= 9 {
-                        match UnifiedPacket::from_bytes(&buffer[..n]) {
-                            Ok(packet) => {
-                                // 更新统计
-                                {
-                                    let mut clients_map = clients.lock().await;
-                                    let mut stats_map = stats.lock().await;
-                                    
-                                    if let Some(client) = clients_map.get_mut(&client_id) {
-                                        client.packets_received += 1;
-                                        client.bytes_received += n as u64;
-                                    }
-                                    
-                                    stats_map.total_packets += 1;
-                                    stats_map.total_bytes += n as u64;
-                                }
-                                
-                                // 处理消息并发送回应
-                                let response = Self::process_packet_and_create_response(client_id, &packet, &clients, &stats).await;
-                                
-                                // 发送回应给客户端
-                                if let Some(response_packet) = response {
-                                    let response_data = response_packet.to_bytes();
-                                    if let Err(e) = stream.write_all(&response_data).await {
-                                        println!("❌ TCP客户端 {} 发送回应失败: {}", client_id, e);
-                                        break;
-                                    } else {
-                                        // 更新发送统计
-                                        {
-                                            let mut clients_map = clients.lock().await;
-                                            let mut stats_map = stats.lock().await;
-                                            
-                                            if let Some(client) = clients_map.get_mut(&client_id) {
-                                                client.packets_sent += 1;
-                                                client.bytes_sent += response_data.len() as u64;
-                                            }
-                                            
-                                            stats_map.total_packets += 1;
-                                            stats_map.total_bytes += response_data.len() as u64;
-                                        }
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                println!("❌ TCP客户端 {} 数据包解析错误: {}", client_id, e);
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("❌ TCP客户端 {} 读取错误: {}", client_id, e);
-                    break;
-                }
-            }
+        // 模拟TCP客户端连接
+        let tcp_sessions = self.simulate_tcp_clients().await?;
+        for session_id in &tcp_sessions {
+            self.client_manager.add_tcp_session(*session_id).await;
         }
+        println!("✅ 模拟了 {} 个TCP客户端连接", tcp_sessions.len());
         
-        // 清理客户端信息
-        {
-            let mut clients_map = clients.lock().await;
-            let mut stats_map = stats.lock().await;
-            
-            clients_map.remove(&client_id);
-            stats_map.active_connections = stats_map.active_connections.saturating_sub(1);
-            stats_map.tcp_connections = stats_map.tcp_connections.saturating_sub(1);
+        // 模拟WebSocket客户端连接  
+        let ws_sessions = self.simulate_websocket_clients().await?;
+        for session_id in &ws_sessions {
+            self.client_manager.add_ws_session(*session_id).await;
         }
+        println!("✅ 模拟了 {} 个WebSocket客户端连接", ws_sessions.len());
+        
+        // 模拟QUIC客户端连接
+        let quic_sessions = self.simulate_quic_clients().await?;
+        for session_id in &quic_sessions {
+            self.client_manager.add_quic_session(*session_id).await;
+        }
+        println!("✅ 模拟了 {} 个QUIC客户端连接", quic_sessions.len());
+        
+        Ok(())
     }
     
-    /// 处理数据包并创建回应
-    async fn process_packet_and_create_response(
-        client_id: u64,
-        packet: &UnifiedPacket,
-        clients: &Arc<Mutex<HashMap<u64, ClientInfo>>>,
-        stats: &Arc<Mutex<ServerStats>>,
-    ) -> Option<UnifiedPacket> {
-        let client_info = {
-            let clients_map = clients.lock().await;
-            clients_map.get(&client_id).cloned()
-        };
+    /// 模拟TCP客户端（展示统一connect API）
+    async fn simulate_tcp_clients(&self) -> Result<Vec<u64>, TransportError> {
+        let mut sessions = Vec::new();
         
-        if let Some(info) = client_info {
-            println!("📨 收到来自{}客户端 {} 的消息:", info.protocol, client_id);
-            println!("   类型: {:?}, ID: {}", packet.packet_type, packet.message_id);
-            
-            match packet.packet_type {
-                PacketType::Heartbeat => {
-                    println!("   内容: 心跳包");
-                    println!("📤 发送心跳响应");
-                    Some(UnifiedPacket::heartbeat())
+        for i in 1..=2 {
+            // 使用新的统一connect API - 支持URI格式
+            match timeout(Duration::from_secs(5), self.transport.connect("tcp://127.0.0.1:9001")).await {
+                Ok(Ok(session_id)) => {
+                    println!("🔗 TCP客户端{} 连接成功 (会话ID: {})", i, session_id);
+                    sessions.push(session_id);
                 }
-                PacketType::Data | PacketType::Control => {
-                    if let Some(content) = packet.payload_as_string() {
-                        println!("   内容: {}", content);
-                        
-                        // 创建回显响应
-                        let echo_content = format!("回显: {}", content);
-                        println!("📤 发送回显响应: {}", echo_content);
-                        Some(UnifiedPacket::echo(packet.message_id, echo_content))
-                    } else {
-                        println!("   内容: 二进制数据 ({} bytes)", packet.payload.len());
-                        println!("📤 发送二进制回显响应");
-                        Some(UnifiedPacket::echo(packet.message_id, packet.payload.clone()))
-                    }
+                Ok(Err(e)) => {
+                    println!("❌ TCP客户端{} 连接失败: {:?}", i, e);
                 }
-                PacketType::Echo => {
-                    if let Some(content) = packet.payload_as_string() {
-                        println!("   内容: {}", content);
-                    }
-                    println!("📤 回显包无需回应");
-                    None
-                }
-                PacketType::Error => {
-                    if let Some(content) = packet.payload_as_string() {
-                        println!("   错误内容: {}", content);
-                    }
-                    println!("📤 错误包无需回应");
-                    None
-                }
-                _ => {
-                    println!("   未知类型的数据包");
-                    None
+                Err(_) => {
+                    println!("❌ TCP客户端{} 连接超时", i);
                 }
             }
+            
+            sleep(Duration::from_millis(200)).await;
+        }
+        
+        Ok(sessions)
+    }
+    
+    /// 模拟WebSocket客户端
+    async fn simulate_websocket_clients(&self) -> Result<Vec<u64>, TransportError> {
+        let mut sessions = Vec::new();
+        
+        for i in 1..=3 {
+            // 使用统一API连接WebSocket
+            match timeout(Duration::from_secs(5), self.transport.connect("ws://127.0.0.1:9002")).await {
+                Ok(Ok(session_id)) => {
+                    println!("🌐 WebSocket客户端{} 连接成功 (会话ID: {})", i, session_id);
+                    sessions.push(session_id);
+                }
+                Ok(Err(e)) => {
+                    println!("❌ WebSocket客户端{} 连接失败: {:?}", i, e);
+                }
+                Err(_) => {
+                    println!("❌ WebSocket客户端{} 连接超时", i);
+                }
+            }
+            
+            sleep(Duration::from_millis(200)).await;
+        }
+        
+        Ok(sessions)
+    }
+    
+    /// 模拟QUIC客户端
+    async fn simulate_quic_clients(&self) -> Result<Vec<u64>, TransportError> {
+        let mut sessions = Vec::new();
+        
+        for i in 1..=2 {
+            // 使用统一API连接QUIC
+            match timeout(Duration::from_secs(5), self.transport.connect("quic://127.0.0.1:9003")).await {
+                Ok(Ok(session_id)) => {
+                    println!("⚡ QUIC客户端{} 连接成功 (会话ID: {})", i, session_id);
+                    sessions.push(session_id);
+                }
+                Ok(Err(e)) => {
+                    println!("❌ QUIC客户端{} 连接失败: {:?}", i, e);
+                }
+                Err(_) => {
+                    println!("❌ QUIC客户端{} 连接超时", i);
+                }
+            }
+            
+            sleep(Duration::from_millis(200)).await;
+        }
+        
+        Ok(sessions)
+    }
+    
+    /// 发送测试消息到活跃会话
+    async fn send_test_messages_to_active_sessions(&self) -> Result<(), TransportError> {
+        let (tcp_sessions, ws_sessions, quic_sessions) = self.client_manager.get_all_sessions().await;
+        
+        if tcp_sessions.is_empty() && ws_sessions.is_empty() && quic_sessions.is_empty() {
+            println!("⚠️  没有活跃的客户端连接，跳过消息发送");
+            return Ok(());
+        }
+        
+        println!("\n📤 开始发送测试消息...");
+        println!("   TCP会话: {:?}", tcp_sessions);
+        println!("   WebSocket会话: {:?}", ws_sessions);
+        println!("   QUIC会话: {:?}", quic_sessions);
+        
+        let test_messages = vec![
+            "Hello from multiprotocol server!",
+            "你好，这是中文测试消息！",
+            "JSON测试: {\"type\":\"test\",\"data\":\"multiprotocol\"}",
+        ];
+        
+        for (msg_id, message) in test_messages.iter().enumerate() {
+            let packet = UnifiedPacket::data(msg_id as u32 + 1, message.as_bytes());
+            
+            // 发送到所有TCP连接
+            for &session_id in &tcp_sessions {
+                if let Err(e) = self.transport.send_to_session(session_id, packet.clone()).await {
+                    println!("❌ 发送到TCP会话{}失败: {:?}", session_id, e);
+                } else {
+                    println!("✅ 发送消息到TCP会话{}: {}", session_id, message);
+                }
+            }
+            
+            // 发送到所有WebSocket连接
+            for &session_id in &ws_sessions {
+                if let Err(e) = self.transport.send_to_session(session_id, packet.clone()).await {
+                    println!("❌ 发送到WebSocket会话{}失败: {:?}", session_id, e);
+                } else {
+                    println!("✅ 发送消息到WebSocket会话{}: {}", session_id, message);
+                }
+            }
+            
+            // 发送到所有QUIC连接
+            for &session_id in &quic_sessions {
+                if let Err(e) = self.transport.send_to_session(session_id, packet.clone()).await {
+                    println!("❌ 发送到QUIC会话{}失败: {:?}", session_id, e);
+                } else {
+                    println!("✅ 发送消息到QUIC会话{}: {}", session_id, message);
+                }
+            }
+            
+            sleep(Duration::from_millis(300)).await;
+        }
+        
+        // 发送心跳包
+        let heartbeat = UnifiedPacket::heartbeat();
+        println!("💓 发送心跳包到所有连接...");
+        
+        if let Err(e) = self.transport.broadcast(heartbeat).await {
+            println!("❌ 广播心跳包失败: {:?}", e);
         } else {
-            println!("❌ 客户端 {} 信息未找到", client_id);
-            None
+            println!("✅ 心跳包广播成功");
         }
+        
+        Ok(())
     }
     
-    /// 处理收到的消息（用于模拟客户端）
-    async fn handle_message(
-        client_id: u64,
-        packet: UnifiedPacket,
-        clients: &Arc<Mutex<HashMap<u64, ClientInfo>>>,
-        stats: &Arc<Mutex<ServerStats>>,
-    ) {
-        let client_info = {
-            let clients_map = clients.lock().await;
-            clients_map.get(&client_id).cloned()
-        };
+    /// 展示协议注册的扩展性
+    pub async fn demonstrate_protocol_extensibility(&self) -> Result<(), TransportError> {
+        println!("\n🔧 演示协议注册机制的扩展性:");
         
-        if let Some(info) = client_info {
-            println!("📨 收到来自{}客户端 {} 的消息:", info.protocol, client_id);
-            println!("   类型: {:?}, ID: {}", packet.packet_type, packet.message_id);
-            
-            if let Some(content) = packet.payload_as_string() {
-                println!("   内容: {}", content);
-                
-                // 创建回显响应
-                let echo_response = UnifiedPacket::echo(packet.message_id, format!("回显: {}", content));
-                
-                // 模拟客户端不需要真实发送，只打印
-                println!("📤 发送回显响应: {}", format!("回显: {}", content));
-                
-                // 更新发送统计
-                {
-                    let mut clients_map = clients.lock().await;
-                    let mut stats_map = stats.lock().await;
-                    
-                    if let Some(client) = clients_map.get_mut(&client_id) {
-                        client.packets_sent += 1;
-                        client.bytes_sent += echo_response.to_bytes().len() as u64;
-                    }
-                    
-                    stats_map.total_packets += 1;
-                    stats_map.total_bytes += echo_response.to_bytes().len() as u64;
-                }
-            } else {
-                println!("   内容: 二进制数据 ({} bytes)", packet.payload.len());
-            }
-        }
+        // 获取协议注册表
+        let registry = self.transport.protocol_registry();
+        
+        // 列出当前支持的协议
+        let protocols = registry.list_protocols().await;
+        println!("   当前协议: {:?}", protocols);
+        
+        // 列出支持的URL schemes
+        let schemes = registry.list_schemes().await;
+        println!("   支持的URI schemes: {:?}", schemes);
+        
+        // 演示如何添加自定义协议（这里只是展示API，实际需要实现CustomProtocolFactory）
+        println!("   💡 可以通过 registry.register(CustomProtocolFactory::new()) 添加自定义协议");
+        println!("   💡 新协议自动支持 transport.connect() 和 transport.listen() API");
+        
+        Ok(())
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("🌐 msgtrans 多协议服务器演示");
-    println!("这个演示展示了如何同时支持TCP、WebSocket和QUIC协议");
-    println!("提供统一的消息处理和统计功能\n");
+    // 初始化日志
+    tracing_subscriber::fmt::init();
     
-    let mut server = MultiProtocolServer::new();
+    println!("🌟 msgtrans 多协议服务器演示 - 新架构版本");
+    println!("===========================================");
+    println!("🚀 特性展示:");
+    println!("   ✨ 统一的 connect() 和 listen() API");
+    println!("   🔧 协议模块化和可扩展性"); 
+    println!("   🌐 支持 TCP、WebSocket、QUIC");
+    println!("   📡 统一的消息处理和事件系统");
+    println!("   ⚡ 向后兼容现有API");
+    println!();
+    
+    // 创建服务器
+    let server = MultiProtocolServer::new().await?;
+    
+    // 演示协议扩展性
+    server.demonstrate_protocol_extensibility().await?;
+    
+    // 启动服务器
     server.start().await?;
     
     Ok(())

@@ -28,6 +28,12 @@ pub enum TransportError {
     #[error("Session not found")]
     SessionNotFound,
     
+    #[error("Unsupported protocol: {0}")]
+    UnsupportedProtocol(String),
+    
+    #[error("Protocol configuration error: {0}")]
+    ProtocolConfiguration(String),
+    
     /// 无效会话
     #[error("Invalid session")]
     InvalidSession,
@@ -70,6 +76,8 @@ impl Clone for TransportError {
             TransportError::Io(e) => TransportError::Io(std::io::Error::new(e.kind(), e.to_string())),
             TransportError::Serialization(s) => TransportError::Serialization(s.clone()),
             TransportError::SessionNotFound => TransportError::SessionNotFound,
+            TransportError::UnsupportedProtocol(s) => TransportError::UnsupportedProtocol(s.clone()),
+            TransportError::ProtocolConfiguration(s) => TransportError::ProtocolConfiguration(s.clone()),
             TransportError::InvalidSession => TransportError::InvalidSession,
             TransportError::ChannelClosed => TransportError::ChannelClosed,
             TransportError::ChannelLagged => TransportError::ChannelLagged,
@@ -190,6 +198,8 @@ impl ErrorHandler for DefaultErrorHandler {
             
             // 配置错误 - 中止
             TransportError::Configuration(_) |
+            TransportError::UnsupportedProtocol(_) |
+            TransportError::ProtocolConfiguration(_) |
             TransportError::Authentication(_) |
             TransportError::Permission(_) => {
                 RecoveryStrategy::Abort
@@ -254,6 +264,8 @@ impl ErrorClassifier {
     pub fn is_fatal(error: &TransportError) -> bool {
         matches!(error,
             TransportError::Configuration(_) |
+            TransportError::UnsupportedProtocol(_) |
+            TransportError::ProtocolConfiguration(_) |
             TransportError::Authentication(_) |
             TransportError::Permission(_)
         )
@@ -263,6 +275,8 @@ impl ErrorClassifier {
     pub fn severity(error: &TransportError) -> ErrorSeverity {
         match error {
             TransportError::Configuration(_) |
+            TransportError::UnsupportedProtocol(_) |
+            TransportError::ProtocolConfiguration(_) |
             TransportError::Authentication(_) |
             TransportError::Permission(_) => ErrorSeverity::Critical,
             

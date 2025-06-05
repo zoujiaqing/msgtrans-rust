@@ -15,6 +15,9 @@ use super::{
     stream::EventStream,
     config::TransportConfig,
     packet::UnifiedPacket,
+    protocol::{ProtocolRegistry, Connection},
+    adapters::create_standard_registry,
+    protocol_adapter::ProtocolConnectionAdapter,
 };
 
 /// 统一传输接口
@@ -30,20 +33,26 @@ pub struct Transport {
     session_id_generator: Arc<AtomicU64>,
     /// 配置
     config: TransportConfig,
+    /// 协议注册表
+    protocol_registry: Arc<ProtocolRegistry>,
 }
 
 impl Transport {
     /// 创建新的传输实例
-    pub fn new(config: TransportConfig) -> Self {
+    pub async fn new(config: TransportConfig) -> Result<Self, TransportError> {
         let actor_manager = Arc::new(ActorManager::new());
         let event_stream = EventStream::new(actor_manager.global_events());
         
-        Self {
+        // 创建标准协议注册表
+        let protocol_registry = Arc::new(create_standard_registry().await?);
+        
+        Ok(Self {
             actor_manager,
             event_stream,
             session_id_generator: Arc::new(AtomicU64::new(1)),
             config,
-        }
+            protocol_registry,
+        })
     }
     
     /// 添加新的连接
@@ -180,6 +189,88 @@ impl Transport {
     fn generate_session_id(&self) -> SessionId {
         self.session_id_generator.fetch_add(1, Ordering::SeqCst)
     }
+    
+    /// 基于URI连接到远程服务 (新的模块化API)
+    pub async fn connect(&self, uri: &str) -> Result<SessionId, TransportError> {
+        let connection = self.protocol_registry.create_connection(uri, None).await?;
+        self.add_protocol_connection(connection).await
+    }
+    
+    /// 基于URI和配置连接到远程服务
+    pub async fn connect_with_config(
+        &self, 
+        uri: &str, 
+        config: Box<dyn std::any::Any + Send + Sync>
+    ) -> Result<SessionId, TransportError> {
+        let connection = self.protocol_registry.create_connection(uri, Some(config)).await?;
+        self.add_protocol_connection(connection).await
+    }
+    
+    /// 启动协议服务器 (新的模块化API)
+    pub async fn listen(&self, protocol: &str, bind_addr: &str) -> Result<SessionId, TransportError> {
+        let server = self.protocol_registry.create_server(bind_addr, protocol, None).await?;
+        self.add_protocol_server(server).await
+    }
+    
+    /// 启动协议服务器并指定配置
+    pub async fn listen_with_config(
+        &self, 
+        protocol: &str, 
+        bind_addr: &str,
+        config: Box<dyn std::any::Any + Send + Sync>
+    ) -> Result<SessionId, TransportError> {
+        let server = self.protocol_registry.create_server(bind_addr, protocol, Some(config)).await?;
+        self.add_protocol_server(server).await
+    }
+    
+    /// 获取协议注册表的引用
+    pub fn protocol_registry(&self) -> &ProtocolRegistry {
+        &self.protocol_registry
+    }
+    
+    /// 列出所有已注册的协议
+    pub async fn list_protocols(&self) -> Vec<String> {
+        self.protocol_registry.list_protocols().await
+    }
+    
+    /// 添加协议连接到Actor管理
+    async fn add_protocol_connection(&self, mut connection: Box<dyn Connection>) -> Result<SessionId, TransportError> {
+        let session_id = self.generate_session_id();
+        connection.set_session_id(session_id);
+        
+        // 创建一个适配器包装器来兼容现有的add_connection方法
+        let adapter = ProtocolConnectionAdapter::new(connection);
+        self.add_connection(adapter).await
+    }
+    
+    /// 添加协议服务器并开始接受连接
+    async fn add_protocol_server(&self, mut server: Box<dyn super::protocol::Server>) -> Result<SessionId, TransportError> {
+        let session_id = self.generate_session_id();
+        let transport = self.clone();
+        
+        // 启动服务器接受循环
+        tokio::spawn(async move {
+            loop {
+                match server.accept().await {
+                    Ok(mut connection) => {
+                        let conn_session_id = transport.generate_session_id();
+                        connection.set_session_id(conn_session_id);
+                        
+                        let adapter = ProtocolConnectionAdapter::new(connection);
+                        if let Err(e) = transport.add_connection(adapter).await {
+                            tracing::error!("Failed to add protocol connection: {:?}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Protocol server accept error: {:?}", e);
+                        break;
+                    }
+                }
+            }
+        });
+        
+        Ok(session_id)
+    }
 }
 
 /// 传输构建器
@@ -204,11 +295,11 @@ impl TransportBuilder {
     }
     
     /// 构建传输实例
-    pub fn build(self) -> Result<Transport, TransportError> {
+    pub async fn build(self) -> Result<Transport, TransportError> {
         self.config.validate()
-            .map_err(|e| TransportError::Configuration(format!("Invalid config: {:?}", e)))?;
+            .map_err(|e| TransportError::ProtocolConfiguration(format!("Invalid config: {:?}", e)))?;
         
-        Ok(Transport::new(self.config))
+        Transport::new(self.config).await
     }
 }
 
@@ -450,6 +541,7 @@ impl Clone for Transport {
             event_stream: EventStream::new(self.actor_manager.global_events()),
             session_id_generator: self.session_id_generator.clone(),
             config: self.config.clone(),
+            protocol_registry: self.protocol_registry.clone(),
         }
     }
 } 
