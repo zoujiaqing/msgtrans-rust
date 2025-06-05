@@ -4,16 +4,16 @@ use crate::callbacks::{
 use crate::context::Context;
 use crate::packet::{Packet, PacketHeader};
 use bytes::{Buf, Bytes, BytesMut};
-use s2n_quic::connection::Connection;
-use s2n_quic::stream::{ReceiveStream, SendStream};
+use quinn::{Connection, RecvStream, SendStream};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use async_trait::async_trait;
 use crate::session::TransportSession;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub struct QuicTransportSession {
     connection: Arc<Mutex<Connection>>,
-    receive_stream: Arc<Mutex<Option<ReceiveStream>>>,
+    receive_stream: Arc<Mutex<Option<RecvStream>>>,
     send_stream: Arc<Mutex<Option<SendStream>>>,
     id: usize,
     message_handler: Mutex<Option<Arc<Mutex<OnMessageHandler>>>>,
@@ -43,7 +43,7 @@ impl TransportSession for QuicTransportSession {
         let mut stream_guard = self.send_stream.lock().await;
         if let Some(ref mut send_stream) = *stream_guard {
             let data = packet.to_bytes();
-            send_stream.send(Bytes::from(data)).await?;
+            send_stream.write_all(&data).await?;
         } else {
             return Err("Send stream is not available".into());
         }
@@ -52,39 +52,55 @@ impl TransportSession for QuicTransportSession {
     
     async fn start_receiving(self: Arc<Self>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut connection_guard = self.connection.lock().await;
-        if let Some(stream) = connection_guard.accept_bidirectional_stream().await? {
-            let (receive_stream, send_stream) = stream.split();
-            *self.receive_stream.lock().await = Some(receive_stream);
+        if let Ok((send_stream, recv_stream)) = connection_guard.accept_bi().await {
+            *self.receive_stream.lock().await = Some(recv_stream);
             *self.send_stream.lock().await = Some(send_stream);
         }
+        drop(connection_guard);
 
         if let Some(ref mut stream) = *self.receive_stream.lock().await {
             let mut buffer = BytesMut::new();
-            while let Some(data) = stream.receive().await? {
-                
-                buffer.extend_from_slice(&data);
+            let mut temp_buffer = [0u8; 1024];
+            
+            loop {
+                match stream.read(&mut temp_buffer).await {
+                    Ok(Some(n)) => {
+                        if n > 0 {
+                            buffer.extend_from_slice(&temp_buffer[..n]);
 
-                while buffer.len() >= 16 {
-                    // Check if we have enough data to parse the PacketHeader
-                    let header = PacketHeader::from_bytes(&buffer[..16]);
+                            while buffer.len() >= 16 {
+                                // Check if we have enough data to parse the PacketHeader
+                                let header = PacketHeader::from_bytes(&buffer[..16]);
 
-                    // Check if the full packet is available
-                    let total_length = 16 + header.extend_length as usize + header.message_length as usize;
-                    if buffer.len() < total_length {
-                        break; // Not enough data, wait for more
+                                // Check if the full packet is available
+                                let total_length = 16 + header.extend_length as usize + header.message_length as usize;
+                                if buffer.len() < total_length {
+                                    break; // Not enough data, wait for more
+                                }
+
+                                // Parse the full packet
+                                let packet = Packet::by_header_from_bytes(header, &buffer[16..total_length]);
+
+                                if let Some(handler) = self.get_message_handler().await {
+                                    let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
+                                    handler.lock().await(context, packet);
+                                }
+
+                                // Remove the parsed packet from the buffer
+                                buffer.advance(total_length);
+                            }
+                        } else {
+                            // Stream closed (0 bytes read)
+                            break;
+                        }
                     }
-
-                    // Parse the full packet
-                    let packet = Packet::by_header_from_bytes(header, &buffer[16..total_length]);
-
-
-                    if let Some(handler) = self.get_message_handler().await {
-                        let context = Arc::new(Context::new(self.clone() as Arc<dyn TransportSession + Send + Sync>));
-                        handler.lock().await(context, packet);
+                    Ok(None) => {
+                        // Stream closed
+                        break;
                     }
-
-                    // Remove the parsed packet from the buffer
-                    buffer.advance(total_length);
+                    Err(e) => {
+                        return Err(e.into());
+                    }
                 }
             }
         } else {
@@ -96,8 +112,7 @@ impl TransportSession for QuicTransportSession {
 
     async fn close(self: Arc<Self>) {
         let connection = self.connection.lock().await;
-        const MY_ERROR_CODE: u32 = 99;
-        connection.close(MY_ERROR_CODE.into());
+        connection.close(99u32.into(), b"Connection closed");
     }
 
     fn id(&self) -> usize {
