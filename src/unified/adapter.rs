@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use super::{SessionId, error::TransportError};
-use super::command::{ConnectionInfo, TransportStats, ProtocolType, ConnectionState};
+use super::command::ConnectionInfo;
 use super::packet::UnifiedPacket;
 
 /// 适配器统计信息

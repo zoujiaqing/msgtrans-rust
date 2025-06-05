@@ -51,6 +51,7 @@ pub struct WebSocketAdapter<S> {
     /// 会话ID
     session_id: SessionId,
     /// 配置
+    #[allow(dead_code)]
     config: WebSocketConfig,
     /// 统计信息
     stats: AdapterStats,
@@ -123,7 +124,7 @@ where
                     payload: BytesMut::from(text.as_bytes()),
                 }))
             }
-            Message::Ping(data) => {
+            Message::Ping(_data) => {
                 // 自动回应Pong
                 // 这里我们不返回数据包，而是在内部处理
                 Ok(None)
@@ -144,6 +145,7 @@ where
     }
     
     /// 处理连接关闭
+    #[allow(dead_code)]
     async fn handle_close(&self) {
         // 这是一个异步方法，但在当前上下文中我们不能修改self
         // 实际的关闭处理应该在调用者中进行

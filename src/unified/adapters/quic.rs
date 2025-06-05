@@ -52,6 +52,7 @@ pub struct QuicAdapter {
     /// 会话ID
     session_id: SessionId,
     /// 配置
+    #[allow(dead_code)]
     config: QuicConfig,
     /// 统计信息
     stats: AdapterStats,
@@ -124,6 +125,7 @@ impl QuicAdapter {
     }
     
     /// 反序列化数据包
+    #[allow(dead_code)]
     fn deserialize_packet(&self, data: &[u8]) -> Result<UnifiedPacket, QuicError> {
         if data.len() < 5 {
             return Err(QuicError::Serialization("Data too short".to_string()));

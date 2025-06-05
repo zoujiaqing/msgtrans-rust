@@ -3,8 +3,8 @@ use tokio::sync::{mpsc, broadcast, Mutex};
 use std::sync::Arc;
 use super::{
     SessionId, 
-    adapter::{ProtocolAdapter, AdapterStats},
-    command::{TransportCommand, TransportStats, ConnectionInfo, ProtocolType, ConnectionState},
+    adapter::ProtocolAdapter,
+    command::{TransportCommand, TransportStats, ConnectionInfo},
     event::TransportEvent,
     error::TransportError,
     packet::UnifiedPacket,
@@ -39,12 +39,14 @@ pub struct GenericActor<A: ProtocolAdapter> {
     /// 事件发送器
     event_tx: broadcast::Sender<TransportEvent>,
     /// 配置
+    #[allow(dead_code)]
     config: A::Config,
     /// 运行状态
     state: ActorState,
     /// 统计信息
     stats: TransportStats,
     /// Actor句柄引用计数
+    #[allow(dead_code)]
     handle_count: Arc<Mutex<usize>>,
 }
 

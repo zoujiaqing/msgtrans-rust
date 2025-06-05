@@ -4,7 +4,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::io;
 use super::super::{
     SessionId, 
-    packet::{UnifiedPacket, PacketError, PacketType},
+    packet::{UnifiedPacket, PacketError},
     adapter::{ProtocolAdapter, AdapterStats, TcpConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,

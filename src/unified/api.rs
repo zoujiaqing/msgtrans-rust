@@ -7,9 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
 use super::{
-    SessionId, CloseReason,
-    event::TransportEvent,
-    command::{TransportCommand, TransportStats, ConnectionInfo},
+    SessionId,
+    command::{TransportStats, ConnectionInfo},
     error::TransportError,
     actor::{GenericActor, ActorHandle, ActorManager},
     adapter::{ProtocolAdapter, ProtocolConfig},
@@ -25,6 +24,7 @@ pub struct Transport {
     /// Actor管理器
     actor_manager: Arc<ActorManager>,
     /// 全局事件流
+    #[allow(dead_code)]
     event_stream: EventStream,
     /// 会话ID生成器
     session_id_generator: Arc<AtomicU64>,
@@ -236,7 +236,7 @@ impl ConnectionManager {
         &self,
         addr: std::net::SocketAddr,
     ) -> Result<SessionId, TransportError> {
-        use super::adapters::tcp::{TcpAdapter, TcpClientBuilder};
+        use super::adapters::tcp::TcpClientBuilder;
         use super::adapter::TcpConfig;
         
         let config = TcpConfig::default();
@@ -328,7 +328,7 @@ impl ServerManager {
         use super::adapter::TcpConfig;
         
         let config = TcpConfig::default();
-        let mut server = TcpServerBuilder::new()
+        let server = TcpServerBuilder::new()
             .bind_address(addr)
             .config(config.clone())
             .build()
@@ -387,7 +387,7 @@ impl ServerManager {
         use super::adapter::WebSocketConfig;
         
         let config = WebSocketConfig::default();
-        let mut server = WebSocketServerBuilder::new()
+        let server = WebSocketServerBuilder::new()
             .bind_address(addr)
             .config(config.clone())
             .build()

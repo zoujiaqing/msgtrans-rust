@@ -291,7 +291,7 @@ pub trait ProtocolCommand: Send + std::fmt::Debug + 'static {
     fn into_transport_command(self) -> TransportCommand;
     
     /// 执行命令
-    async fn execute(self) -> Self::Response;
+    fn execute(self) -> impl std::future::Future<Output = Self::Response> + Send;
 }
 
 /// 命令构建器

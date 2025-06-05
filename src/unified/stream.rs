@@ -1,13 +1,11 @@
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use futures::{Stream, StreamExt, FutureExt};
+use futures::{Stream, StreamExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
 use super::{
-    SessionId, 
+    SessionId,
     event::TransportEvent,
-    error::TransportError,
-    command::TransportCommand,
     packet::UnifiedPacket,
 };
 
@@ -129,6 +127,7 @@ pub struct GenericReceiver<T> {
     /// 内部接收器
     receiver: mpsc::Receiver<T>,
     /// 当前的接收Future（可能为None）
+    #[allow(dead_code)]
     recv_future: Option<Pin<Box<dyn std::future::Future<Output = Option<T>> + Send>>>,
 }
 
