@@ -1,0 +1,455 @@
+/// 统一API接口层
+/// 
+/// 提供高级的、协议无关的传输API
+
+use tokio::sync::{mpsc, broadcast};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::collections::HashMap;
+use super::{
+    SessionId, CloseReason,
+    event::TransportEvent,
+    command::{TransportCommand, TransportStats, ConnectionInfo},
+    error::TransportError,
+    actor::{GenericActor, ActorHandle, ActorManager},
+    adapter::{ProtocolAdapter, ProtocolConfig},
+    stream::EventStream,
+    config::TransportConfig,
+    packet::UnifiedPacket,
+};
+
+/// 统一传输接口
+/// 
+/// 这是用户使用的主要接口，提供协议无关的传输功能
+pub struct Transport {
+    /// Actor管理器
+    actor_manager: Arc<ActorManager>,
+    /// 全局事件流
+    event_stream: EventStream,
+    /// 会话ID生成器
+    session_id_generator: Arc<AtomicU64>,
+    /// 配置
+    config: TransportConfig,
+}
+
+impl Transport {
+    /// 创建新的传输实例
+    pub fn new(config: TransportConfig) -> Self {
+        let actor_manager = Arc::new(ActorManager::new());
+        let event_stream = EventStream::new(actor_manager.global_events());
+        
+        Self {
+            actor_manager,
+            event_stream,
+            session_id_generator: Arc::new(AtomicU64::new(1)),
+            config,
+        }
+    }
+    
+    /// 添加新的连接
+    pub async fn add_connection<A: ProtocolAdapter>(
+        &self,
+        adapter: A,
+    ) -> Result<SessionId, TransportError> {
+        let session_id = self.generate_session_id();
+        
+        // 创建Actor的命令和事件通道
+        let (command_tx, command_rx) = mpsc::channel(1024);
+        let (event_tx, event_rx) = broadcast::channel(1024);
+        
+        // 创建Actor
+        let actor = GenericActor::new(
+            adapter,
+            session_id,
+            command_rx,
+            event_tx.clone(),
+            A::Config::default_config(),
+        );
+        
+        // 创建Actor句柄
+        let handle = ActorHandle::new(
+            command_tx,
+            event_rx,
+            session_id,
+            Arc::new(tokio::sync::Mutex::new(0)),
+        );
+        
+        // 添加到管理器
+        self.actor_manager.add_actor(session_id, handle).await;
+        
+        // 启动Actor
+        let actor_manager = self.actor_manager.clone();
+        let session_id_for_cleanup = session_id;
+        tokio::spawn(async move {
+            if let Err(e) = actor.run().await {
+                tracing::error!("Actor {} failed: {:?}", session_id_for_cleanup, e);
+            }
+            
+            // 清理Actor
+            actor_manager.remove_actor(&session_id_for_cleanup).await;
+        });
+        
+        Ok(session_id)
+    }
+    
+    /// 发送数据包到指定会话
+    pub async fn send_to_session(
+        &self,
+        session_id: SessionId,
+        packet: UnifiedPacket,
+    ) -> Result<(), TransportError> {
+        if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
+            handle.send_packet(packet).await
+        } else {
+            Err(TransportError::SessionNotFound)
+        }
+    }
+    
+    /// 广播数据包到所有会话
+    pub async fn broadcast(&self, packet: UnifiedPacket) -> Result<(), TransportError> {
+        let sessions = self.actor_manager.active_sessions().await;
+        let mut errors = Vec::new();
+        
+        for session_id in sessions {
+            if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
+                if let Err(e) = handle.send_packet(packet.clone()).await {
+                    errors.push((session_id, e));
+                }
+            }
+        }
+        
+        if !errors.is_empty() {
+            Err(TransportError::BroadcastFailed(errors))
+        } else {
+            Ok(())
+        }
+    }
+    
+    /// 关闭指定会话
+    pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
+        if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
+            handle.close().await?;
+            self.actor_manager.remove_actor(&session_id).await;
+            Ok(())
+        } else {
+            Err(TransportError::SessionNotFound)
+        }
+    }
+    
+    /// 获取所有活跃会话
+    pub async fn active_sessions(&self) -> Vec<SessionId> {
+        self.actor_manager.active_sessions().await
+    }
+    
+    /// 获取会话连接信息
+    pub async fn session_info(&self, session_id: SessionId) -> Result<ConnectionInfo, TransportError> {
+        if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
+            handle.connection_info().await
+        } else {
+            Err(TransportError::SessionNotFound)
+        }
+    }
+    
+    /// 获取传输统计信息
+    pub async fn stats(&self) -> Result<HashMap<SessionId, TransportStats>, TransportError> {
+        let sessions = self.actor_manager.active_sessions().await;
+        let mut stats = HashMap::new();
+        
+        for session_id in sessions {
+            if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
+                if let Ok(session_stats) = handle.stats().await {
+                    stats.insert(session_id, session_stats);
+                }
+            }
+        }
+        
+        Ok(stats)
+    }
+    
+    /// 获取事件流
+    pub fn events(&self) -> EventStream {
+        EventStream::new(self.actor_manager.global_events())
+    }
+    
+    /// 获取特定会话的事件流
+    pub fn session_events(&self, session_id: SessionId) -> EventStream {
+        EventStream::with_session_filter(self.actor_manager.global_events(), session_id)
+    }
+    
+    /// 生成新的会话ID
+    fn generate_session_id(&self) -> SessionId {
+        self.session_id_generator.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+/// 传输构建器
+/// 
+/// 用于创建配置好的传输实例
+pub struct TransportBuilder {
+    config: TransportConfig,
+}
+
+impl TransportBuilder {
+    /// 创建新的传输构建器
+    pub fn new() -> Self {
+        Self {
+            config: TransportConfig::default(),
+        }
+    }
+    
+    /// 设置配置
+    pub fn config(mut self, config: TransportConfig) -> Self {
+        self.config = config;
+        self
+    }
+    
+    /// 构建传输实例
+    pub fn build(self) -> Result<Transport, TransportError> {
+        self.config.validate()
+            .map_err(|e| TransportError::Configuration(format!("Invalid config: {:?}", e)))?;
+        
+        Ok(Transport::new(self.config))
+    }
+}
+
+impl Default for TransportBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 连接管理器
+/// 
+/// 提供连接的高级管理功能
+pub struct ConnectionManager {
+    transport: Transport,
+}
+
+impl ConnectionManager {
+    /// 创建新的连接管理器
+    pub fn new(transport: Transport) -> Self {
+        Self { transport }
+    }
+    
+    /// 创建TCP连接
+    pub async fn create_tcp_connection(
+        &self,
+        addr: std::net::SocketAddr,
+    ) -> Result<SessionId, TransportError> {
+        use super::adapters::tcp::{TcpAdapter, TcpClientBuilder};
+        use super::adapter::TcpConfig;
+        
+        let config = TcpConfig::default();
+        let adapter = TcpClientBuilder::new()
+            .target_address(addr)
+            .config(config)
+            .connect()
+            .await
+            .map_err(|e| TransportError::Connection(format!("TCP connection failed: {:?}", e)))?;
+        
+        self.transport.add_connection(adapter).await
+    }
+    
+    /// 创建WebSocket连接
+    pub async fn create_websocket_connection(
+        &self,
+        url: &str,
+    ) -> Result<SessionId, TransportError> {
+        use super::adapters::websocket::{WebSocketClientBuilder};
+        use super::adapter::WebSocketConfig;
+        
+        let config = WebSocketConfig::default();
+        let adapter = WebSocketClientBuilder::new()
+            .target_url(url)
+            .config(config)
+            .connect()
+            .await
+            .map_err(|e| TransportError::Connection(format!("WebSocket connection failed: {:?}", e)))?;
+        
+        self.transport.add_connection(adapter).await
+    }
+    
+    /// 创建QUIC连接
+    pub async fn create_quic_connection(
+        &self,
+        addr: std::net::SocketAddr,
+    ) -> Result<SessionId, TransportError> {
+        use super::adapters::quic::{QuicClientBuilder};
+        use super::adapter::QuicConfig;
+        
+        let config = QuicConfig::default();
+        let adapter = QuicClientBuilder::new()
+            .target_address(addr)
+            .config(config)
+            .connect()
+            .await
+            .map_err(|e| TransportError::Connection(format!("QUIC connection failed: {:?}", e)))?;
+        
+        self.transport.add_connection(adapter).await
+    }
+    
+    /// 获取内部传输实例的引用
+    pub fn transport(&self) -> &Transport {
+        &self.transport
+    }
+}
+
+/// 服务器管理器
+/// 
+/// 管理多协议服务器
+pub struct ServerManager {
+    transport: Transport,
+    servers: Arc<tokio::sync::Mutex<HashMap<String, ServerHandle>>>,
+}
+
+/// 服务器句柄
+pub enum ServerHandle {
+    Tcp(super::adapters::tcp::TcpServer),
+    WebSocket(super::adapters::websocket::WebSocketServer),
+    Quic(super::adapters::quic::QuicServer),
+}
+
+impl ServerManager {
+    /// 创建新的服务器管理器
+    pub fn new(transport: Transport) -> Self {
+        Self {
+            transport,
+            servers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        }
+    }
+    
+    /// 启动TCP服务器
+    pub async fn start_tcp_server(
+        &self,
+        name: String,
+        addr: std::net::SocketAddr,
+    ) -> Result<(), TransportError> {
+        use super::adapters::tcp::TcpServerBuilder;
+        use super::adapter::TcpConfig;
+        
+        let config = TcpConfig::default();
+        let mut server = TcpServerBuilder::new()
+            .bind_address(addr)
+            .config(config.clone())
+            .build()
+            .await
+            .map_err(|e| TransportError::Configuration(format!("Failed to start TCP server: {:?}", e)))?;
+        
+        // 启动接受循环
+        let transport = self.transport.clone();
+        let servers = self.servers.clone();
+        let name_for_task = name.clone();
+        
+        // 先存储一个占位符，等spawn完成后再更新
+        {
+            let mut servers = self.servers.lock().await;
+            servers.insert(name.clone(), ServerHandle::Tcp(server));
+        }
+        
+        // 重新创建server用于spawn（临时解决方案）
+        let server_for_spawn = TcpServerBuilder::new()
+            .bind_address(addr)
+            .config(config)
+            .build()
+            .await
+            .map_err(|e| TransportError::Configuration(format!("Failed to start TCP server: {:?}", e)))?;
+        
+        tokio::spawn(async move {
+            let mut server = server_for_spawn;
+            loop {
+                match server.accept().await {
+                    Ok(adapter) => {
+                        if let Err(e) = transport.add_connection(adapter).await {
+                            tracing::error!("Failed to add TCP connection: {:?}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("TCP server accept error: {:?}", e);
+                        break;
+                    }
+                }
+            }
+            
+            // 从服务器列表中移除
+            servers.lock().await.remove(&name_for_task);
+        });
+        
+        Ok(())
+    }
+    
+    /// 启动WebSocket服务器
+    pub async fn start_websocket_server(
+        &self,
+        name: String,
+        addr: std::net::SocketAddr,
+    ) -> Result<(), TransportError> {
+        use super::adapters::websocket::WebSocketServerBuilder;
+        use super::adapter::WebSocketConfig;
+        
+        let config = WebSocketConfig::default();
+        let mut server = WebSocketServerBuilder::new()
+            .bind_address(addr)
+            .config(config.clone())
+            .build()
+            .await
+            .map_err(|e| TransportError::Configuration(format!("Failed to start WebSocket server: {:?}", e)))?;
+        
+        // 启动接受循环
+        let transport = self.transport.clone();
+        let servers = self.servers.clone();
+        let name_for_task = name.clone();
+        
+        // 先存储服务器句柄
+        {
+            let mut servers = self.servers.lock().await;
+            servers.insert(name.clone(), ServerHandle::WebSocket(server));
+        }
+        
+        // 重新创建server用于spawn
+        let server_for_spawn = WebSocketServerBuilder::new()
+            .bind_address(addr)
+            .config(config)
+            .build()
+            .await
+            .map_err(|e| TransportError::Configuration(format!("Failed to start WebSocket server: {:?}", e)))?;
+        
+        tokio::spawn(async move {
+            let mut server = server_for_spawn;
+            loop {
+                match server.accept().await {
+                    Ok(adapter) => {
+                        if let Err(e) = transport.add_connection(adapter).await {
+                            tracing::error!("Failed to add WebSocket connection: {:?}", e);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("WebSocket server accept error: {:?}", e);
+                        break;
+                    }
+                }
+            }
+            
+            // 从服务器列表中移除
+            servers.lock().await.remove(&name_for_task);
+        });
+        
+        Ok(())
+    }
+    
+    /// 获取内部传输实例的引用
+    pub fn transport(&self) -> &Transport {
+        &self.transport
+    }
+}
+
+// 为Transport实现Clone，使其可以在多个地方使用
+impl Clone for Transport {
+    fn clone(&self) -> Self {
+        Self {
+            actor_manager: self.actor_manager.clone(),
+            event_stream: EventStream::new(self.actor_manager.global_events()),
+            session_id_generator: self.session_id_generator.clone(),
+            config: self.config.clone(),
+        }
+    }
+} 
