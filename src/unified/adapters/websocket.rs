@@ -91,30 +91,24 @@ where
     
     /// 序列化数据包为WebSocket消息
     fn serialize_packet(&self, packet: &UnifiedPacket) -> Result<Message, WebSocketError> {
-        // 创建一个简单的格式：[类型:1字节][负载]
-        let mut data = Vec::with_capacity(packet.payload.len() + 1);
-        data.push(packet.packet_type.into());
-        data.extend_from_slice(&packet.payload);
-        
-        Ok(Message::Binary(data))
+        // 使用统一数据包的标准格式：[类型:1字节][消息ID:4字节][负载长度:4字节][负载]
+        let serialized = packet.to_bytes();
+        Ok(Message::Binary(serialized.to_vec()))
     }
     
     /// 反序列化WebSocket消息为数据包
     fn deserialize_message(&self, message: Message) -> Result<Option<UnifiedPacket>, WebSocketError> {
         match message {
             Message::Binary(data) => {
-                if data.is_empty() {
-                    return Err(WebSocketError::InvalidMessageType);
+                if data.len() < 9 {
+                    return Err(WebSocketError::Serialization("数据太短".to_string()));
                 }
                 
-                let packet_type = data[0];
-                let payload = data[1..].to_vec();
-                
-                Ok(Some(UnifiedPacket {
-                    packet_type: PacketType::from(packet_type),
-                    message_id: 0,
-                    payload: BytesMut::from(&payload[..]),
-                }))
+                // 使用统一数据包的反序列化方法
+                match UnifiedPacket::from_bytes(&data) {
+                    Ok(packet) => Ok(Some(packet)),
+                    Err(e) => Err(WebSocketError::Serialization(format!("数据包解析失败: {}", e))),
+                }
             }
             Message::Text(text) => {
                 // 将文本消息转换为二进制数据包（类型为0）

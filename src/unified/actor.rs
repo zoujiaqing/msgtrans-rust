@@ -125,8 +125,17 @@ impl<A: ProtocolAdapter> GenericActor<A> {
                 
                 // 接收数据
                 result = self.adapter.receive() => {
+                    tracing::debug!("🔍 Actor {} 调用adapter.receive()结果: {:?}", self.session_id, 
+                                   match &result { 
+                                       Ok(Some(_)) => "收到数据包", 
+                                       Ok(None) => "连接关闭", 
+                                       Err(_) => "错误" 
+                                   });
+                    
                     match result {
                         Ok(Some(packet)) => {
+                            tracing::info!("🔍 Actor {} 成功接收数据包: 类型{:?}, ID{}", 
+                                          self.session_id, packet.packet_type, packet.message_id);
                             self.handle_received_packet(packet).await;
                         }
                         Ok(None) => {
@@ -247,10 +256,21 @@ impl<A: ProtocolAdapter> GenericActor<A> {
         let packet_size = packet.payload.len();
         self.stats.record_packet_received(packet_size);
         
-        let _ = self.event_tx.send(TransportEvent::PacketReceived {
+        tracing::info!("🔍 Actor {} 发送PacketReceived事件到全局事件流", self.session_id);
+        
+        let event = TransportEvent::PacketReceived {
             session_id: self.session_id,
             packet,
-        });
+        };
+        
+        match self.event_tx.send(event) {
+            Ok(receiver_count) => {
+                tracing::info!("🔍 PacketReceived事件发送成功，有{}个接收者", receiver_count);
+            }
+            Err(e) => {
+                tracing::error!("🔍 PacketReceived事件发送失败: {:?}", e);
+            }
+        }
     }
     
     /// 处理适配器错误
@@ -425,7 +445,7 @@ pub struct ActorManager {
     /// 活跃的Actor句柄
     actors: Arc<Mutex<HashMap<SessionId, ActorHandle>>>,
     /// 全局事件发送器
-    global_event_tx: broadcast::Sender<TransportEvent>,
+    pub(crate) global_event_tx: broadcast::Sender<TransportEvent>,
 }
 
 impl ActorManager {

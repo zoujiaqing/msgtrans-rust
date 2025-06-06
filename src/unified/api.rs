@@ -62,23 +62,26 @@ impl Transport {
     ) -> Result<SessionId, TransportError> {
         let session_id = self.generate_session_id();
         
-        // 创建Actor的命令和事件通道
+        // 创建Actor的命令通道
         let (command_tx, command_rx) = mpsc::channel(1024);
-        let (event_tx, event_rx) = broadcast::channel(1024);
+        
+        // 使用全局事件发送器
+        let global_event_tx = self.actor_manager.global_event_tx.clone();
+        let global_event_rx = self.actor_manager.global_events();
         
         // 创建Actor
         let actor = GenericActor::new(
             adapter,
             session_id,
             command_rx,
-            event_tx.clone(),
+            global_event_tx,
             A::Config::default_config(),
         );
         
         // 创建Actor句柄
         let handle = ActorHandle::new(
             command_tx,
-            event_rx,
+            global_event_rx,
             session_id,
             Arc::new(tokio::sync::Mutex::new(0)),
         );
@@ -248,25 +251,40 @@ impl Transport {
         let session_id = self.generate_session_id();
         let transport = self.clone();
         
+        tracing::debug!("启动协议服务器接受循环 (服务器会话ID: {})", session_id);
+        
         // 启动服务器接受循环
         tokio::spawn(async move {
+            tracing::debug!("协议服务器接受循环已启动，等待客户端连接...");
+            
             loop {
+                tracing::debug!("等待新的客户端连接...");
+                
                 match server.accept().await {
                     Ok(mut connection) => {
                         let conn_session_id = transport.generate_session_id();
+                        tracing::info!("协议服务器接受到新连接 (连接会话ID: {})", conn_session_id);
+                        
                         connection.set_session_id(conn_session_id);
                         
                         let adapter = ProtocolConnectionAdapter::new(connection);
-                        if let Err(e) = transport.add_connection(adapter).await {
-                            tracing::error!("Failed to add protocol connection: {:?}", e);
+                        match transport.add_connection(adapter).await {
+                            Ok(_) => {
+                                tracing::info!("成功添加协议连接到传输层 (会话ID: {})", conn_session_id);
+                            }
+                            Err(e) => {
+                                tracing::error!("添加协议连接失败 (会话ID: {}): {:?}", conn_session_id, e);
+                            }
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Protocol server accept error: {:?}", e);
+                        tracing::error!("协议服务器接受连接时出错: {:?}", e);
                         break;
                     }
                 }
             }
+            
+            tracing::warn!("协议服务器接受循环已退出");
         });
         
         Ok(session_id)

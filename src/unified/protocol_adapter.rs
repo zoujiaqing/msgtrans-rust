@@ -49,17 +49,24 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
     }
     
     async fn receive(&mut self) -> Result<Option<UnifiedPacket>, Self::Error> {
+        tracing::debug!("🔍 ProtocolConnectionAdapter::receive - 开始接收数据...");
+        
         let result = self.connection.receive().await;
         
         match &result {
             Ok(Some(packet)) => {
                 let packet_size = packet.payload.len();
                 self.stats.record_packet_received(packet_size);
+                tracing::info!("🔍 ProtocolConnectionAdapter::receive - 成功接收数据包: 类型{:?}, ID{}, {}bytes", 
+                              packet.packet_type, packet.message_id, packet_size);
             }
-            Err(_) => {
+            Ok(None) => {
+                tracing::debug!("🔍 ProtocolConnectionAdapter::receive - 连接关闭");
+            }
+            Err(e) => {
                 self.stats.record_error();
+                tracing::error!("🔍 ProtocolConnectionAdapter::receive - 接收错误: {:?}", e);
             }
-            _ => {}
         }
         
         result

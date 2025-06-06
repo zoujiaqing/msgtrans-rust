@@ -78,7 +78,14 @@ impl TcpServerWrapper {
 #[async_trait]
 impl Server for TcpServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
-        let adapter = self.inner.accept().await.map_err(|e| TransportError::Connection(format!("TCP accept error: {:?}", e)))?;
+        tracing::debug!("TcpServerWrapper::accept - 等待新的TCP连接...");
+        
+        let adapter = self.inner.accept().await.map_err(|e| {
+            tracing::error!("TcpServerWrapper::accept - TCP accept 错误: {:?}", e);
+            TransportError::Connection(format!("TCP accept error: {:?}", e))
+        })?;
+        
+        tracing::info!("TcpServerWrapper::accept - 成功接受新的TCP连接");
         Ok(Box::new(TcpConnection::new(adapter)))
     }
     
@@ -435,7 +442,7 @@ impl Server for QuicServerWrapper {
     }
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
-        Ok(self.inner.local_addr())
+        self.inner.local_addr().map_err(|e| TransportError::Connection(format!("Failed to get local addr: {:?}", e)))
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {

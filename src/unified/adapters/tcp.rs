@@ -95,38 +95,66 @@ impl TcpAdapter {
     
     /// 读取完整的数据包
     async fn read_packet(&mut self) -> Result<Option<UnifiedPacket>, TcpError> {
+        tracing::debug!("TCP 适配器开始读取数据包 (session {})", self.session_id);
+        
         // 首先读取包头（9字节）
         let mut header_buf = [0u8; 9];
         match self.stream.read_exact(&mut header_buf).await {
-            Ok(_) => {},
+            Ok(_) => {
+                tracing::debug!("TCP 成功读取包头: {:?}", header_buf);
+            },
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                tracing::debug!("TCP 连接被对端关闭 (session {})", self.session_id);
                 self.is_connected = false;
                 return Ok(None);
             }
-            Err(e) => return Err(TcpError::Io(e)),
+            Err(e) => {
+                tracing::error!("TCP 读取包头失败 (session {}): {:?}", self.session_id, e);
+                return Err(TcpError::Io(e));
+            }
         }
         
         // 解析包头获取负载长度
         let payload_len = u32::from_be_bytes([header_buf[5], header_buf[6], header_buf[7], header_buf[8]]) as usize;
+        tracing::debug!("TCP 解析负载长度: {} bytes (session {})", payload_len, self.session_id);
         
         // 防止恶意的大数据包
         if payload_len > self.config.read_buffer_size {
+            tracing::error!("TCP 负载过大: {} > {} (session {})", payload_len, self.config.read_buffer_size, self.session_id);
             return Err(TcpError::BufferOverflow);
         }
         
         // 读取负载
         let mut payload = vec![0u8; payload_len];
-        self.stream.read_exact(&mut payload).await?;
+        match self.stream.read_exact(&mut payload).await {
+            Ok(_) => {
+                tracing::debug!("TCP 成功读取负载: {} bytes (session {})", payload_len, self.session_id);
+            }
+            Err(e) => {
+                tracing::error!("TCP 读取负载失败 (session {}): {:?}", self.session_id, e);
+                return Err(TcpError::Io(e));
+            }
+        }
         
         // 重构完整的数据包
         let mut packet_data = Vec::with_capacity(9 + payload_len);
         packet_data.extend_from_slice(&header_buf);
         packet_data.extend_from_slice(&payload);
         
+        tracing::debug!("TCP 重构完整数据包: {} bytes (session {})", packet_data.len(), self.session_id);
+        
         // 解析数据包
         match UnifiedPacket::from_bytes(&packet_data) {
-            Ok(packet) => Ok(Some(packet)),
-            Err(e) => Err(TcpError::Packet(e)),
+            Ok(packet) => {
+                tracing::debug!("TCP 数据包解析成功: 类型{:?}, ID{} (session {})", 
+                              packet.packet_type, packet.message_id, self.session_id);
+                Ok(Some(packet))
+            },
+            Err(e) => {
+                tracing::error!("TCP 数据包解析失败 (session {}): {:?}", self.session_id, e);
+                tracing::error!("原始数据: {:?}", packet_data);
+                Err(TcpError::Packet(e))
+            }
         }
     }
 }
