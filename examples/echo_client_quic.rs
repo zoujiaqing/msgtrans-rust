@@ -3,18 +3,18 @@
 /// 这是一个最小化的QUIC客户端实现，用于测试msgtrans基础功能
 /// 连接到echo服务器，发送消息并等待回显
 
-use std::time::Duration;
 use std::sync::Arc;
-use tokio::time::sleep;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::sleep;
 use futures::StreamExt;
 
 use msgtrans::{
-    Transport, TransportBuilder,
+    Transport, Builder,
     packet::Packet,
     error::TransportError,
-    TransportConfig,
-    event::TransportEvent,
+    Config,
+    Event,
 };
 
 /// Echo客户端
@@ -33,8 +33,8 @@ impl EchoClient {
         println!("======================================");
         
         // 创建传输层
-        let config = TransportConfig::default();
-        let transport = TransportBuilder::new()
+        let config = Config::default();
+        let transport = Builder::new()
             .config(config)
             .build()
             .await?;
@@ -168,11 +168,11 @@ impl EchoClient {
     
     /// 处理传输事件
     async fn handle_event(
-        event: TransportEvent,
+        event: Event,
         messages_received: &Arc<Mutex<u64>>
     ) {
         match event {
-            TransportEvent::PacketReceived { session_id, packet } => {
+            Event::PacketReceived { session_id, packet } => {
                 // 更新接收计数器
                 {
                     let mut count = messages_received.lock().await;
@@ -191,16 +191,16 @@ impl EchoClient {
                 }
             }
             
-            TransportEvent::ConnectionEstablished { session_id, info } => {
+            Event::ConnectionEstablished { session_id, info } => {
                 println!("🔗 连接建立: 会话{}, 协议{:?}, 地址{:?}", 
                          session_id, info.protocol, info.peer_addr);
             }
             
-            TransportEvent::ConnectionClosed { session_id, reason } => {
+            Event::ConnectionClosed { session_id, reason } => {
                 println!("❌ 连接关闭: 会话{}, 原因: {:?}", session_id, reason);
             }
             
-            TransportEvent::TransportError { session_id, error } => {
+            Event::TransportError { session_id, error } => {
                 println!("⚠️ 传输错误: 会话{:?}, 错误: {:?}", session_id, error);
             }
             

@@ -358,6 +358,7 @@ impl ConnectionManager {
     }
     
     /// 创建WebSocket连接
+    #[cfg(feature = "websocket")]
     pub async fn create_websocket_connection(
         &self,
         url: &str,
@@ -377,6 +378,7 @@ impl ConnectionManager {
     }
     
     /// 创建QUIC连接
+    #[cfg(feature = "quic")]
     pub async fn create_quic_connection(
         &self,
         addr: std::net::SocketAddr,
@@ -412,7 +414,9 @@ pub struct ServerManager {
 /// 服务器句柄
 pub enum ServerHandle {
     Tcp(crate::adapters::tcp::TcpServer),
+    #[cfg(feature = "websocket")]
     WebSocket(crate::adapters::websocket::WebSocketServer),
+    #[cfg(feature = "quic")]
     Quic(crate::adapters::quic::QuicServer),
 }
 
@@ -485,6 +489,7 @@ impl ServerManager {
     }
     
     /// 启动WebSocket服务器
+    #[cfg(feature = "websocket")]
     pub async fn start_websocket_server(
         &self,
         name: String,

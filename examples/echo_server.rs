@@ -7,11 +7,11 @@ use futures::StreamExt;
 use tokio::signal;
 
 use msgtrans::{
-    Transport, TransportBuilder,
+    Transport, Builder,
     Packet,
     TransportError,
-    TransportConfig,
-    TransportEvent,
+    Config,
+    Event,
 };
 
 /// 多协议Echo服务器
@@ -30,8 +30,8 @@ impl MultiProtocolEchoServer {
         println!("====================================");
         
         // 创建传输层
-        let config = TransportConfig::default();
-        let transport = TransportBuilder::new()
+        let config = Config::default();
+        let transport = Builder::new()
             .config(config)
             .build()
             .await?;
@@ -144,9 +144,9 @@ impl MultiProtocolEchoServer {
     }
     
     /// 处理传输事件
-    async fn handle_event(&mut self, event: TransportEvent) -> Result<(), TransportError> {
+    async fn handle_event(&mut self, event: Event) -> Result<(), TransportError> {
         match event {
-            TransportEvent::PacketReceived { session_id, packet } => {
+            Event::PacketReceived { session_id, packet } => {
                 self.message_count += 1;
                 
                 println!("📨 收到消息 #{} (会话{}): 类型{:?}, ID{}", 
@@ -188,16 +188,16 @@ impl MultiProtocolEchoServer {
                 println!(); // 空行分隔
             }
             
-            TransportEvent::ConnectionEstablished { session_id, info } => {
+            Event::ConnectionEstablished { session_id, info } => {
                 println!("🔗 新客户端连接: 会话{}, 协议{:?}, 地址{:?}", 
                          session_id, info.protocol, info.peer_addr);
             }
             
-            TransportEvent::ConnectionClosed { session_id, reason } => {
+            Event::ConnectionClosed { session_id, reason } => {
                 println!("❌ 客户端断开: 会话{}, 原因: {:?}", session_id, reason);
             }
             
-            TransportEvent::TransportError { session_id, error } => {
+            Event::TransportError { session_id, error } => {
                 println!("⚠️ 传输错误: 会话{:?}, 错误: {:?}", session_id, error);
             }
             

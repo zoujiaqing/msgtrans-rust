@@ -2,17 +2,21 @@
 /// 
 /// 为现有的协议适配器提供工厂接口实现
 
-use async_trait::async_trait;
-use std::collections::HashMap;
 use std::any::Any;
-use crate::{
-    protocol::{ProtocolFactory, Connection, Server, TcpConfig, WebSocketConfig, QuicConfig},
-    error::TransportError,
-    packet::Packet,
-    command::ConnectionInfo,
-    SessionId,
-};
-use super::{tcp, websocket, quic};
+use std::collections::HashMap;
+use async_trait::async_trait;
+use crate::protocol::{Connection, Server, ProtocolFactory, TcpConfig, WebSocketConfig};
+#[cfg(feature = "quic")]
+use crate::protocol::QuicConfig;
+use crate::command::ConnectionInfo;
+use crate::packet::Packet;
+use crate::error::TransportError;
+use crate::SessionId;
+use super::tcp;
+#[cfg(feature = "websocket")]
+use super::websocket;
+#[cfg(feature = "quic")]
+use super::quic;
 
 /// TCP适配器的Connection包装器
 pub struct TcpConnection {
@@ -201,11 +205,15 @@ impl ProtocolFactory for TcpFactory {
     }
 }
 
+#[cfg(feature = "websocket")]
 /// WebSocket连接包装器
+#[cfg(feature = "websocket")]
 pub struct WebSocketConnection<S> {
     inner: websocket::WebSocketAdapter<S>,
 }
 
+#[cfg(feature = "websocket")]
+#[cfg(feature = "websocket")]
 impl<S> WebSocketConnection<S> {
     pub fn new(adapter: websocket::WebSocketAdapter<S>) -> Self {
         Self { inner: adapter }
@@ -213,6 +221,7 @@ impl<S> WebSocketConnection<S> {
 }
 
 #[async_trait]
+#[cfg(feature = "websocket")]
 impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static> Connection for WebSocketConnection<S> {
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
@@ -373,17 +382,20 @@ impl ProtocolFactory for WebSocketFactory {
     }
 }
 
+#[cfg(feature = "quic")]
 /// QUIC连接包装器
 pub struct QuicConnection {
     inner: quic::QuicAdapter,
 }
 
+#[cfg(feature = "quic")]
 impl QuicConnection {
     pub fn new(adapter: quic::QuicAdapter) -> Self {
         Self { inner: adapter }
     }
 }
 
+#[cfg(feature = "quic")]
 #[async_trait]
 impl Connection for QuicConnection {
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
@@ -422,17 +434,20 @@ impl Connection for QuicConnection {
     }
 }
 
+#[cfg(feature = "quic")]
 /// QUIC服务器包装器
 pub struct QuicServerWrapper {
     inner: quic::QuicServer,
 }
 
+#[cfg(feature = "quic")]
 impl QuicServerWrapper {
     pub fn new(server: quic::QuicServer) -> Self {
         Self { inner: server }
     }
 }
 
+#[cfg(feature = "quic")]
 #[async_trait]
 impl Server for QuicServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
@@ -449,15 +464,18 @@ impl Server for QuicServerWrapper {
     }
 }
 
+#[cfg(feature = "quic")]
 /// QUIC协议工厂
 pub struct QuicFactory;
 
+#[cfg(feature = "quic")]
 impl QuicFactory {
     pub fn new() -> Self {
         Self
     }
 }
 
+#[cfg(feature = "quic")]
 #[async_trait]
 impl ProtocolFactory for QuicFactory {
     fn protocol_name(&self) -> &'static str {
@@ -543,7 +561,11 @@ pub async fn create_standard_registry() -> Result<crate::protocol::ProtocolRegis
     
     // 注册标准协议
     registry.register(TcpFactory::new()).await?;
+    
+    #[cfg(feature = "websocket")]
     registry.register(WebSocketFactory::new()).await?;
+    
+    #[cfg(feature = "quic")]
     registry.register(QuicFactory::new()).await?;
     
     Ok(registry)
