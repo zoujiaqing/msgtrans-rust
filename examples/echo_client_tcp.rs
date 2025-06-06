@@ -11,7 +11,7 @@ use futures::StreamExt;
 
 use msgtrans::{
     Transport, TransportBuilder,
-    packet::UnifiedPacket,
+    packet::Packet,
     error::TransportError,
     TransportConfig,
     event::TransportEvent,
@@ -130,7 +130,7 @@ impl EchoClient {
         ];
         
         for (i, message) in test_messages.iter().enumerate() {
-            let packet = UnifiedPacket::data((i + 1) as u32, message.as_bytes());
+            let packet = Packet::data((i + 1) as u32, message.as_bytes());
             
             println!("📤 发送消息 #{}: \"{}\"", i + 1, message);
             
@@ -151,7 +151,7 @@ impl EchoClient {
         // 发送二进制数据测试
         println!("📤 发送二进制数据测试");
         let binary_data = vec![0x48, 0x65, 0x6C, 0x6C, 0x6F, 0x00, 0xFF, 0x42];
-        let binary_packet = UnifiedPacket::data(99, &binary_data[..]);
+        let binary_packet = Packet::data(99, &binary_data[..]);
         
         match self.transport.send_to_session(session_id, binary_packet).await {
             Ok(()) => {

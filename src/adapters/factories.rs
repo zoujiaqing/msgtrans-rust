@@ -8,7 +8,7 @@ use std::any::Any;
 use crate::{
     protocol::{ProtocolFactory, Connection, Server, TcpConfig, WebSocketConfig, QuicConfig},
     error::TransportError,
-    packet::UnifiedPacket,
+    packet::Packet,
     command::ConnectionInfo,
     SessionId,
 };
@@ -27,12 +27,12 @@ impl TcpConnection {
 
 #[async_trait]
 impl Connection for TcpConnection {
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), TransportError> {
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, TransportError> {
+    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.inner.receive().await.map_err(Into::into)
     }
@@ -214,12 +214,12 @@ impl<S> WebSocketConnection<S> {
 
 #[async_trait]
 impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static> Connection for WebSocketConnection<S> {
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), TransportError> {
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, TransportError> {
+    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.inner.receive().await.map_err(Into::into)
     }
@@ -386,12 +386,12 @@ impl QuicConnection {
 
 #[async_trait]
 impl Connection for QuicConnection {
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), TransportError> {
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, TransportError> {
+    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.inner.receive().await.map_err(Into::into)
     }

@@ -1,5 +1,5 @@
 use tokio::sync::oneshot;
-use crate::{SessionId, error::TransportError, packet::UnifiedPacket};
+use crate::{SessionId, error::TransportError, packet::Packet};
 
 /// 传输层命令的统一抽象
 #[derive(Debug)]
@@ -7,7 +7,7 @@ pub enum TransportCommand {
     /// 发送数据包
     Send {
         session_id: SessionId,
-        packet: UnifiedPacket,
+        packet: Packet,
         response_tx: oneshot::Sender<Result<(), TransportError>>,
     },
     
@@ -298,7 +298,7 @@ pub struct CommandBuilder;
 
 impl CommandBuilder {
     /// 创建发送命令
-    pub fn send(session_id: SessionId, packet: UnifiedPacket) -> (TransportCommand, oneshot::Receiver<Result<(), TransportError>>) {
+    pub fn send(session_id: SessionId, packet: Packet) -> (TransportCommand, oneshot::Receiver<Result<(), TransportError>>) {
         let (response_tx, response_rx) = oneshot::channel();
         let command = TransportCommand::Send {
             session_id,
@@ -362,7 +362,7 @@ impl CommandExecutor {
     pub async fn send_and_wait(
         command_tx: &tokio::sync::mpsc::Sender<TransportCommand>,
         session_id: SessionId,
-        packet: UnifiedPacket,
+        packet: Packet,
     ) -> Result<(), TransportError> {
         let (command, response_rx) = CommandBuilder::send(session_id, packet);
         

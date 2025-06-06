@@ -7,7 +7,7 @@ use crate::{
     command::{TransportCommand, TransportStats, ConnectionInfo},
     event::TransportEvent,
     error::TransportError,
-    packet::UnifiedPacket,
+    packet::Packet,
 };
 
 /// Actor状态枚举
@@ -251,7 +251,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
     }
     
     /// 处理接收到的数据包
-    async fn handle_received_packet(&mut self, packet: UnifiedPacket) {
+    async fn handle_received_packet(&mut self, packet: Packet) {
         let packet_size = packet.payload.len();
         self.stats.record_packet_received(packet_size);
         
@@ -358,7 +358,7 @@ impl ActorHandle {
     }
     
     /// 发送数据包
-    pub async fn send_packet(&self, packet: UnifiedPacket) -> Result<(), TransportError> {
+    pub async fn send_packet(&self, packet: Packet) -> Result<(), TransportError> {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         
         self.command_tx.send(TransportCommand::Send {

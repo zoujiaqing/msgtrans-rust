@@ -25,7 +25,7 @@ pub type SessionId = u64;
 pub type PacketId = u32;
 
 // 重新导出核心类型，用户只需要导入这些
-pub use packet::{UnifiedPacket, PacketType, PacketError};
+pub use packet::{Packet, PacketType, PacketError};
 pub use transport::{Transport, TransportBuilder, ConnectionManager, ServerManager};
 pub use event::TransportEvent;
 pub use stream::EventStream;
@@ -35,4 +35,3 @@ pub use command::{ConnectionInfo, TransportStats};
 
 // 便捷的类型别名
 pub type Result<T> = std::result::Result<T, TransportError>;
-pub type Packet = UnifiedPacket;

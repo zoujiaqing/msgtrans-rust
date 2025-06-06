@@ -47,7 +47,7 @@ impl From<PacketType> for u8 {
 /// 
 /// 简化的数据包结构，专为统一架构设计
 #[derive(Debug, Clone, PartialEq)]
-pub struct UnifiedPacket {
+pub struct Packet {
     /// 数据包类型
     pub packet_type: PacketType,
     /// 消息ID（用于请求-响应匹配）
@@ -56,7 +56,7 @@ pub struct UnifiedPacket {
     pub payload: BytesMut,
 }
 
-impl UnifiedPacket {
+impl Packet {
     /// 创建新的数据包
     pub fn new(packet_type: PacketType, message_id: u32, payload: impl Into<BytesMut>) -> Self {
         Self {
@@ -187,9 +187,9 @@ mod tests {
     
     #[test]
     fn test_packet_serialization() {
-        let packet = UnifiedPacket::data(123, "Hello, World!");
+        let packet = Packet::data(123, "Hello, World!");
         let bytes = packet.to_bytes();
-        let decoded = UnifiedPacket::from_bytes(&bytes).unwrap();
+        let decoded = Packet::from_bytes(&bytes).unwrap();
         
         assert_eq!(packet, decoded);
         assert_eq!(decoded.payload_as_string().unwrap(), "Hello, World!");
@@ -197,9 +197,9 @@ mod tests {
     
     #[test]
     fn test_packet_types() {
-        assert!(UnifiedPacket::heartbeat().is_heartbeat());
-        assert!(UnifiedPacket::data(1, "test").is_data());
-        assert!(UnifiedPacket::control(1, "test").is_control());
-        assert!(UnifiedPacket::error(1, "error").is_error());
+        assert!(Packet::heartbeat().is_heartbeat());
+        assert!(Packet::data(1, "test").is_data());
+        assert!(Packet::control(1, "test").is_control());
+        assert!(Packet::error(1, "error").is_error());
     }
 } 

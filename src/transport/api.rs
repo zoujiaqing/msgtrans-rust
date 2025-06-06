@@ -13,7 +13,7 @@ use crate::{
     actor::{GenericActor, ActorHandle, ActorManager},
     protocol::{ProtocolAdapter, ProtocolConfig, ProtocolRegistry, Connection, ProtocolConnectionAdapter},
     stream::EventStream,
-    packet::UnifiedPacket,
+    packet::Packet,
     adapters::create_standard_registry,
 };
 use super::config::TransportConfig;
@@ -106,7 +106,7 @@ impl Transport {
     pub async fn send_to_session(
         &self,
         session_id: SessionId,
-        packet: UnifiedPacket,
+        packet: Packet,
     ) -> Result<(), TransportError> {
         if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
             handle.send_packet(packet).await
@@ -116,7 +116,7 @@ impl Transport {
     }
     
     /// 广播数据包到所有会话
-    pub async fn broadcast(&self, packet: UnifiedPacket) -> Result<(), TransportError> {
+    pub async fn broadcast(&self, packet: Packet) -> Result<(), TransportError> {
         let sessions = self.actor_manager.active_sessions().await;
         let mut errors = Vec::new();
         

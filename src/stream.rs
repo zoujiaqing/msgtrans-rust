@@ -6,7 +6,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::{
     SessionId,
     event::TransportEvent,
-    packet::UnifiedPacket,
+    packet::Packet,
 };
 
 /// 统一事件流
@@ -189,7 +189,7 @@ impl PacketStream {
     }
     
     /// 获取下一个数据包
-    pub async fn next_packet(&mut self) -> Option<(SessionId, UnifiedPacket)> {
+    pub async fn next_packet(&mut self) -> Option<(SessionId, Packet)> {
         while let Some(event) = self.event_stream.next().await {
             if let TransportEvent::PacketReceived { session_id, packet } = event {
                 return Some((session_id, packet));
@@ -200,7 +200,7 @@ impl PacketStream {
 }
 
 impl Stream for PacketStream {
-    type Item = (SessionId, UnifiedPacket);
+    type Item = (SessionId, Packet);
     
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
@@ -352,7 +352,7 @@ impl StreamCombinator {
     /// 将事件流转换为数据包流
     pub fn events_to_packets(
         event_stream: EventStream
-    ) -> impl Stream<Item = (SessionId, UnifiedPacket)> {
+    ) -> impl Stream<Item = (SessionId, Packet)> {
         event_stream.filter_map(|event| async move {
             match event {
                 TransportEvent::PacketReceived { session_id, packet } => {

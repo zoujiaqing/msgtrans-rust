@@ -2,7 +2,7 @@
 /// 
 /// 展示msgtrans统一数据包系统的基本序列化和反序列化功能
 
-use msgtrans::UnifiedPacket;
+use msgtrans::Packet;
 
 fn main() {
     println!("🚀 msgtrans 数据包封装解包验证");
@@ -13,12 +13,12 @@ fn main() {
     let extend_data = "Extension data 扩展数据";
     
     let packets = vec![
-        ("心跳包", UnifiedPacket::heartbeat()),
-        ("数据包", UnifiedPacket::data(101, test_message)),
-        ("控制包", UnifiedPacket::control(102, extend_data)),
-        ("回显包", UnifiedPacket::echo(103, "Echo test")),
-        ("错误包", UnifiedPacket::error(104, "Test error message")),
-        ("二进制数据", UnifiedPacket::data(105, &[0x00u8, 0x01, 0x02, 0x03, 0xFF, 0xFE][..])),
+        ("心跳包", Packet::heartbeat()),
+        ("数据包", Packet::data(101, test_message)),
+        ("控制包", Packet::control(102, extend_data)),
+        ("回显包", Packet::echo(103, "Echo test")),
+        ("错误包", Packet::error(104, "Test error message")),
+        ("二进制数据", Packet::data(105, &[0x00u8, 0x01, 0x02, 0x03, 0xFF, 0xFE][..])),
     ];
 
     println!("\n📦 创建的数据包:");
@@ -43,7 +43,7 @@ fn main() {
         println!("  📤 {} 序列化: {} bytes", name, serialized.len());
         
         // 反序列化
-        match UnifiedPacket::from_bytes(&serialized) {
+        match Packet::from_bytes(&serialized) {
             Ok(deserialized_packet) => {
                 // 验证数据完整性
                 if *original_packet == deserialized_packet {
@@ -67,7 +67,7 @@ fn main() {
 
     // 3. 详细验证一个数据包
     println!("\n🔍 详细验证示例:");
-    let test_packet = UnifiedPacket::data(999, test_message);
+    let test_packet = Packet::data(999, test_message);
     
     println!("  原始数据包:");
     println!("    类型: {:?}", test_packet.packet_type);
@@ -84,7 +84,7 @@ fn main() {
         println!("             ... (显示前20字节)");
     }
 
-    match UnifiedPacket::from_bytes(&serialized_bytes) {
+    match Packet::from_bytes(&serialized_bytes) {
         Ok(recovered_packet) => {
             println!("  反序列化:");
             println!("    类型: {:?}", recovered_packet.packet_type);

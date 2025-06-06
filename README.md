@@ -39,7 +39,7 @@ futures = "0.3"
 ```rust
 use msgtrans::{
     ServerManager, TransportBuilder, TransportEvent, 
-    UnifiedPacket, Result
+    Packet, Result
 };
 use futures::StreamExt;
 
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
         match event {
             TransportEvent::PacketReceived { session_id, packet } => {
                 // 回显消息
-                let echo = UnifiedPacket::echo(packet.message_id, &packet.payload);
+                let echo = Packet::echo(packet.message_id, &packet.payload);
                 transport.send_to_session(session_id, echo).await?;
             }
             _ => {}
@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
 ### 创建TCP客户端 (15行代码)
 
 ```rust
-use msgtrans::{ConnectionManager, TransportBuilder, UnifiedPacket, Result};
+use msgtrans::{ConnectionManager, TransportBuilder, Packet, Result};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -90,7 +90,7 @@ async fn main() -> Result<()> {
         .await?;
     
     // 发送消息
-    let message = UnifiedPacket::data(1, "Hello, msgtrans!");
+    let message = Packet::data(1, "Hello, msgtrans!");
     connection_manager.transport().send_to_session(session_id, message).await?;
     
     Ok(())
@@ -133,13 +133,13 @@ let quic_session = connection_manager
 ### 类型安全的数据包
 
 ```rust
-use msgtrans::{UnifiedPacket, PacketType};
+use msgtrans::{Packet, PacketType};
 
 // 创建不同类型的数据包
-let data_packet = UnifiedPacket::data(1, "业务数据");
-let control_packet = UnifiedPacket::control(2, r#"{"action": "ping"}"#);
-let heartbeat = UnifiedPacket::heartbeat();
-let echo = UnifiedPacket::echo(3, "回显消息");
+let data_packet = Packet::data(1, "业务数据");
+let control_packet = Packet::control(2, r#"{"action": "ping"}"#);
+let heartbeat = Packet::heartbeat();
+let echo = Packet::echo(3, "回显消息");
 
 // 类型安全检查
 if packet.is_data() {
@@ -166,7 +166,7 @@ let mut connection_events = transport.events()
 
 ```rust
 // 广播到所有连接
-let broadcast_msg = UnifiedPacket::data(0, "全服公告");
+let broadcast_msg = Packet::data(0, "全服公告");
 transport.broadcast(broadcast_msg).await?;
 ```
 

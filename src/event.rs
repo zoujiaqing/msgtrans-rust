@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use crate::{SessionId, PacketId, CloseReason};
 use crate::command::ConnectionInfo;
 use crate::error::TransportError;
-use crate::packet::UnifiedPacket;
+use crate::packet::Packet;
 
 /// 传输层事件的统一抽象
 #[derive(Clone, Debug)]
@@ -20,7 +20,7 @@ pub enum TransportEvent {
     /// 数据传输事件
     PacketReceived { 
         session_id: SessionId, 
-        packet: UnifiedPacket 
+        packet: Packet 
     },
     PacketSent { 
         session_id: SessionId, 

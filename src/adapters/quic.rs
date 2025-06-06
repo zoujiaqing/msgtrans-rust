@@ -14,7 +14,7 @@ use crate::{
     protocol::{ProtocolAdapter, AdapterStats, QuicConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,
-    packet::{UnifiedPacket, PacketType},
+    packet::{Packet, PacketType},
 };
 
 /// QUIC适配器错误类型
@@ -307,7 +307,7 @@ impl QuicAdapter {
     }
     
     /// 序列化数据包
-    fn serialize_packet(&self, packet: &UnifiedPacket) -> Result<Vec<u8>, QuicError> {
+    fn serialize_packet(&self, packet: &Packet) -> Result<Vec<u8>, QuicError> {
         // 简单的序列化格式：[长度:4字节][类型:1字节][消息ID:4字节][负载]
         let mut buffer = Vec::new();
         let payload_len = packet.payload.len();
@@ -325,7 +325,7 @@ impl QuicAdapter {
     }
     
     /// 反序列化数据包
-    fn deserialize_packet(&self, data: &[u8]) -> Result<UnifiedPacket, QuicError> {
+    fn deserialize_packet(&self, data: &[u8]) -> Result<Packet, QuicError> {
         if data.len() < 9 {
             return Err(QuicError::Serialization("Data too short".to_string()));
         }
@@ -340,7 +340,7 @@ impl QuicAdapter {
         let message_id = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
         let payload = data[9..].to_vec();
         
-        Ok(UnifiedPacket {
+        Ok(Packet {
             packet_type: PacketType::from(packet_type),
             message_id,
             payload: BytesMut::from(&payload[..]),
@@ -353,7 +353,7 @@ impl ProtocolAdapter for QuicAdapter {
     type Config = QuicConfig;
     type Error = QuicError;
     
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), Self::Error> {
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         if !self.is_connected {
             return Err(QuicError::ConnectionClosed);
         }
@@ -382,7 +382,7 @@ impl ProtocolAdapter for QuicAdapter {
         Ok(())
     }
     
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, Self::Error> {
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
         if !self.is_connected {
             return Ok(None);
         }

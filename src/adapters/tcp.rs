@@ -4,7 +4,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::io;
 use crate::{
     SessionId, 
-    packet::{UnifiedPacket, PacketError},
+    packet::{Packet, PacketError},
     protocol::{ProtocolAdapter, AdapterStats, TcpConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,
@@ -94,7 +94,7 @@ impl TcpAdapter {
     }
     
     /// 读取完整的数据包
-    async fn read_packet(&mut self) -> Result<Option<UnifiedPacket>, TcpError> {
+    async fn read_packet(&mut self) -> Result<Option<Packet>, TcpError> {
         tracing::debug!("TCP 适配器开始读取数据包 (session {})", self.session_id);
         
         // 首先读取包头（9字节）
@@ -144,7 +144,7 @@ impl TcpAdapter {
         tracing::debug!("TCP 重构完整数据包: {} bytes (session {})", packet_data.len(), self.session_id);
         
         // 解析数据包
-        match UnifiedPacket::from_bytes(&packet_data) {
+        match Packet::from_bytes(&packet_data) {
             Ok(packet) => {
                 tracing::debug!("TCP 数据包解析成功: 类型{:?}, ID{} (session {})", 
                               packet.packet_type, packet.message_id, self.session_id);
@@ -164,7 +164,7 @@ impl ProtocolAdapter for TcpAdapter {
     type Config = TcpConfig;
     type Error = TcpError;
     
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), Self::Error> {
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         if !self.is_connected {
             return Err(TcpError::ConnectionClosed);
         }
@@ -189,7 +189,7 @@ impl ProtocolAdapter for TcpAdapter {
         Ok(())
     }
     
-        async fn receive(&mut self) -> Result<Option<UnifiedPacket>, Self::Error> {
+        async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
         if !self.is_connected {
             return Ok(None);
         }

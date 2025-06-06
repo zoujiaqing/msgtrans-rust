@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use crate::{
     SessionId,
     error::TransportError,
-    packet::UnifiedPacket,
+    packet::Packet,
 };
 
 
@@ -23,10 +23,10 @@ use crate::{
 #[async_trait]
 pub trait Connection: Send + Sync {
     /// 发送数据包
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), TransportError>;
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError>;
     
     /// 接收数据包
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, TransportError>;
+    async fn receive(&mut self) -> Result<Option<Packet>, TransportError>;
     
     /// 关闭连接
     async fn close(&mut self) -> Result<(), TransportError>;

@@ -7,7 +7,7 @@ use crate::{
     SessionId,
     error::TransportError,
     command::ConnectionInfo,
-    packet::UnifiedPacket,
+    packet::Packet,
 };
 use super::{
     protocol::Connection,
@@ -37,7 +37,7 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
     type Config = EmptyConfig;
     type Error = TransportError;
     
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), Self::Error> {
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         let packet_size = packet.payload.len();
         let result = self.connection.send(packet).await;
         
@@ -50,7 +50,7 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
         result
     }
     
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, Self::Error> {
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
         tracing::debug!("🔍 ProtocolConnectionAdapter::receive - 开始接收数据...");
         
         let result = self.connection.receive().await;

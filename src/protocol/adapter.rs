@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use crate::{SessionId, error::TransportError};
 use crate::command::ConnectionInfo;
-use crate::packet::UnifiedPacket;
+use crate::packet::Packet;
 
 /// 适配器统计信息
 #[derive(Debug, Clone)]
@@ -65,10 +65,10 @@ pub trait ProtocolAdapter: Send + 'static {
     type Error: Into<TransportError> + Send + std::fmt::Debug + 'static;
     
     /// 发送数据包
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), Self::Error>;
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error>;
     
     /// 接收数据包（非阻塞）
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, Self::Error>;
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error>;
     
     /// 关闭连接
     async fn close(&mut self) -> Result<(), Self::Error>;

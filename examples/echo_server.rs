@@ -8,7 +8,7 @@ use tokio::signal;
 
 use msgtrans::{
     Transport, TransportBuilder,
-    UnifiedPacket,
+    Packet,
     TransportError,
     TransportConfig,
     TransportEvent,
@@ -159,7 +159,7 @@ impl MultiProtocolEchoServer {
                     
                     // 创建回显响应
                     let echo_content = format!("Echo: {}", content);
-                    let echo_packet = UnifiedPacket::echo(packet.message_id, echo_content.as_bytes());
+                    let echo_packet = Packet::echo(packet.message_id, echo_content.as_bytes());
                     
                     // 发送回显
                     match self.transport.send_to_session(session_id, echo_packet).await {
@@ -174,7 +174,7 @@ impl MultiProtocolEchoServer {
                     println!("   内容: [二进制数据, {} bytes]", packet.payload.len());
                     
                     // 对二进制数据也回显
-                    let echo_packet = UnifiedPacket::echo(packet.message_id, packet.payload.clone());
+                    let echo_packet = Packet::echo(packet.message_id, packet.payload.clone());
                     match self.transport.send_to_session(session_id, echo_packet).await {
                         Ok(()) => {
                             println!("📤 发送二进制回显 ({} bytes)", packet.payload.len());

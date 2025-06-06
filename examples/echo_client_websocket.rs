@@ -11,7 +11,7 @@ use futures::StreamExt;
 
 use msgtrans::{
     Transport, TransportBuilder,
-    packet::UnifiedPacket,
+    packet::Packet,
     error::TransportError,
     TransportConfig,
     event::TransportEvent,
@@ -130,7 +130,7 @@ impl WebSocketEchoClient {
         ];
         
         for (i, message) in test_messages.iter().enumerate() {
-            let packet = UnifiedPacket::data((i + 1) as u32, message.as_bytes());
+            let packet = Packet::data((i + 1) as u32, message.as_bytes());
             
             println!("📤 发送WebSocket消息 #{}: \"{}\"", i + 1, message);
             
@@ -151,7 +151,7 @@ impl WebSocketEchoClient {
         // 发送二进制数据测试
         println!("📤 发送WebSocket二进制数据测试");
         let binary_data = vec![0x57, 0x53, 0x00, 0x01, 0x02, 0x03, 0xFE, 0xFF]; // WS + binary
-        let binary_packet = UnifiedPacket::data(99, &binary_data[..]);
+        let binary_packet = Packet::data(99, &binary_data[..]);
         
         match self.transport.send_to_session(session_id, binary_packet).await {
             Ok(()) => {

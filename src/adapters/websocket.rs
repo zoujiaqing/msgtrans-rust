@@ -8,7 +8,7 @@ use crate::{
     protocol::{ProtocolAdapter, AdapterStats, WebSocketConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,
-    packet::{UnifiedPacket, PacketType},
+    packet::{Packet, PacketType},
 };
 
 /// WebSocket适配器错误类型
@@ -90,14 +90,14 @@ where
     }
     
     /// 序列化数据包为WebSocket消息
-    fn serialize_packet(&self, packet: &UnifiedPacket) -> Result<Message, WebSocketError> {
+    fn serialize_packet(&self, packet: &Packet) -> Result<Message, WebSocketError> {
         // 使用统一数据包的标准格式：[类型:1字节][消息ID:4字节][负载长度:4字节][负载]
         let serialized = packet.to_bytes();
         Ok(Message::Binary(serialized.to_vec()))
     }
     
     /// 反序列化WebSocket消息为数据包
-    fn deserialize_message(&self, message: Message) -> Result<Option<UnifiedPacket>, WebSocketError> {
+    fn deserialize_message(&self, message: Message) -> Result<Option<Packet>, WebSocketError> {
         match message {
             Message::Binary(data) => {
                 if data.len() < 9 {
@@ -105,14 +105,14 @@ where
                 }
                 
                 // 使用统一数据包的反序列化方法
-                match UnifiedPacket::from_bytes(&data) {
+                match Packet::from_bytes(&data) {
                     Ok(packet) => Ok(Some(packet)),
                     Err(e) => Err(WebSocketError::Serialization(format!("数据包解析失败: {}", e))),
                 }
             }
             Message::Text(text) => {
                 // 将文本消息转换为二进制数据包（类型为0）
-                Ok(Some(UnifiedPacket {
+                Ok(Some(Packet {
                     packet_type: PacketType::Data,
                     message_id: 0,
                     payload: BytesMut::from(text.as_bytes()),
@@ -154,7 +154,7 @@ where
     type Config = WebSocketConfig;
     type Error = WebSocketError;
     
-    async fn send(&mut self, packet: UnifiedPacket) -> Result<(), Self::Error> {
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         if !self.is_connected {
             return Err(WebSocketError::ConnectionClosed);
         }
@@ -175,7 +175,7 @@ where
         Ok(())
     }
     
-    async fn receive(&mut self) -> Result<Option<UnifiedPacket>, Self::Error> {
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
         if !self.is_connected {
             return Ok(None);
         }
