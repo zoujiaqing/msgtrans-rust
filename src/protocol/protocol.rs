@@ -8,31 +8,14 @@ use std::sync::Arc;
 use std::future::Future;
 use std::pin::Pin;
 use tokio::sync::RwLock;
-use super::{
+use crate::{
     SessionId,
-    adapter::ProtocolAdapter,
     error::TransportError,
     packet::UnifiedPacket,
 };
 
-/// 协议配置的通用接口
-pub trait ProtocolConfig: Send + Sync + Clone + std::fmt::Debug {
-    /// 协议名称
-    fn protocol_name(&self) -> &'static str;
-    
-    /// 将配置转换为通用键值对，用于URL解析等
-    fn to_params(&self) -> HashMap<String, String> {
-        HashMap::new()
-    }
-    
-    /// 从通用键值对创建配置
-    fn from_params(_params: HashMap<String, String>) -> Result<Self, TransportError> 
-    where 
-        Self: Sized 
-    {
-        Err(TransportError::Configuration("Protocol config from_params not implemented".to_string()))
-    }
-}
+
+
 
 /// 协议连接的通用接口
 /// 
@@ -58,7 +41,7 @@ pub trait Connection: Send + Sync {
     fn set_session_id(&mut self, session_id: SessionId);
     
     /// 获取连接信息
-    fn connection_info(&self) -> super::command::ConnectionInfo;
+    fn connection_info(&self) -> crate::command::ConnectionInfo;
 }
 
 /// 协议服务器的通用接口

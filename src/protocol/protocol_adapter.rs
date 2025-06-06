@@ -3,13 +3,15 @@
 /// 将新的Connection trait包装成ProtocolAdapter trait，用于与现有Actor系统兼容
 
 use async_trait::async_trait;
-use super::{
-    protocol::Connection,
-    adapter::{ProtocolAdapter, AdapterStats, ProtocolConfig},
+use crate::{
+    SessionId,
     error::TransportError,
     command::ConnectionInfo,
     packet::UnifiedPacket,
-    SessionId,
+};
+use super::{
+    protocol::Connection,
+    adapter::{ProtocolAdapter, AdapterStats, ProtocolConfig},
 };
 
 /// 协议连接适配器

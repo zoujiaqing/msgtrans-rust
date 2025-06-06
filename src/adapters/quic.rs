@@ -7,11 +7,11 @@ use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     DigitallySignedStruct, SignatureScheme,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncWriteExt};
 
-use super::super::{
+use crate::{
     SessionId, 
-    adapter::{ProtocolAdapter, AdapterStats, QuicConfig},
+    protocol::{ProtocolAdapter, AdapterStats, QuicConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,
     packet::{UnifiedPacket, PacketType},
@@ -137,7 +137,6 @@ static mut CERT: Option<(Vec<u8>, Vec<u8>)> = None;
 
 /// 配置QUIC服务器（自签名证书）
 pub fn configure_server(recv_window_size: u32) -> (ServerConfig, CertificateDer<'static>) {
-    use rcgen;
     
     // 使用静态变量存储证书，确保每次生成相同的证书
     let (our_cert, our_priv_key) = unsafe {

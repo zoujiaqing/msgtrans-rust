@@ -1,5 +1,18 @@
 use std::time::Duration;
-use super::{SessionId, TransportEvent};
+use crate::{SessionId, event::TransportEvent};
+
+/// 连接关闭原因
+#[derive(Debug, Clone)]
+pub enum CloseReason {
+    /// 正常关闭
+    Normal,
+    /// 超时
+    Timeout,
+    /// 错误
+    Error(String),
+    /// 被强制关闭
+    Forced,
+}
 
 /// 统一传输错误类型
 #[derive(Debug, thiserror::Error)]

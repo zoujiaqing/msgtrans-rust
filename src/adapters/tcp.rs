@@ -2,10 +2,10 @@ use async_trait::async_trait;
 use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::io;
-use super::super::{
+use crate::{
     SessionId, 
     packet::{UnifiedPacket, PacketError},
-    adapter::{ProtocolAdapter, AdapterStats, TcpConfig},
+    protocol::{ProtocolAdapter, AdapterStats, TcpConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,
 };

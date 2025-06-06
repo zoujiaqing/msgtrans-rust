@@ -9,11 +9,11 @@ use tokio::time::sleep;
 use tokio::sync::Mutex;
 use futures::StreamExt;
 
-use msgtrans::unified::{
+use msgtrans::{
     Transport, TransportBuilder,
     packet::UnifiedPacket,
     error::TransportError,
-    config::TransportConfig,
+    TransportConfig,
     event::TransportEvent,
 };
 

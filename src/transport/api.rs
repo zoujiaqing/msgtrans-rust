@@ -2,23 +2,21 @@
 /// 
 /// 提供高级的、协议无关的传输API
 
-use tokio::sync::{mpsc, broadcast};
+use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
-use super::{
+use crate::{
     SessionId,
     command::{TransportStats, ConnectionInfo},
     error::TransportError,
     actor::{GenericActor, ActorHandle, ActorManager},
-    adapter::{ProtocolAdapter, ProtocolConfig},
+    protocol::{ProtocolAdapter, ProtocolConfig, ProtocolRegistry, Connection, ProtocolConnectionAdapter},
     stream::EventStream,
-    config::TransportConfig,
     packet::UnifiedPacket,
-    protocol::{ProtocolRegistry, Connection},
     adapters::create_standard_registry,
-    protocol_adapter::ProtocolConnectionAdapter,
 };
+use super::config::TransportConfig;
 
 /// 统一传输接口
 /// 
@@ -247,7 +245,7 @@ impl Transport {
     }
     
     /// 添加协议服务器并开始接受连接
-    async fn add_protocol_server(&self, mut server: Box<dyn super::protocol::Server>) -> Result<SessionId, TransportError> {
+    async fn add_protocol_server(&self, mut server: Box<dyn crate::protocol::Server>) -> Result<SessionId, TransportError> {
         let session_id = self.generate_session_id();
         let transport = self.clone();
         
@@ -345,8 +343,8 @@ impl ConnectionManager {
         &self,
         addr: std::net::SocketAddr,
     ) -> Result<SessionId, TransportError> {
-        use super::adapters::tcp::TcpClientBuilder;
-        use super::adapter::TcpConfig;
+        use crate::adapters::tcp::TcpClientBuilder;
+        use crate::protocol::TcpConfig;
         
         let config = TcpConfig::default();
         let adapter = TcpClientBuilder::new()
@@ -364,8 +362,8 @@ impl ConnectionManager {
         &self,
         url: &str,
     ) -> Result<SessionId, TransportError> {
-        use super::adapters::websocket::{WebSocketClientBuilder};
-        use super::adapter::WebSocketConfig;
+        use crate::adapters::websocket::{WebSocketClientBuilder};
+        use crate::protocol::WebSocketConfig;
         
         let config = WebSocketConfig::default();
         let adapter = WebSocketClientBuilder::new()
@@ -383,8 +381,8 @@ impl ConnectionManager {
         &self,
         addr: std::net::SocketAddr,
     ) -> Result<SessionId, TransportError> {
-        use super::adapters::quic::{QuicClientBuilder};
-        use super::adapter::QuicConfig;
+        use crate::adapters::quic::{QuicClientBuilder};
+        use crate::protocol::QuicConfig;
         
         let config = QuicConfig::default();
         let adapter = QuicClientBuilder::new()
@@ -413,9 +411,9 @@ pub struct ServerManager {
 
 /// 服务器句柄
 pub enum ServerHandle {
-    Tcp(super::adapters::tcp::TcpServer),
-    WebSocket(super::adapters::websocket::WebSocketServer),
-    Quic(super::adapters::quic::QuicServer),
+    Tcp(crate::adapters::tcp::TcpServer),
+    WebSocket(crate::adapters::websocket::WebSocketServer),
+    Quic(crate::adapters::quic::QuicServer),
 }
 
 impl ServerManager {
@@ -433,8 +431,8 @@ impl ServerManager {
         name: String,
         addr: std::net::SocketAddr,
     ) -> Result<(), TransportError> {
-        use super::adapters::tcp::TcpServerBuilder;
-        use super::adapter::TcpConfig;
+        use crate::adapters::tcp::TcpServerBuilder;
+        use crate::protocol::TcpConfig;
         
         let config = TcpConfig::default();
         let server = TcpServerBuilder::new()
@@ -492,8 +490,8 @@ impl ServerManager {
         name: String,
         addr: std::net::SocketAddr,
     ) -> Result<(), TransportError> {
-        use super::adapters::websocket::WebSocketServerBuilder;
-        use super::adapter::WebSocketConfig;
+        use crate::adapters::websocket::WebSocketServerBuilder;
+        use crate::protocol::WebSocketConfig;
         
         let config = WebSocketConfig::default();
         let server = WebSocketServerBuilder::new()

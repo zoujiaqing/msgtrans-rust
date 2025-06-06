@@ -3,9 +3,9 @@ use tokio_tungstenite::{WebSocketStream, tungstenite::Message};
 use futures::{SinkExt, StreamExt};
 use std::io;
 use bytes::BytesMut;
-use super::super::{
+use crate::{
     SessionId, 
-    adapter::{ProtocolAdapter, AdapterStats, WebSocketConfig},
+    protocol::{ProtocolAdapter, AdapterStats, WebSocketConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,
     packet::{UnifiedPacket, PacketType},

@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 use futures::{Stream, StreamExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::wrappers::BroadcastStream;
-use super::{
+use crate::{
     SessionId,
     event::TransportEvent,
     packet::UnifiedPacket,
@@ -289,12 +289,12 @@ pub enum ConnectionEvent {
     /// 连接建立
     Established { 
         session_id: SessionId, 
-        info: super::command::ConnectionInfo 
+        info: crate::command::ConnectionInfo 
     },
     /// 连接关闭
     Closed { 
         session_id: SessionId, 
-        reason: super::CloseReason 
+        reason: crate::CloseReason 
     },
 }
 

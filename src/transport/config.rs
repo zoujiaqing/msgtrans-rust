@@ -1,6 +1,6 @@
 use std::path::Path;
 use serde::{Serialize, Deserialize};
-use super::adapter::{ProtocolConfig, ConfigError, TcpConfig, WebSocketConfig, QuicConfig};
+use crate::protocol::{ProtocolConfig, ConfigError, TcpConfig, WebSocketConfig, QuicConfig};
 
 /// 配置构建器trait
 pub trait ConfigBuilder<T: ProtocolConfig>: Default {

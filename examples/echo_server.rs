@@ -6,12 +6,12 @@
 use futures::StreamExt;
 use tokio::signal;
 
-use msgtrans::unified::{
+use msgtrans::{
     Transport, TransportBuilder,
-    packet::UnifiedPacket,
-    error::TransportError,
-    config::TransportConfig,
-    event::TransportEvent,
+    UnifiedPacket,
+    TransportError,
+    TransportConfig,
+    TransportEvent,
 };
 
 /// 多协议Echo服务器

@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 use tokio::sync::{mpsc, broadcast, Mutex};
 use std::sync::Arc;
-use super::{
+use crate::{
     SessionId, 
-    adapter::ProtocolAdapter,
+    protocol::ProtocolAdapter,
     command::{TransportCommand, TransportStats, ConnectionInfo},
     event::TransportEvent,
     error::TransportError,
     packet::UnifiedPacket,
-    CloseReason,
 };
 
 /// Actor状态枚举
@@ -299,7 +298,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
         // 发送连接关闭事件
         let _ = self.event_tx.send(TransportEvent::ConnectionClosed {
             session_id: self.session_id,
-            reason: CloseReason::Normal,
+            reason: crate::CloseReason::Normal,
         });
         
         self.state = ActorState::Stopped;

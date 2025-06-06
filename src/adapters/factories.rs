@@ -5,10 +5,9 @@
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::any::Any;
-use super::super::{
-    protocol::{ProtocolFactory, Connection, Server, ProtocolConfig as ProtocolConfigTrait},
+use crate::{
+    protocol::{ProtocolFactory, Connection, Server, TcpConfig, WebSocketConfig, QuicConfig},
     error::TransportError,
-    adapter::{TcpConfig, WebSocketConfig, QuicConfig},
     packet::UnifiedPacket,
     command::ConnectionInfo,
     SessionId,
@@ -29,37 +28,37 @@ impl TcpConnection {
 #[async_trait]
 impl Connection for TcpConnection {
     async fn send(&mut self, packet: UnifiedPacket) -> Result<(), TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.send(packet).await.map_err(Into::into)
     }
     
     async fn receive(&mut self) -> Result<Option<UnifiedPacket>, TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.receive().await.map_err(Into::into)
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.close().await.map_err(Into::into)
     }
     
     fn is_connected(&self) -> bool {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.is_connected()
     }
     
     fn session_id(&self) -> SessionId {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.session_id()
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.set_session_id(session_id);
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
     }
 }
@@ -216,37 +215,37 @@ impl<S> WebSocketConnection<S> {
 #[async_trait]
 impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static> Connection for WebSocketConnection<S> {
     async fn send(&mut self, packet: UnifiedPacket) -> Result<(), TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.send(packet).await.map_err(Into::into)
     }
     
     async fn receive(&mut self) -> Result<Option<UnifiedPacket>, TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.receive().await.map_err(Into::into)
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.close().await.map_err(Into::into)
     }
     
     fn is_connected(&self) -> bool {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.is_connected()
     }
     
     fn session_id(&self) -> SessionId {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.session_id()
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.set_session_id(session_id);
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
     }
 }
@@ -388,37 +387,37 @@ impl QuicConnection {
 #[async_trait]
 impl Connection for QuicConnection {
     async fn send(&mut self, packet: UnifiedPacket) -> Result<(), TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.send(packet).await.map_err(Into::into)
     }
     
     async fn receive(&mut self) -> Result<Option<UnifiedPacket>, TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.receive().await.map_err(Into::into)
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.close().await.map_err(Into::into)
     }
     
     fn is_connected(&self) -> bool {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.is_connected()
     }
     
     fn session_id(&self) -> SessionId {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.session_id()
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.set_session_id(session_id);
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        use super::super::adapter::ProtocolAdapter;
+        use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
     }
 }
@@ -539,8 +538,8 @@ impl ProtocolFactory for QuicFactory {
 }
 
 /// 便利函数：创建标准协议注册表
-pub async fn create_standard_registry() -> Result<super::super::protocol::ProtocolRegistry, TransportError> {
-    let registry = super::super::protocol::ProtocolRegistry::new();
+pub async fn create_standard_registry() -> Result<crate::protocol::ProtocolRegistry, TransportError> {
+    let registry = crate::protocol::ProtocolRegistry::new();
     
     // 注册标准协议
     registry.register(TcpFactory::new()).await?;

@@ -2,7 +2,7 @@
 /// 
 /// 展示msgtrans统一数据包系统的基本序列化和反序列化功能
 
-use msgtrans::unified::packet::UnifiedPacket;
+use msgtrans::UnifiedPacket;
 
 fn main() {
     println!("🚀 msgtrans 数据包封装解包验证");
