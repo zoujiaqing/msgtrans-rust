@@ -236,8 +236,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   🔧 测试文本和二进制数据");
     println!();
     
-    // 创建客户端
-    let mut client = EchoClient::new("127.0.0.1:8080").await?;
+    // 创建QUIC客户端 (连接到9002端口)
+    let mut client = EchoClient::new("127.0.0.1:9002").await?;
     
     // 连接并运行测试
     match client.connect().await {

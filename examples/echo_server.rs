@@ -1,6 +1,6 @@
-/// 简单Echo服务器 - 使用msgtrans统一架构
+/// 多协议Echo服务器 - 使用msgtrans统一架构
 /// 
-/// 这是一个最小化的echo服务器实现，用于测试msgtrans基础功能
+/// 同时监听TCP(9001)、QUIC(9002)、WebSocket(9003)三个协议
 /// 收到任何消息都会立即回显给客户端
 
 use futures::StreamExt;
@@ -14,17 +14,20 @@ use msgtrans::unified::{
     event::TransportEvent,
 };
 
-/// 简单Echo服务器
-pub struct EchoServer {
+/// 多协议Echo服务器
+pub struct MultiProtocolEchoServer {
     transport: Transport,
     message_count: u64,
+    tcp_session_id: Option<u64>,
+    quic_session_id: Option<u64>,
+    websocket_session_id: Option<u64>,
 }
 
-impl EchoServer {
-    /// 创建新的Echo服务器
+impl MultiProtocolEchoServer {
+    /// 创建新的多协议Echo服务器
     pub async fn new() -> Result<Self, TransportError> {
-        println!("🌟 Echo服务器 - 使用msgtrans统一架构");
-        println!("================================");
+        println!("🌟 多协议Echo服务器 - msgtrans统一架构");
+        println!("====================================");
         
         // 创建传输层
         let config = TransportConfig::default();
@@ -36,21 +39,67 @@ impl EchoServer {
         Ok(Self {
             transport,
             message_count: 0,
+            tcp_session_id: None,
+            quic_session_id: None,
+            websocket_session_id: None,
         })
     }
     
-    /// 启动Echo服务器
-    pub async fn start(&mut self, bind_addr: &str) -> Result<(), TransportError> {
-        println!("🚀 启动Echo服务器在: {}", bind_addr);
+    /// 启动多协议Echo服务器
+    pub async fn start(&mut self) -> Result<(), TransportError> {
+        println!("🚀 启动多协议Echo服务器");
+        println!("📡 协议端口分配:");
         
-        // 启动TCP服务器
-        let server_session_id = self.transport.listen("tcp", bind_addr).await?;
-        println!("✅ TCP Echo服务器启动成功 (会话ID: {})", server_session_id);
+        // 启动TCP服务器 (端口9001)
+        match self.transport.listen("tcp", "127.0.0.1:9001").await {
+            Ok(session_id) => {
+                self.tcp_session_id = Some(session_id);
+                println!("   ✅ TCP    - 端口 9001 (会话ID: {})", session_id);
+            }
+            Err(e) => {
+                println!("   ❌ TCP    - 启动失败: {:?}", e);
+            }
+        }
+        
+        // 启动QUIC服务器 (端口9002)
+        match self.transport.listen("quic", "127.0.0.1:9002").await {
+            Ok(session_id) => {
+                self.quic_session_id = Some(session_id);
+                println!("   ✅ QUIC   - 端口 9002 (会话ID: {})", session_id);
+            }
+            Err(e) => {
+                println!("   ❌ QUIC   - 启动失败: {:?}", e);
+            }
+        }
+        
+        // 启动WebSocket服务器 (端口9003)
+        match self.transport.listen("websocket", "127.0.0.1:9003").await {
+            Ok(session_id) => {
+                self.websocket_session_id = Some(session_id);
+                println!("   ✅ WebSocket - 端口 9003 (会话ID: {})", session_id);
+            }
+            Err(e) => {
+                println!("   ❌ WebSocket - 启动失败: {:?}", e);
+            }
+        }
+        
+        println!();
+        println!("📋 客户端连接指南:");
+        if self.tcp_session_id.is_some() {
+            println!("   TCP客户端:       cargo run --example echo_client_tcp");
+        }
+        if self.quic_session_id.is_some() {
+            println!("   QUIC客户端:      cargo run --example echo_client_quic");
+        }
+        if self.websocket_session_id.is_some() {
+            println!("   WebSocket客户端: cargo run --example echo_client_websocket");
+        }
+        println!();
+        println!("📡 开始监听客户端连接和消息...");
+        println!("按 Ctrl+C 退出\n");
         
         // 启动事件处理循环
         let mut events = self.transport.events();
-        println!("📡 开始监听客户端连接和消息...");
-        println!("按 Ctrl+C 退出\n");
         
         loop {
             tokio::select! {
@@ -79,6 +128,19 @@ impl EchoServer {
         
         println!("📊 服务器统计: 处理了 {} 条消息", self.message_count);
         Ok(())
+    }
+    
+    /// 获取协议名称
+    fn get_protocol_name(&self, session_id: u64) -> &str {
+        if Some(session_id) == self.tcp_session_id {
+            "TCP"
+        } else if Some(session_id) == self.quic_session_id {
+            "QUIC"
+        } else if Some(session_id) == self.websocket_session_id {
+            "WebSocket"
+        } else {
+            "Unknown"
+        }
     }
     
     /// 处理传输事件
@@ -155,20 +217,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::INFO)
         .init();
     
-    println!("🌟 msgtrans Echo服务器演示");
-    println!("========================");
+    println!("🌟 msgtrans 多协议Echo服务器");
+    println!("===========================");
     println!("🎯 功能:");
-    println!("   📨 接收客户端消息");
-    println!("   📤 立即回显消息内容");
+    println!("   📨 同时支持TCP、QUIC、WebSocket三种协议");
+    println!("   📤 立即回显所有接收到的消息");
     println!("   🔧 支持文本和二进制数据");
     println!("   📊 统计消息数量");
+    println!("   🚪 端口分配: TCP(9001), QUIC(9002), WebSocket(9003)");
     println!();
     
     // 创建并启动服务器
-    let mut server = EchoServer::new().await?;
-    server.start("127.0.0.1:8080").await?;
+    let mut server = MultiProtocolEchoServer::new().await?;
+    server.start().await?;
     
-    println!("✅ Echo服务器已关闭");
+    println!("✅ 多协议Echo服务器已关闭");
     
     Ok(())
 } 

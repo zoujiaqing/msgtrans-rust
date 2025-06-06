@@ -237,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     
     // 创建WebSocket客户端（连接到8081端口）
-    let mut client = WebSocketEchoClient::new("127.0.0.1:8081").await?;
+    let mut client = WebSocketEchoClient::new("127.0.0.1:9003").await?;
     
     // 连接并运行测试
     match client.connect().await {
