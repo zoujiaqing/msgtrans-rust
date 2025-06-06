@@ -7,7 +7,8 @@ use futures::StreamExt;
 use tokio::signal;
 
 use msgtrans::{
-    Transport, Builder,
+    Transport,
+    Builder,
     Packet,
     TransportError,
     Config,

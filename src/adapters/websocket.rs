@@ -388,14 +388,14 @@ impl WebSocketClientBuilder {
         let url = self.target_url
             .ok_or_else(|| WebSocketError::Io(io::Error::new(io::ErrorKind::InvalidInput, "Target URL not set")))?;
         
-        let url = url::Url::parse(&url)
+        let parsed_url = url::Url::parse(&url)
             .map_err(|e| WebSocketError::Serialization(format!("Invalid URL: {}", e)))?;
         
-        let (ws_stream, _response) = tokio_tungstenite::connect_async(url.clone()).await?;
+        let (ws_stream, _response) = tokio_tungstenite::connect_async(&url).await?;
         
         // 提取地址信息
-        let host = url.host_str().unwrap_or("unknown");
-        let port = url.port().unwrap_or(if url.scheme() == "wss" { 443 } else { 80 });
+        let host = parsed_url.host_str().unwrap_or("unknown");
+        let port = parsed_url.port().unwrap_or(if parsed_url.scheme() == "wss" { 443 } else { 80 });
         let peer_addr = format!("{}:{}", host, port).parse()
             .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
         let local_addr = "0.0.0.0:0".parse().unwrap(); // 客户端本地地址通常不重要

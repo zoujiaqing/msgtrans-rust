@@ -9,10 +9,12 @@ use tokio::sync::Mutex;
 use tokio::time::sleep;
 use futures::StreamExt;
 
+
 use msgtrans::{
-    Transport, Builder,
-    packet::Packet,
-    error::TransportError,
+    Transport,
+    Builder,
+    Packet,
+    TransportError,
     Config,
     Event,
 };

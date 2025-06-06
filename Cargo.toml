@@ -11,20 +11,19 @@ keywords = ["tcp", "quic", "websocket", "tokio"]
 description = "Support for a variety of communication protocols such as TCP / QUIC / WebSocket, easy to create server and client network library."
 
 [features]
-default = ["tcp", "websocket"]
+default = ["tcp", "websocket", "quic"]
 tcp = []
-websocket = ["tokio-tungstenite"]
-quic = ["quinn", "rustls", "rcgen"]
-compression = ["flate2", "zstd"]
+websocket = []
+quic = []
 
 [dependencies]
 # Core dependencies
-tokio = { version = "1.32", features = ["full"] }
+tokio = { version = "1.40", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures-util = "0.3"
 futures = "0.3.28"
-async-trait = "0.1.64"
-bytes = "1.4.0"
+async-trait = "0.1"
+bytes = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -33,10 +32,10 @@ chrono = { version = "0.4", features = ["serde"] }
 url = "2.4.0"
 
 # Protocol-specific dependencies
-tokio-tungstenite = { version = "0.19", optional = true }
-quinn = { version = "0.11", optional = true }
-rustls = { version = "0.23.5", default-features = false, features = ["ring", "std"], optional = true }
-rcgen = { version = "0.13", optional = true }
+tokio-tungstenite = "0.24"
+quinn = "0.11"
+rustls = "0.23"
+rcgen = "0.13"
 
 # Optional compression support
 flate2 = { version = "1", optional = true }
@@ -45,3 +44,23 @@ zstd = { version = "0.13", optional = true }
 [dev-dependencies]
 tracing-subscriber = "0.3"
 toml = "0.8"
+
+[[example]]
+name = "echo_server"
+path = "examples/echo_server.rs"
+
+[[example]]
+name = "echo_client_tcp"
+path = "examples/echo_client_tcp.rs"
+
+[[example]]
+name = "echo_client_websocket"
+path = "examples/echo_client_websocket.rs"
+
+[[example]]
+name = "echo_client_quic"
+path = "examples/echo_client_quic.rs"
+
+[[example]]
+name = "packet"
+path = "examples/packet.rs"
