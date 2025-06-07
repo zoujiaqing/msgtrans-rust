@@ -1,4 +1,4 @@
-/// 多协议Echo服务器 - 支持TCP、WebSocket、QUIC
+/// 多协议Echo服务器 - 使用标准Packet接口的最终版本
 use anyhow::Result;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_hdr_async, tungstenite::{self, Message}};
@@ -6,7 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 
-// 使用msgtrans的新API
+// 使用msgtrans的标准接口 - 只与Packet交互
 use msgtrans::{
     protocol::{QuicConfig, ProtocolAdapter},
     adapters::quic::QuicServerBuilder,
@@ -16,8 +16,8 @@ use bytes::BytesMut;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("🌟 多协议Echo服务器");
-    println!("===================");
+    println!("🌟 多协议Echo服务器 (标准Packet接口版)");
+    println!("===================================");
     
     // 启动TCP Echo服务器 (端口 8001)
     tokio::spawn(async move {
@@ -43,11 +43,11 @@ async fn main() -> Result<()> {
         }
     });
     
-    // 启动QUIC Echo服务器 (端口 8003) - 使用新的msgtrans API
+    // 启动QUIC Echo服务器 (端口 8003) - 使用标准Packet接口
     tokio::spawn(async move {
         println!("启动 QUIC Echo 服务器，监听端口 8003...");
         
-        // 使用新的QuicConfig API，自动生成自签名证书
+        // 使用QuicConfig API，自动生成自签名证书
         let config = QuicConfig::new("127.0.0.1:8003")
             .unwrap()
             .with_max_idle_timeout(Duration::from_secs(30))
@@ -71,7 +71,7 @@ async fn main() -> Result<()> {
     println!("\n🎯 测试方法:");
     println!("   TCP:       cargo run --example echo_client_tcp");
     println!("   WebSocket: cargo run --example echo_client_websocket");
-    println!("   QUIC:      cargo run --example echo_client_quic");
+    println!("   QUIC:      cargo run --example echo_client_quic_final");
     println!("   Telnet:    telnet 127.0.0.1 8001");
     println!("\n按 Ctrl+C 停止服务器");
     
@@ -179,38 +179,44 @@ async fn handle_websocket_connection(stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-// 使用新的msgtrans API处理QUIC连接（简化版本，使用原始数据传输）
-async fn handle_quic_connection(connection: msgtrans::adapters::quic::QuicAdapter) -> Result<()> {
+// 使用标准Packet接口处理QUIC连接（应用层echo业务逻辑）
+async fn handle_quic_connection(mut connection: msgtrans::adapters::quic::QuicAdapter) -> Result<()> {
     let remote_addr = connection.connection_info().peer_addr;
     println!("处理 QUIC 连接: {}", remote_addr);
     
-    // 临时解决方案：直接使用底层quinn连接来避免复杂的数据包序列化
-    // 这展示了新API工作，但简化了流处理逻辑
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    
-    let quinn_connection = connection.get_connection();
-    while let Ok((mut send, mut recv)) = quinn_connection.accept_bi().await {
-        println!("QUIC 新数据流来自: {}", remote_addr);
-        
-        let mut buffer = [0u8; 1024];
-        while let Ok(Some(len)) = recv.read(&mut buffer).await {
-            let message = &buffer[..len];
-            let text = String::from_utf8_lossy(message);
-            println!("QUIC 收到来自 {}: {}", remote_addr, text);
-            
-            // 发送回显
-            if let Err(e) = send.write_all(message).await {
-                eprintln!("QUIC 发送失败: {}", e);
+    // 应用层echo业务逻辑 - 只使用标准的Packet接口
+    while connection.is_connected() {
+        match connection.receive().await {
+            Ok(Some(packet)) => {
+                let message = String::from_utf8_lossy(&packet.payload);
+                println!("QUIC 收到来自 {}: {}", remote_addr, message);
+                
+                // 创建回显数据包
+                let echo_packet = Packet {
+                    packet_type: PacketType::Data,
+                    message_id: packet.message_id, // 保持相同的消息ID
+                    payload: packet.payload, // 直接回显原始数据
+                };
+                
+                // 发送回显
+                if let Err(e) = connection.send(echo_packet).await {
+                    eprintln!("QUIC 发送失败: {}", e);
+                    break;
+                }
+                
+                println!("QUIC 已回显给: {}", remote_addr);
+            }
+            Ok(None) => {
+                println!("QUIC 连接 {} 已关闭", remote_addr);
                 break;
             }
-            if let Err(e) = send.flush().await {
-                eprintln!("QUIC 刷新失败: {}", e);
+            Err(e) => {
+                eprintln!("QUIC 接收错误: {}", e);
                 break;
             }
-            println!("QUIC 已回显给 {}: {} 字节", remote_addr, len);
         }
     }
     
     println!("QUIC 连接 {} 处理结束", remote_addr);
     Ok(())
-}
+} 

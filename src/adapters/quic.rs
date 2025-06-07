@@ -313,11 +313,6 @@ pub struct QuicAdapter {
 }
 
 impl QuicAdapter {
-    /// 获取底层quinn连接（用于高级用法）
-    pub fn get_connection(&self) -> &Connection {
-        &self.connection
-    }
-    
     /// 创建新的QUIC适配器（客户端模式）
     pub fn new(
         config: QuicConfig,
@@ -400,100 +395,21 @@ impl QuicAdapter {
         Ok(Self::new(config, connection, local_addr, addr))
     }
     
-    /// 确保双向流已开启
-    async fn ensure_streams(&mut self) -> Result<(), QuicError> {
-        if self.send_stream.is_none() || self.recv_stream.is_none() {
-            if self.is_client {
-                // 客户端模式：主动创建双向流
-                let (send, recv) = self.connection.open_bi().await?;
-                self.send_stream = Some(send);
-                self.recv_stream = Some(recv);
-                tracing::debug!("📡 QUIC双向流已建立（客户端模式）");
-            } else {
-                // 服务器端模式：等待并接受双向流
-                match self.connection.accept_bi().await {
-                    Ok((send, recv)) => {
-                        self.send_stream = Some(send);
-                        self.recv_stream = Some(recv);
-                        tracing::debug!("📡 QUIC双向流已接受（服务器端模式）");
-                    }
-                    Err(e) => {
-                        return Err(QuicError::Stream(format!("Accept stream error: {}", e)));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    
-    /// 序列化数据包
-    fn serialize_packet(&self, packet: &Packet) -> Result<Vec<u8>, QuicError> {
-        // 简单的序列化格式：[长度:4字节][类型:1字节][消息ID:4字节][负载]
-        let mut buffer = Vec::new();
-        let payload_len = packet.payload.len();
+    /// 发送原始数据（简化版本，不使用复杂的数据包格式）
+    async fn send_raw(&mut self, data: &[u8]) -> Result<(), QuicError> {
         
-        if payload_len > u32::MAX as usize {
-            return Err(QuicError::Serialization("Payload too large".to_string()));
-        }
-        
-        buffer.extend_from_slice(&(payload_len as u32).to_be_bytes());
-        buffer.push(packet.packet_type.into());
-        buffer.extend_from_slice(&packet.message_id.to_be_bytes());
-        buffer.extend_from_slice(&packet.payload);
-        
-        Ok(buffer)
-    }
-    
-    /// 反序列化数据包
-    fn deserialize_packet(&self, data: &[u8]) -> Result<Packet, QuicError> {
-        if data.len() < 9 {
-            return Err(QuicError::Serialization("Data too short".to_string()));
-        }
-        
-        let payload_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
-        
-        if data.len() != payload_len + 9 {
-            return Err(QuicError::Serialization("Invalid data length".to_string()));
-        }
-        
-        let packet_type = data[4];
-        let message_id = u32::from_be_bytes([data[5], data[6], data[7], data[8]]);
-        let payload = data[9..].to_vec();
-        
-        Ok(Packet {
-            packet_type: PacketType::from(packet_type),
-            message_id,
-            payload: BytesMut::from(&payload[..]),
-        })
-    }
-}
-
-#[async_trait]
-impl ProtocolAdapter for QuicAdapter {
-    type Config = QuicConfig;
-    type Error = QuicError;
-    
-    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         if !self.is_connected {
             return Err(QuicError::ConnectionClosed);
         }
         
-        // 确保流已建立
-        self.ensure_streams().await?;
+        // 创建新的双向流进行发送（遵循QUIC最佳实践）
+        let (mut send_stream, _) = self.connection.open_bi().await?;
         
-        // 序列化数据包
-        let data = self.serialize_packet(&packet)?;
+        tracing::debug!("📤 QUIC发送原始数据: {} 字节", data.len());
         
-        tracing::debug!("📤 QUIC发送数据包: 类型{:?}, ID{}, 大小{}字节", 
-                       packet.packet_type, packet.message_id, data.len());
-        
-        // 发送数据
-        if let Some(ref mut send_stream) = self.send_stream {
-            send_stream.write_all(&data).await.map_err(|e| QuicError::Stream(format!("Write error: {}", e)))?;
-            send_stream.flush().await.map_err(|e| QuicError::Stream(format!("Flush error: {}", e)))?;
-        } else {
-            return Err(QuicError::Stream("Send stream not available".to_string()));
-        }
+                 // 发送数据
+        send_stream.write_all(data).await.map_err(|e| QuicError::Stream(format!("Write error: {}", e)))?;
+        send_stream.finish().map_err(|e| QuicError::Stream(format!("Finish error: {}", e)))?;
         
         // 记录统计信息
         self.stats.record_packet_sent(data.len());
@@ -502,54 +418,68 @@ impl ProtocolAdapter for QuicAdapter {
         Ok(())
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
+    /// 接收原始数据（简化版本，处理多个流）
+    async fn receive_raw(&mut self) -> Result<Option<Vec<u8>>, QuicError> {
+        
         if !self.is_connected {
             return Ok(None);
         }
         
-        // 确保流已建立
-        self.ensure_streams().await?;
-        
-        if let Some(ref mut recv_stream) = self.recv_stream {
-            // 读取包头（长度）
-            let mut length_buf = [0u8; 4];
-            match recv_stream.read_exact(&mut length_buf).await {
-                Ok(()) => {},
-                Err(quinn::ReadExactError::FinishedEarly(_)) => {
-                    tracing::debug!("📡 QUIC连接关闭");
-                    self.is_connected = false;
-                    return Ok(None);
-                },
-                Err(e) => return Err(QuicError::Stream(format!("Read error: {}", e))),
+        // 接受新的双向流
+        match self.connection.accept_bi().await {
+            Ok((_, mut recv_stream)) => {
+                // 读取所有数据直到流结束（限制大小为1MB）
+                match recv_stream.read_to_end(1024 * 1024).await {
+                    Ok(buffer) => {
+                        if buffer.is_empty() {
+                            return Ok(None);
+                        }
+                        
+                        tracing::debug!("📨 QUIC接收原始数据: {} 字节", buffer.len());
+                        
+                        // 记录统计信息
+                        self.stats.record_packet_received(buffer.len());
+                        self.connection_info.record_packet_received(buffer.len());
+                        
+                        Ok(Some(buffer))
+                    }
+                    Err(e) => Err(QuicError::Stream(format!("Read error: {}", e))),
+                }
             }
-            
-            let payload_len = u32::from_be_bytes(length_buf) as usize;
-            
-            // 读取剩余的包头和负载
-            let mut packet_buf = vec![0u8; payload_len + 5]; // +5 for type and message_id
-            match recv_stream.read_exact(&mut packet_buf).await {
-                Ok(()) => {},
-                Err(e) => return Err(QuicError::Stream(format!("Read packet error: {}", e))),
+            Err(quinn::ConnectionError::ApplicationClosed(_)) => {
+                tracing::debug!("📡 QUIC连接已关闭");
+                self.is_connected = false;
+                Ok(None)
             }
-            
-            // 组合完整数据包
-            let mut full_data = Vec::with_capacity(payload_len + 9);
-            full_data.extend_from_slice(&length_buf);
-            full_data.extend_from_slice(&packet_buf);
-            
-            // 反序列化数据包
-            let packet = self.deserialize_packet(&full_data)?;
-            
-            tracing::debug!("📨 QUIC接收数据包: 类型{:?}, ID{}, 大小{}字节", 
-                           packet.packet_type, packet.message_id, full_data.len());
-            
-            // 记录统计信息
-            self.stats.record_packet_received(full_data.len());
-            self.connection_info.record_packet_received(full_data.len());
-            
-            Ok(Some(packet))
-        } else {
-            Err(QuicError::Stream("Receive stream not available".to_string()))
+            Err(e) => Err(QuicError::Stream(format!("Accept stream error: {}", e))),
+        }
+    }
+    
+
+}
+
+#[async_trait]
+impl ProtocolAdapter for QuicAdapter {
+    type Config = QuicConfig;
+    type Error = QuicError;
+    
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
+        // 使用新的简化发送方法
+        self.send_raw(&packet.payload).await
+    }
+    
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
+        // 使用新的简化接收方法
+        match self.receive_raw().await? {
+            Some(data) => {
+                let packet = Packet {
+                    packet_type: PacketType::Data,
+                    message_id: 0, // 简化版本不使用消息ID
+                    payload: BytesMut::from(&data[..]),
+                };
+                Ok(Some(packet))
+            }
+            None => Ok(None),
         }
     }
     
