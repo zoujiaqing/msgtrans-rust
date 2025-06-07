@@ -53,9 +53,10 @@ impl WebSocketEchoClient {
     pub async fn connect(&mut self) -> Result<(), TransportError> {
         println!("🔌 连接到Echo服务器: {}", self.server_addr);
         
-        // 使用统一API连接WebSocket
-        let uri = format!("ws://{}", self.server_addr);
-        let session_id = self.transport.connect(&uri).await?;
+        // 使用类型安全的配置API
+        let config = msgtrans::WebSocketConfig::new(&self.server_addr)?
+            .with_path("/echo");
+        let session_id = self.transport.connect(config).await?;
         
         self.session_id = Some(session_id);
         println!("✅ 连接建立成功 (会话ID: {})", session_id);

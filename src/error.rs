@@ -363,4 +363,11 @@ impl ErrorStats {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
+}
+
+// 添加从ConfigError到TransportError的转换
+impl From<crate::protocol::adapter::ConfigError> for TransportError {
+    fn from(error: crate::protocol::adapter::ConfigError) -> Self {
+        TransportError::ProtocolConfiguration(format!("Config error: {:?}", error))
+    }
 } 

@@ -208,6 +208,111 @@ impl ProtocolConfig for TcpConfig {
     }
 }
 
+impl TcpConfig {
+    /// 创建新的TCP配置
+    pub fn new(bind_addr: &str) -> Result<Self, ConfigError> {
+        let bind_address = bind_addr.parse()
+            .map_err(|e| ConfigError::ParseError(format!("Invalid bind address: {}", e)))?;
+        
+        Ok(Self {
+            bind_address,
+            ..Self::default()
+        })
+    }
+    
+    /// 设置TCP_NODELAY选项
+    pub fn with_nodelay(mut self, nodelay: bool) -> Self {
+        self.nodelay = nodelay;
+        self
+    }
+    
+    /// 设置keepalive时间
+    pub fn with_keepalive(mut self, keepalive: Option<std::time::Duration>) -> Self {
+        self.keepalive = keepalive;
+        self
+    }
+    
+    /// 设置读缓冲区大小
+    pub fn with_read_buffer_size(mut self, size: usize) -> Self {
+        self.read_buffer_size = size;
+        self
+    }
+    
+    /// 设置写缓冲区大小
+    pub fn with_write_buffer_size(mut self, size: usize) -> Self {
+        self.write_buffer_size = size;
+        self
+    }
+    
+    /// 设置连接超时时间
+    pub fn with_connect_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+    
+    /// 设置读超时时间
+    pub fn with_read_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.read_timeout = timeout;
+        self
+    }
+    
+    /// 设置写超时时间
+    pub fn with_write_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
+        self.write_timeout = timeout;
+        self
+    }
+}
+
+impl ServerConfig for TcpConfig {
+    type Server = crate::adapters::factories::TcpServerWrapper;
+    
+    fn validate(&self) -> Result<(), TransportError> {
+        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("TCP config validation failed: {:?}", e)))
+    }
+    
+    async fn build_server(&self) -> Result<Self::Server, TransportError> {
+        use crate::adapters::tcp::TcpServerBuilder;
+        
+        let server = TcpServerBuilder::new()
+            .bind_address(self.bind_address)
+            .config(self.clone())
+            .build()
+            .await
+            .map_err(|e| TransportError::Connection(format!("Failed to build TCP server: {:?}", e)))?;
+            
+        Ok(crate::adapters::factories::TcpServerWrapper::new(server))
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "tcp"
+    }
+}
+
+impl ClientConfig for TcpConfig {
+    type Connection = crate::adapters::factories::TcpConnection;
+    
+    fn validate(&self) -> Result<(), TransportError> {
+        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("TCP config validation failed: {:?}", e)))
+    }
+    
+    async fn build_connection(&self) -> Result<Self::Connection, TransportError> {
+        use crate::adapters::tcp::TcpClientBuilder;
+        
+        let adapter = TcpClientBuilder::new()
+            .target_address(self.bind_address) // 对于客户端，bind_address作为目标地址
+            .config(self.clone())
+            .connect()
+            .await
+            .map_err(|e| TransportError::Connection(format!("Failed to build TCP connection: {:?}", e)))?;
+            
+        Ok(crate::adapters::factories::TcpConnection::new(adapter))
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "tcp"
+    }
+}
+
 /// WebSocket适配器配置
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WebSocketConfig {
@@ -278,6 +383,108 @@ impl ProtocolConfig for WebSocketConfig {
             self.pong_timeout = other.pong_timeout;
         }
         self
+    }
+}
+
+impl WebSocketConfig {
+    /// 创建新的WebSocket配置
+    pub fn new(bind_addr: &str) -> Result<Self, ConfigError> {
+        let bind_address = bind_addr.parse()
+            .map_err(|e| ConfigError::ParseError(format!("Invalid bind address: {}", e)))?;
+        
+        Ok(Self {
+            bind_address,
+            ..Self::default()
+        })
+    }
+    
+    /// 设置WebSocket路径
+    pub fn with_path<S: Into<String>>(mut self, path: S) -> Self {
+        self.path = path.into();
+        self
+    }
+    
+    /// 设置支持的子协议
+    pub fn with_subprotocols(mut self, subprotocols: Vec<String>) -> Self {
+        self.subprotocols = subprotocols;
+        self
+    }
+    
+    /// 设置最大帧大小
+    pub fn with_max_frame_size(mut self, size: usize) -> Self {
+        self.max_frame_size = size;
+        self
+    }
+    
+    /// 设置最大消息大小
+    pub fn with_max_message_size(mut self, size: usize) -> Self {
+        self.max_message_size = size;
+        self
+    }
+    
+    /// 设置ping间隔
+    pub fn with_ping_interval(mut self, interval: Option<std::time::Duration>) -> Self {
+        self.ping_interval = interval;
+        self
+    }
+    
+    /// 设置pong超时时间
+    pub fn with_pong_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.pong_timeout = timeout;
+        self
+    }
+}
+
+impl ServerConfig for WebSocketConfig {
+    type Server = crate::adapters::factories::WebSocketServerWrapper;
+    
+    fn validate(&self) -> Result<(), TransportError> {
+        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("WebSocket config validation failed: {:?}", e)))
+    }
+    
+    async fn build_server(&self) -> Result<Self::Server, TransportError> {
+        use crate::adapters::websocket::WebSocketServerBuilder;
+        
+        let server = WebSocketServerBuilder::new()
+            .bind_address(self.bind_address)
+            .config(self.clone())
+            .build()
+            .await
+            .map_err(|e| TransportError::Connection(format!("Failed to build WebSocket server: {:?}", e)))?;
+            
+        Ok(crate::adapters::factories::WebSocketServerWrapper::new(server))
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "websocket"
+    }
+}
+
+impl ClientConfig for WebSocketConfig {
+    type Connection = crate::adapters::factories::WebSocketConnection<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+    
+    fn validate(&self) -> Result<(), TransportError> {
+        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("WebSocket config validation failed: {:?}", e)))
+    }
+    
+    async fn build_connection(&self) -> Result<Self::Connection, TransportError> {
+        use crate::adapters::websocket::WebSocketClientBuilder;
+        
+        // 构建WebSocket URL
+        let url = format!("ws://{}{}", self.bind_address, self.path);
+        
+        let adapter = WebSocketClientBuilder::new()
+            .target_url(&url)
+            .config(self.clone())
+            .connect()
+            .await
+            .map_err(|e| TransportError::Connection(format!("Failed to build WebSocket connection: {:?}", e)))?;
+            
+        Ok(crate::adapters::factories::WebSocketConnection::new(adapter))
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "websocket"
     }
 }
 
@@ -355,4 +562,131 @@ impl ProtocolConfig for QuicConfig {
         }
         self
     }
+}
+
+impl QuicConfig {
+    /// 创建新的QUIC配置
+    pub fn new(bind_addr: &str) -> Result<Self, ConfigError> {
+        let bind_address = bind_addr.parse()
+            .map_err(|e| ConfigError::ParseError(format!("Invalid bind address: {}", e)))?;
+        
+        Ok(Self {
+            bind_address,
+            ..Self::default()
+        })
+    }
+    
+    /// 设置证书文件路径
+    pub fn with_cert_file<S: Into<String>>(mut self, cert_file: S) -> Self {
+        self.cert_path = Some(cert_file.into());
+        self
+    }
+    
+    /// 设置私钥文件路径
+    pub fn with_key_file<S: Into<String>>(mut self, key_file: S) -> Self {
+        self.key_path = Some(key_file.into());
+        self
+    }
+    
+    /// 设置最大空闲时间
+    pub fn with_max_idle_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.max_idle_timeout = timeout;
+        self
+    }
+    
+    /// 设置keepalive间隔
+    pub fn with_keep_alive_interval(mut self, interval: Option<std::time::Duration>) -> Self {
+        self.keep_alive_interval = interval;
+        self
+    }
+    
+    /// 设置最大并发流数
+    pub fn with_max_concurrent_streams(mut self, count: u64) -> Self {
+        self.max_concurrent_streams = count;
+        self
+    }
+    
+    /// 设置初始RTT估值
+    pub fn with_initial_rtt(mut self, rtt: std::time::Duration) -> Self {
+        self.initial_rtt = rtt;
+        self
+    }
+}
+
+impl ServerConfig for QuicConfig {
+    type Server = crate::adapters::factories::QuicServerWrapper;
+    
+    fn validate(&self) -> Result<(), TransportError> {
+        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("QUIC config validation failed: {:?}", e)))
+    }
+    
+    async fn build_server(&self) -> Result<Self::Server, TransportError> {
+        use crate::adapters::quic::QuicServerBuilder;
+        
+        let server = QuicServerBuilder::new()
+            .bind_address(self.bind_address)
+            .config(self.clone())
+            .build()
+            .await
+            .map_err(|e| TransportError::Connection(format!("Failed to build QUIC server: {:?}", e)))?;
+            
+        Ok(crate::adapters::factories::QuicServerWrapper::new(server))
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "quic"
+    }
+}
+
+impl ClientConfig for QuicConfig {
+    type Connection = crate::adapters::factories::QuicConnection;
+    
+    fn validate(&self) -> Result<(), TransportError> {
+        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("QUIC config validation failed: {:?}", e)))
+    }
+    
+    async fn build_connection(&self) -> Result<Self::Connection, TransportError> {
+        use crate::adapters::quic::QuicClientBuilder;
+        
+        let adapter = QuicClientBuilder::new()
+            .target_address(self.bind_address) // 对于客户端，bind_address作为目标地址
+            .config(self.clone())
+            .connect()
+            .await
+            .map_err(|e| TransportError::Connection(format!("Failed to build QUIC connection: {:?}", e)))?;
+            
+        Ok(crate::adapters::factories::QuicConnection::new(adapter))
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "quic"
+    }
+}
+
+/// 服务器配置trait - 用于类型安全的服务器启动
+pub trait ServerConfig: Send + Sync + 'static {
+    type Server: crate::protocol::Server;
+    
+    /// 验证配置的正确性
+    fn validate(&self) -> Result<(), TransportError>;
+    
+    /// 构建服务器实例
+    fn build_server(&self) -> impl std::future::Future<Output = Result<Self::Server, TransportError>> + Send;
+    
+    /// 获取协议名称
+    fn protocol_name(&self) -> &'static str;
+}
+
+/// 客户端配置trait - 用于类型安全的客户端连接
+pub trait ClientConfig: Send + Sync + 'static {
+    type Connection: crate::protocol::Connection;
+    
+    /// 验证配置的正确性
+    fn validate(&self) -> Result<(), TransportError>;
+    
+    /// 构建连接实例
+    fn build_connection(&self) -> impl std::future::Future<Output = Result<Self::Connection, TransportError>> + Send;
+    
+    /// 获取协议名称
+    fn protocol_name(&self) -> &'static str;
 } 

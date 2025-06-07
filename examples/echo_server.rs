@@ -52,7 +52,7 @@ impl MultiProtocolEchoServer {
         println!("📡 协议端口分配:");
         
         // 启动TCP服务器 (端口9001)
-        match self.transport.listen("tcp", "127.0.0.1:9001").await {
+        match self.start_tcp_server().await {
             Ok(session_id) => {
                 self.tcp_session_id = Some(session_id);
                 println!("   ✅ TCP    - 端口 9001 (会话ID: {})", session_id);
@@ -63,7 +63,7 @@ impl MultiProtocolEchoServer {
         }
         
         // 启动QUIC服务器 (端口9002)
-        match self.transport.listen("quic", "127.0.0.1:9002").await {
+        match self.start_quic_server().await {
             Ok(session_id) => {
                 self.quic_session_id = Some(session_id);
                 println!("   ✅ QUIC   - 端口 9002 (会话ID: {})", session_id);
@@ -74,7 +74,7 @@ impl MultiProtocolEchoServer {
         }
         
         // 启动WebSocket服务器 (端口9003)
-        match self.transport.listen("websocket", "127.0.0.1:9003").await {
+        match self.start_websocket_server().await {
             Ok(session_id) => {
                 self.websocket_session_id = Some(session_id);
                 println!("   ✅ WebSocket - 端口 9003 (会话ID: {})", session_id);
@@ -208,6 +208,22 @@ impl MultiProtocolEchoServer {
         }
         
         Ok(())
+    }
+    
+    async fn start_tcp_server(&self) -> Result<u64, TransportError> {
+        let config = msgtrans::TcpConfig::new("127.0.0.1:9001")?;
+        self.transport.listen(config).await
+    }
+    
+    async fn start_quic_server(&self) -> Result<u64, TransportError> {
+        let config = msgtrans::QuicConfig::new("127.0.0.1:9002")?;
+        self.transport.listen(config).await
+    }
+    
+    async fn start_websocket_server(&self) -> Result<u64, TransportError> {
+        let config = msgtrans::WebSocketConfig::new("127.0.0.1:9003")?
+            .with_path("/echo");
+        self.transport.listen(config).await
     }
 }
 

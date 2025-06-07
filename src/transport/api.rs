@@ -191,37 +191,34 @@ impl Transport {
         self.session_id_generator.fetch_add(1, Ordering::SeqCst)
     }
     
-    /// 基于URI连接到远程服务 (新的模块化API)
-    pub async fn connect(&self, uri: &str) -> Result<SessionId, TransportError> {
-        let connection = self.protocol_registry.create_connection(uri, None).await?;
-        self.add_protocol_connection(connection).await
+    /// 类型安全的连接方法 - 使用配置对象
+    pub async fn connect<C: crate::protocol::adapter::ClientConfig>(&self, config: C) -> Result<SessionId, TransportError> {
+        // 验证配置
+        config.validate()?;
+        
+        // 构建连接
+        let connection = config.build_connection().await?;
+        
+        // 将Connection包装成Box<dyn Connection>
+        let boxed_connection: Box<dyn Connection> = Box::new(connection);
+        
+        // 添加到传输管理器
+        self.add_protocol_connection(boxed_connection).await
     }
     
-    /// 基于URI和配置连接到远程服务
-    pub async fn connect_with_config(
-        &self, 
-        uri: &str, 
-        config: Box<dyn std::any::Any + Send + Sync>
-    ) -> Result<SessionId, TransportError> {
-        let connection = self.protocol_registry.create_connection(uri, Some(config)).await?;
-        self.add_protocol_connection(connection).await
-    }
-    
-    /// 启动协议服务器 (新的模块化API)
-    pub async fn listen(&self, protocol: &str, bind_addr: &str) -> Result<SessionId, TransportError> {
-        let server = self.protocol_registry.create_server(bind_addr, protocol, None).await?;
-        self.add_protocol_server(server).await
-    }
-    
-    /// 启动协议服务器并指定配置
-    pub async fn listen_with_config(
-        &self, 
-        protocol: &str, 
-        bind_addr: &str,
-        config: Box<dyn std::any::Any + Send + Sync>
-    ) -> Result<SessionId, TransportError> {
-        let server = self.protocol_registry.create_server(bind_addr, protocol, Some(config)).await?;
-        self.add_protocol_server(server).await
+    /// 类型安全的监听方法 - 使用配置对象
+    pub async fn listen<C: crate::protocol::adapter::ServerConfig>(&self, config: C) -> Result<SessionId, TransportError> {
+        // 验证配置
+        config.validate()?;
+        
+        // 构建服务器
+        let server = config.build_server().await?;
+        
+        // 将Server包装成Box<dyn Server>
+        let boxed_server: Box<dyn crate::protocol::Server> = Box::new(server);
+        
+        // 添加到传输管理器
+        self.add_protocol_server(boxed_server).await
     }
     
     /// 获取协议注册表的引用

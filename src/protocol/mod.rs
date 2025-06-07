@@ -3,7 +3,13 @@ pub mod protocol;
 pub mod protocol_adapter;
 
 // 重新导出适配器相关类型
-pub use adapter::{ProtocolAdapter, AdapterStats, ProtocolConfig, ConfigError, TcpConfig, WebSocketConfig, QuicConfig};
+pub use adapter::{
+    ProtocolAdapter, ProtocolConfig,
+    TcpConfig, WebSocketConfig, QuicConfig, 
+    ConfigError,
+    ServerConfig, ClientConfig,  // 添加新的traits
+    AdapterStats
+};
 
 // 重新导出协议相关类型
 pub use protocol::{Connection, Server, ProtocolFactory, ProtocolRegistry, BoxFuture, ProtocolSet, StandardProtocols, PluginManager};

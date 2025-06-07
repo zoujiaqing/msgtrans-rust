@@ -24,14 +24,26 @@ pub mod stream;
 pub type SessionId = u64;
 pub type PacketId = u32;
 
-// 重新导出核心类型，用户只需要导入这些
+// 重新导出核心类型
 pub use packet::{Packet, PacketType, PacketError};
-pub use transport::{Transport, TransportBuilder as Builder, ConnectionManager, ServerManager};
+pub use transport::{
+    Transport, 
+    TransportBuilder as Builder, 
+    TransportConfig as Config,
+    GlobalConfig,
+    ConnectionManager, 
+    ServerManager
+};
 pub use event::TransportEvent as Event;
 pub use stream::EventStream;
 pub use error::{TransportError, CloseReason};
-pub use transport::{TransportConfig as Config, GlobalConfig};
 pub use command::{ConnectionInfo, TransportStats};
+
+// 重新导出协议配置和新的traits
+pub use protocol::{
+    TcpConfig, WebSocketConfig, QuicConfig,
+    ServerConfig, ClientConfig,  // 添加新的类型安全traits
+};
 
 // 便捷的类型别名
 pub type Result<T> = std::result::Result<T, TransportError>;
