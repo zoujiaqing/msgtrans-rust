@@ -1,4 +1,4 @@
-/// 多协议Echo服务器 - 支持TCP、WebSocket、QUIC
+/// 修复版多协议Echo服务器 - 使用新的msgtrans API，简化流处理
 use anyhow::Result;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_hdr_async, tungstenite::{self, Message}};
@@ -8,16 +8,14 @@ use std::time::Duration;
 
 // 使用msgtrans的新API
 use msgtrans::{
-    protocol::{QuicConfig, ProtocolAdapter},
+    protocol::QuicConfig,
     adapters::quic::QuicServerBuilder,
-    packet::{Packet, PacketType},
 };
-use bytes::BytesMut;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("🌟 多协议Echo服务器");
-    println!("===================");
+    println!("🌟 修复版多协议Echo服务器");
+    println!("========================");
     
     // 启动TCP Echo服务器 (端口 8001)
     tokio::spawn(async move {
@@ -64,14 +62,14 @@ async fn main() -> Result<()> {
         while let Ok(connection) = server.accept().await {
             let remote_addr = connection.connection_info().peer_addr;
             println!("QUIC 新连接: {}", remote_addr);
-            tokio::spawn(handle_quic_connection(connection));
+            tokio::spawn(handle_quic_connection_raw(connection));
         }
     });
     
     println!("\n🎯 测试方法:");
     println!("   TCP:       cargo run --example echo_client_tcp");
     println!("   WebSocket: cargo run --example echo_client_websocket");
-    println!("   QUIC:      cargo run --example echo_client_quic");
+    println!("   QUIC:      cargo run --example echo_client_quic_fixed");
     println!("   Telnet:    telnet 127.0.0.1 8001");
     println!("\n按 Ctrl+C 停止服务器");
     
@@ -179,16 +177,15 @@ async fn handle_websocket_connection(stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-// 使用新的msgtrans API处理QUIC连接（简化版本，使用原始数据传输）
-async fn handle_quic_connection(connection: msgtrans::adapters::quic::QuicAdapter) -> Result<()> {
+// 使用原始流处理，避免复杂的数据包序列化
+async fn handle_quic_connection_raw(connection: msgtrans::adapters::quic::QuicAdapter) -> Result<()> {
     let remote_addr = connection.connection_info().peer_addr;
     println!("处理 QUIC 连接: {}", remote_addr);
     
-    // 临时解决方案：直接使用底层quinn连接来避免复杂的数据包序列化
-    // 这展示了新API工作，但简化了流处理逻辑
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // 直接访问底层quinn连接来处理流
+    // 注意：这是一个临时解决方案，展示API工作但简化流处理
+    let quinn_connection = &connection.connection;
     
-    let quinn_connection = connection.get_connection();
     while let Ok((mut send, mut recv)) = quinn_connection.accept_bi().await {
         println!("QUIC 新数据流来自: {}", remote_addr);
         
@@ -213,4 +210,4 @@ async fn handle_quic_connection(connection: msgtrans::adapters::quic::QuicAdapte
     
     println!("QUIC 连接 {} 处理结束", remote_addr);
     Ok(())
-}
+} 

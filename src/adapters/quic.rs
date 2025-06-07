@@ -313,6 +313,11 @@ pub struct QuicAdapter {
 }
 
 impl QuicAdapter {
+    /// 获取底层quinn连接（用于高级用法）
+    pub fn get_connection(&self) -> &Connection {
+        &self.connection
+    }
+    
     /// 创建新的QUIC适配器（客户端模式）
     pub fn new(
         config: QuicConfig,
