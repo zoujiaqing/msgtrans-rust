@@ -81,7 +81,7 @@ where
         
         Self {
             stream,
-            session_id: 0,
+            session_id: SessionId::new(0),
             config,
             stats: AdapterStats::new(),
             connection_info,

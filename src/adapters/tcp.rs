@@ -73,7 +73,7 @@ impl TcpAdapter {
         
         Ok(Self {
             stream,
-            session_id: 0, // 将由调用者设置
+            session_id: SessionId::new(0), // 将由调用者设置
             config,
             stats: AdapterStats::new(),
             connection_info,

@@ -216,7 +216,7 @@ impl QuicAdapter {
         connection_info.established_at = std::time::SystemTime::now();
         
         Self {
-            session_id: 0,
+            session_id: SessionId::new(0),
             config,
             stats: AdapterStats::new(),
             connection_info,
@@ -243,7 +243,7 @@ impl QuicAdapter {
         connection_info.established_at = std::time::SystemTime::now();
         
         Self {
-            session_id: 0,
+            session_id: SessionId::new(0),
             config,
             stats: AdapterStats::new(),
             connection_info,

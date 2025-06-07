@@ -78,6 +78,13 @@ pub enum TransportError {
     /// 权限错误
     #[error("Permission denied: {0}")]
     Permission(String),
+    
+    #[error("Transport shutdown")]
+    Shutdown,
+    
+    /// 插件相关错误
+    #[error("Plugin error: {0}")]
+    Plugin(String),
 }
 
 impl Clone for TransportError {
@@ -99,6 +106,8 @@ impl Clone for TransportError {
             TransportError::Timeout => TransportError::Timeout,
             TransportError::Authentication(s) => TransportError::Authentication(s.clone()),
             TransportError::Permission(s) => TransportError::Permission(s.clone()),
+            TransportError::Shutdown => TransportError::Shutdown,
+            TransportError::Plugin(s) => TransportError::Plugin(s.clone()),
         }
     }
 }
@@ -237,6 +246,12 @@ impl ErrorHandler for DefaultErrorHandler {
             TransportError::BroadcastFailed(_) => {
                 RecoveryStrategy::Ignore
             }
+            
+            // 其他错误 - 中止
+            TransportError::Shutdown |
+            TransportError::Plugin(_) => {
+                RecoveryStrategy::Abort
+            }
         }
     }
     
@@ -306,6 +321,9 @@ impl ErrorClassifier {
             TransportError::SessionNotFound |
             TransportError::InvalidSession |
             TransportError::BroadcastFailed(_) => ErrorSeverity::Low,
+            
+            TransportError::Shutdown |
+            TransportError::Plugin(_) => ErrorSeverity::Critical,
         }
     }
 }

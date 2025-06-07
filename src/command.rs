@@ -191,7 +191,7 @@ impl Default for ConnectionInfo {
     fn default() -> Self {
         let now = std::time::SystemTime::now();
         Self {
-            session_id: 0,
+            session_id: SessionId::new(0),
             local_addr: "0.0.0.0:0".parse().unwrap(),
             peer_addr: "0.0.0.0:0".parse().unwrap(),
             protocol: ProtocolType::Tcp,

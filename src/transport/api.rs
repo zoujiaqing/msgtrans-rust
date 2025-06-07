@@ -18,6 +18,19 @@ use crate::{
 };
 use super::config::TransportConfig;
 
+/// 协议信息
+#[derive(Debug, Clone)]
+pub struct ProtocolInfo {
+    /// 协议名称
+    pub name: String,
+    /// 协议描述
+    pub description: String,
+    /// 协议特性
+    pub features: Vec<String>,
+    /// 默认端口
+    pub default_port: Option<u16>,
+}
+
 /// 统一传输接口
 /// 
 /// 这是用户使用的主要接口，提供协议无关的传输功能
@@ -188,7 +201,7 @@ impl Transport {
     
     /// 生成新的会话ID
     fn generate_session_id(&self) -> SessionId {
-        self.session_id_generator.fetch_add(1, Ordering::SeqCst)
+        SessionId::new(self.session_id_generator.fetch_add(1, Ordering::SeqCst))
     }
     
     /// 类型安全的连接方法 - 使用配置对象
@@ -283,6 +296,41 @@ impl Transport {
         });
         
         Ok(session_id)
+    }
+    
+    /// 获取支持的协议列表
+    pub fn supported_protocols() -> Vec<&'static str> {
+        vec!["tcp", "websocket", "quic"]
+    }
+    
+    /// 检查是否支持指定协议
+    pub fn supports_protocol(protocol: &str) -> bool {
+        Self::supported_protocols().contains(&protocol)
+    }
+    
+    /// 获取协议的详细信息
+    pub fn protocol_info(protocol: &str) -> Option<ProtocolInfo> {
+        match protocol {
+            "tcp" => Some(ProtocolInfo {
+                name: "tcp".to_string(),
+                description: "Transmission Control Protocol - reliable, ordered, connection-oriented".to_string(),
+                features: vec!["reliable".to_string(), "ordered".to_string(), "connection-oriented".to_string()],
+                default_port: Some(8080),
+            }),
+            "websocket" => Some(ProtocolInfo {
+                name: "websocket".to_string(),
+                description: "WebSocket Protocol - full-duplex communication over HTTP".to_string(),
+                features: vec!["full-duplex".to_string(), "http-upgrade".to_string(), "frame-based".to_string()],
+                default_port: Some(8080),
+            }),
+            "quic" => Some(ProtocolInfo {
+                name: "quic".to_string(),
+                description: "QUIC Protocol - modern transport with built-in encryption".to_string(),
+                features: vec!["encrypted".to_string(), "multiplexed".to_string(), "low-latency".to_string()],
+                default_port: Some(4433),
+            }),
+            _ => None,
+        }
     }
 }
 

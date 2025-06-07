@@ -181,11 +181,21 @@ impl Default for GlobalConfig {
 impl GlobalConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.max_connections == 0 {
-            return Err(ConfigError::InvalidValue("max_connections must be > 0".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "max_connections".to_string(),
+                value: "0".to_string(),
+                reason: "must be > 0".to_string(),
+                suggestion: "set a positive value like 1000".to_string(),
+            });
         }
         
         if self.buffer_size == 0 {
-            return Err(ConfigError::InvalidValue("buffer_size must be > 0".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "buffer_size".to_string(),
+                value: "0".to_string(),
+                reason: "must be > 0".to_string(),
+                suggestion: "set a positive value like 8192".to_string(),
+            });
         }
         
         Ok(())
@@ -348,12 +358,21 @@ impl ConfigBuilder<TcpConfig> for TcpConfigBuilder {
         let mut builder = Self::default();
         
         if let Ok(addr) = std::env::var("TCP_BIND_ADDRESS") {
-            let addr = addr.parse().map_err(|e| ConfigError::ParseError(format!("Invalid bind address: {}", e)))?;
+            let addr = addr.parse().map_err(|e| ConfigError::InvalidAddress {
+                address: addr.to_string(),
+                reason: format!("Invalid bind address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
             builder = builder.bind_address(addr);
         }
         
         if let Ok(nodelay) = std::env::var("TCP_NODELAY") {
-            let nodelay = nodelay.parse().map_err(|e| ConfigError::ParseError(format!("Invalid nodelay: {}", e)))?;
+            let nodelay = nodelay.parse().map_err(|e| ConfigError::InvalidValue {
+                field: "nodelay".to_string(),
+                value: nodelay.to_string(),
+                reason: format!("Invalid nodelay: {}", e),
+                suggestion: "use 'true' or 'false'".to_string(),
+            })?;
             builder = builder.nodelay(nodelay);
         }
         

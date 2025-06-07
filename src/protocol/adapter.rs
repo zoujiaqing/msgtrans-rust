@@ -117,17 +117,42 @@ pub trait ProtocolConfig: Send + Sync + Clone + std::fmt::Debug + 'static {
     fn merge(self, other: Self) -> Self;
 }
 
-/// 配置错误类型
+/// 协议配置错误
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("Invalid value: {0}")]
-    InvalidValue(String),
+    #[error("Invalid address '{address}': {reason}")]
+    InvalidAddress { 
+        address: String, 
+        reason: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
     
-    #[error("Missing required field: {0}")]
-    MissingField(String),
+    #[error("Invalid port {port}: {reason}\nSuggestion: Use a port between 1 and 65535")]
+    InvalidPort { 
+        port: u32,
+        reason: String,
+    },
     
-    #[error("Parse error: {0}")]
-    ParseError(String),
+    #[error("Missing required field '{field}'\nSuggestion: {suggestion}")]
+    MissingRequiredField { 
+        field: String,
+        suggestion: String,
+    },
+    
+    #[error("Invalid value for '{field}': {value}\nReason: {reason}\nSuggestion: {suggestion}")]
+    InvalidValue { 
+        field: String,
+        value: String,
+        reason: String,
+        suggestion: String,
+    },
+    
+    #[error("File not found: '{path}'\nSuggestion: {suggestion}")]
+    FileNotFound { 
+        path: String,
+        suggestion: String,
+    },
     
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -155,11 +180,21 @@ impl Default for TcpConfig {
 impl ProtocolConfig for TcpConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         if self.read_buffer_size == 0 {
-            return Err(ConfigError::InvalidValue("read_buffer_size must be > 0".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "read_buffer_size".to_string(),
+                value: "0".to_string(),
+                reason: "must be > 0".to_string(),
+                suggestion: "set a positive value".to_string(),
+            });
         }
         
         if self.write_buffer_size == 0 {
-            return Err(ConfigError::InvalidValue("write_buffer_size must be > 0".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "write_buffer_size".to_string(),
+                value: "0".to_string(),
+                reason: "must be > 0".to_string(),
+                suggestion: "set a positive value".to_string(),
+            });
         }
         
         Ok(())
@@ -209,15 +244,23 @@ impl ProtocolConfig for TcpConfig {
 }
 
 impl TcpConfig {
-    /// 创建新的TCP配置
+    /// 创建新的TCP配置，立即验证
     pub fn new(bind_addr: &str) -> Result<Self, ConfigError> {
         let bind_address = bind_addr.parse()
-            .map_err(|e| ConfigError::ParseError(format!("Invalid bind address: {}", e)))?;
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: bind_addr.to_string(),
+                reason: format!("Invalid bind address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
         
-        Ok(Self {
+        let config = Self {
             bind_address,
             ..Self::default()
-        })
+        };
+        
+        // 立即验证 - 使用显式的trait调用
+        ProtocolConfig::validate(&config)?;
+        Ok(config)
     }
     
     /// 设置TCP_NODELAY选项
@@ -260,6 +303,31 @@ impl TcpConfig {
     pub fn with_write_timeout(mut self, timeout: Option<std::time::Duration>) -> Self {
         self.write_timeout = timeout;
         self
+    }
+    
+    /// 创建高性能配置预设
+    pub fn high_performance(bind_addr: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(bind_addr)?
+            .with_nodelay(true)
+            .with_read_buffer_size(65536)
+            .with_write_buffer_size(65536)
+            .with_keepalive(Some(std::time::Duration::from_secs(30))))
+    }
+    
+    /// 创建低延迟配置预设
+    pub fn low_latency(bind_addr: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(bind_addr)?
+            .with_nodelay(true)
+            .with_read_buffer_size(4096)
+            .with_write_buffer_size(4096))
+    }
+    
+    /// 创建高吞吐量配置预设
+    pub fn high_throughput(bind_addr: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(bind_addr)?
+            .with_read_buffer_size(131072)  // 128KB
+            .with_write_buffer_size(131072)
+            .with_keepalive(Some(std::time::Duration::from_secs(60))))
     }
 }
 
@@ -334,15 +402,30 @@ impl Default for WebSocketConfig {
 impl ProtocolConfig for WebSocketConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         if self.max_frame_size == 0 {
-            return Err(ConfigError::InvalidValue("max_frame_size must be > 0".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "max_frame_size".to_string(),
+                value: "0".to_string(),
+                reason: "must be > 0".to_string(),
+                suggestion: "set a positive value".to_string(),
+            });
         }
         
         if self.max_message_size == 0 {
-            return Err(ConfigError::InvalidValue("max_message_size must be > 0".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "max_message_size".to_string(),
+                value: "0".to_string(),
+                reason: "must be > 0".to_string(),
+                suggestion: "set a positive value".to_string(),
+            });
         }
         
         if !self.path.starts_with('/') {
-            return Err(ConfigError::InvalidValue("path must start with '/'".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "path".to_string(),
+                value: format!("\"{}\"", self.path),
+                reason: "must start with '/'".to_string(),
+                suggestion: "use a path like '/ws' or '/api/websocket'".to_string(),
+            });
         }
         
         Ok(())
@@ -387,20 +470,35 @@ impl ProtocolConfig for WebSocketConfig {
 }
 
 impl WebSocketConfig {
-    /// 创建新的WebSocket配置
+    /// 创建新的WebSocket配置，立即验证
     pub fn new(bind_addr: &str) -> Result<Self, ConfigError> {
         let bind_address = bind_addr.parse()
-            .map_err(|e| ConfigError::ParseError(format!("Invalid bind address: {}", e)))?;
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: bind_addr.to_string(),
+                reason: format!("Invalid bind address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
         
-        Ok(Self {
+        let config = Self {
             bind_address,
             ..Self::default()
-        })
+        };
+        
+        // 立即验证 - 使用显式的trait调用
+        ProtocolConfig::validate(&config)?;
+        Ok(config)
     }
     
-    /// 设置WebSocket路径
+    /// 设置WebSocket路径（为了链式调用一致性，改为返回Self）
     pub fn with_path<S: Into<String>>(mut self, path: S) -> Self {
-        self.path = path.into();
+        let path_str = path.into();
+        if !path_str.starts_with('/') {
+            // 对于链式调用，我们使用默认路径，并输出警告而不是报错
+            eprintln!("Warning: WebSocket path '{}' should start with '/', using default '/ws'", path_str);
+            self.path = "/ws".to_string();
+        } else {
+            self.path = path_str;
+        }
         self
     }
     
@@ -509,16 +607,27 @@ impl Default for QuicConfig {
 impl ProtocolConfig for QuicConfig {
     fn validate(&self) -> Result<(), ConfigError> {
         if self.max_concurrent_streams == 0 {
-            return Err(ConfigError::InvalidValue("max_concurrent_streams must be > 0".to_string()));
+            return Err(ConfigError::InvalidValue {
+                field: "max_concurrent_streams".to_string(),
+                value: "0".to_string(),
+                reason: "must be > 0".to_string(),
+                suggestion: "set a positive value".to_string(),
+            });
         }
         
         // 如果提供了证书路径，必须同时提供密钥路径
         match (&self.cert_path, &self.key_path) {
             (Some(_), None) => {
-                return Err(ConfigError::MissingField("key_path is required when cert_path is provided".to_string()));
+                return Err(ConfigError::MissingRequiredField {
+                    field: "key_path".to_string(),
+                    suggestion: "provide a key_path when cert_path is provided".to_string(),
+                });
             }
             (None, Some(_)) => {
-                return Err(ConfigError::MissingField("cert_path is required when key_path is provided".to_string()));
+                return Err(ConfigError::MissingRequiredField {
+                    field: "cert_path".to_string(),
+                    suggestion: "provide a cert_path when key_path is provided".to_string(),
+                });
             }
             _ => {}
         }
@@ -565,15 +674,23 @@ impl ProtocolConfig for QuicConfig {
 }
 
 impl QuicConfig {
-    /// 创建新的QUIC配置
+    /// 创建新的QUIC配置，立即验证
     pub fn new(bind_addr: &str) -> Result<Self, ConfigError> {
         let bind_address = bind_addr.parse()
-            .map_err(|e| ConfigError::ParseError(format!("Invalid bind address: {}", e)))?;
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: bind_addr.to_string(),
+                reason: format!("Invalid bind address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
         
-        Ok(Self {
+        let config = Self {
             bind_address,
             ..Self::default()
-        })
+        };
+        
+        // 立即验证 - 使用显式的trait调用
+        ProtocolConfig::validate(&config)?;
+        Ok(config)
     }
     
     /// 设置证书文件路径

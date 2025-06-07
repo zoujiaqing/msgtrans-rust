@@ -46,21 +46,5 @@ tracing-subscriber = "0.3"
 toml = "0.8"
 
 [[example]]
-name = "echo_server"
-path = "examples/echo_server.rs"
-
-[[example]]
-name = "echo_client_tcp"
-path = "examples/echo_client_tcp.rs"
-
-[[example]]
-name = "echo_client_websocket"
-path = "examples/echo_client_websocket.rs"
-
-[[example]]
-name = "echo_client_quic"
-path = "examples/echo_client_quic.rs"
-
-[[example]]
 name = "packet"
 path = "examples/packet.rs"
