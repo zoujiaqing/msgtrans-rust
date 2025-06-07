@@ -175,6 +175,118 @@ fn gen_cert() -> (CertificateDer<'static>, PrivatePkcs8KeyDer<'static>) {
     )
 }
 
+/// 配置QUIC服务器（支持PEM内容或自动生成自签名证书）
+pub fn configure_server_with_config(config: &QuicConfig) -> Result<(ServerConfig, Option<CertificateDer<'static>>), QuicError> {
+    match (&config.cert_pem, &config.key_pem) {
+        (Some(cert_pem), Some(key_pem)) => {
+            // 使用提供的PEM证书
+            configure_server_with_pem_content(cert_pem, key_pem)
+        }
+        (None, None) => {
+            // 自动生成自签名证书
+            let (server_config, cert) = configure_server(1500 * 100);
+            Ok((server_config, Some(cert)))
+        }
+        _ => {
+            // 不匹配的配置（验证阶段应该已经捕获）
+            Err(QuicError::Certificate("证书和密钥必须同时提供或都不提供".to_string()))
+        }
+    }
+}
+
+/// 配置QUIC服务器（使用PEM内容）
+pub fn configure_server_with_pem_content(
+    cert_pem: &str,
+    key_pem: &str,
+) -> Result<(ServerConfig, Option<CertificateDer<'static>>), QuicError> {
+    // 解析私钥
+    let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
+        .map_err(|e| QuicError::Certificate(format!("解析私钥失败: {}", e)))?
+        .ok_or_else(|| QuicError::Certificate("PEM中未找到私钥".to_string()))?;
+
+    // 解析证书链
+    let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem)).collect();
+    let certs = certs.map_err(|e| QuicError::Certificate(format!("解析证书失败: {}", e)))?;
+    
+    if certs.is_empty() {
+        return Err(QuicError::Certificate("PEM中未找到证书".to_string()));
+    }
+
+    // 创建服务器TLS配置
+    let server_crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs.clone(), key)
+        .map_err(|e| QuicError::Certificate(format!("TLS配置错误: {}", e)))?;
+    
+    // 创建QUIC服务器配置
+    let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
+        .map_err(|e| QuicError::Certificate(format!("QUIC配置错误: {}", e)))?;
+    
+    let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+    
+    // 配置传输参数
+    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+    transport_config.receive_window((1500u32 * 100).into());
+    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+    
+    // 返回第一个证书用于客户端验证（如果需要）
+    let first_cert = if certs.is_empty() { None } else { Some(certs[0].clone()) };
+    
+    Ok((server_config, first_cert))
+}
+
+/// 配置QUIC客户端（支持安全和非安全模式）
+pub fn configure_client_with_config(config: &QuicConfig) -> ClientConfig {
+    match (&config.cert_pem, &config.key_pem) {
+        (Some(cert_pem), Some(_key_pem)) => {
+            // 使用提供的证书进行服务器验证
+            configure_client_with_pem_content(cert_pem)
+        }
+        _ => {
+            // 非安全模式（跳过证书验证）
+            configure_client_insecure()
+        }
+    }
+}
+
+/// 配置QUIC客户端（使用PEM证书进行服务器验证）
+pub fn configure_client_with_pem_content(cert_pem: &str) -> ClientConfig {
+    // 解析证书链
+    let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem)).collect();
+    let certs = match certs {
+        Ok(certs) if !certs.is_empty() => certs,
+        _ => return configure_client_insecure(), // 解析失败时回退到非安全模式
+    };
+    
+    // 配置信任存储
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in certs {
+        if roots.add(cert).is_err() {
+            return configure_client_insecure(); // 添加失败时回退到非安全模式
+        }
+    }
+    
+    // 创建客户端TLS配置
+    let client_crypto = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    
+    // 创建QUIC客户端配置
+    let quic_client_config = match quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto) {
+        Ok(config) => config,
+        Err(_) => return configure_client_insecure(), // 配置失败时回退到非安全模式
+    };
+    
+    let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
+    
+    // 配置传输参数
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+    client_config.transport_config(Arc::new(transport_config));
+    
+    client_config
+}
+
 /// QUIC协议适配器
 /// 
 /// 使用真正的quinn库实现QUIC连接
@@ -262,8 +374,8 @@ impl QuicAdapter {
     ) -> Result<Self, QuicError> {
         tracing::debug!("🔌 QUIC客户端连接到: {}", addr);
         
-        // 创建客户端配置
-        let client_config = configure_client_insecure();
+        // 使用新的配置函数（支持安全和非安全模式）
+        let client_config = configure_client_with_config(&config);
         
         // 创建endpoint
         let local_addr = "0.0.0.0:0".parse().unwrap();
@@ -505,8 +617,8 @@ impl QuicServerBuilder {
     pub async fn build(self) -> Result<QuicServer, QuicError> {
         let bind_addr = self.bind_address.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap());
         
-        // 配置服务器
-        let (server_config, _) = configure_server(1500 * 100);
+        // 使用新的配置函数（支持PEM内容或自动生成自签名证书）
+        let (server_config, _) = configure_server_with_config(&self.config)?;
         
         // 创建endpoint
         let endpoint = Endpoint::server(server_config, bind_addr)?;

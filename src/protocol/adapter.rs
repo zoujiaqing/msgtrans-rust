@@ -590,8 +590,10 @@ impl ClientConfig for WebSocketConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct QuicConfig {
     pub bind_address: std::net::SocketAddr,
-    pub cert_path: Option<String>,
-    pub key_path: Option<String>,
+    /// TLS证书的PEM内容（可选，如果为None则自动生成自签名证书）
+    pub cert_pem: Option<String>,
+    /// TLS私钥的PEM内容（可选，如果为None则自动生成自签名证书）
+    pub key_pem: Option<String>,
     pub max_concurrent_streams: u64,
     pub max_idle_timeout: std::time::Duration,
     pub keep_alive_interval: Option<std::time::Duration>,
@@ -615,18 +617,18 @@ impl ProtocolConfig for QuicConfig {
             });
         }
         
-        // 如果提供了证书路径，必须同时提供密钥路径
-        match (&self.cert_path, &self.key_path) {
+        // 如果提供了证书PEM，必须同时提供密钥PEM
+        match (&self.cert_pem, &self.key_pem) {
             (Some(_), None) => {
                 return Err(ConfigError::MissingRequiredField {
-                    field: "key_path".to_string(),
-                    suggestion: "provide a key_path when cert_path is provided".to_string(),
+                    field: "key_pem".to_string(),
+                    suggestion: "provide a key_pem when cert_pem is provided".to_string(),
                 });
             }
             (None, Some(_)) => {
                 return Err(ConfigError::MissingRequiredField {
-                    field: "cert_path".to_string(),
-                    suggestion: "provide a cert_path when key_path is provided".to_string(),
+                    field: "cert_pem".to_string(),
+                    suggestion: "provide a cert_pem when key_pem is provided".to_string(),
                 });
             }
             _ => {}
@@ -638,8 +640,8 @@ impl ProtocolConfig for QuicConfig {
     fn default_config() -> Self {
         Self {
             bind_address: "0.0.0.0:0".parse().unwrap(),
-            cert_path: None,
-            key_path: None,
+            cert_pem: None,
+            key_pem: None,
             max_concurrent_streams: 100,
             max_idle_timeout: std::time::Duration::from_secs(30),
             keep_alive_interval: Some(std::time::Duration::from_secs(15)),
@@ -651,11 +653,11 @@ impl ProtocolConfig for QuicConfig {
         if other.bind_address.port() != 0 {
             self.bind_address = other.bind_address;
         }
-        if other.cert_path.is_some() {
-            self.cert_path = other.cert_path;
+        if other.cert_pem.is_some() {
+            self.cert_pem = other.cert_pem;
         }
-        if other.key_path.is_some() {
-            self.key_path = other.key_path;
+        if other.key_pem.is_some() {
+            self.key_pem = other.key_pem;
         }
         if other.max_concurrent_streams != 100 {
             self.max_concurrent_streams = other.max_concurrent_streams;
@@ -693,15 +695,22 @@ impl QuicConfig {
         Ok(config)
     }
     
-    /// 设置证书文件路径
-    pub fn with_cert_file<S: Into<String>>(mut self, cert_file: S) -> Self {
-        self.cert_path = Some(cert_file.into());
+    /// 设置证书PEM内容
+    pub fn with_cert_pem<S: Into<String>>(mut self, cert_pem: S) -> Self {
+        self.cert_pem = Some(cert_pem.into());
         self
     }
     
-    /// 设置私钥文件路径
-    pub fn with_key_file<S: Into<String>>(mut self, key_file: S) -> Self {
-        self.key_path = Some(key_file.into());
+    /// 设置私钥PEM内容
+    pub fn with_key_pem<S: Into<String>>(mut self, key_pem: S) -> Self {
+        self.key_pem = Some(key_pem.into());
+        self
+    }
+    
+    /// 同时设置证书和私钥PEM内容（安全模式）
+    pub fn with_tls_cert<S1: Into<String>, S2: Into<String>>(mut self, cert_pem: S1, key_pem: S2) -> Self {
+        self.cert_pem = Some(cert_pem.into());
+        self.key_pem = Some(key_pem.into());
         self
     }
     

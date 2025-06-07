@@ -1,103 +1,133 @@
 /// QUIC Echo客户端 - 连接到Echo服务器进行测试
 use std::time::Duration;
-use tokio::time::sleep;
-use futures::StreamExt;
+use anyhow::Result;
+use quinn::{Endpoint, Connection};
+use std::net::SocketAddr;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::{pki_types::{CertificateDer, ServerName, UnixTime}, SignatureScheme, DigitallySignedStruct};
+use std::sync::Arc;
+use std::convert::TryInto;
 
-use msgtrans::{
-    Builder, Config, Event, Packet,
-    protocol::adapter::QuicConfig,
-};
+
+
+// 自定义证书验证器，跳过服务器证书验证
+#[derive(Debug)]
+struct SkipServerVerification;
+
+impl ServerCertVerifier for SkipServerVerification {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA256,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::ED25519,
+        ]
+    }
+}
+
+// 配置QUIC客户端（非安全模式）
+fn configure_quic_client_insecure() -> quinn::ClientConfig {
+    let crypto = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+        .with_no_client_auth();
+
+    let mut client_config = quinn::ClientConfig::new(
+        Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap())
+    );
+    
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+    client_config.transport_config(Arc::new(transport_config));
+    
+    client_config
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 初始化TLS加密提供者（QUIC需要）
-    rustls::crypto::aws_lc_rs::default_provider()
+async fn main() -> Result<()> {
+    // 安装默认的crypto provider
+    rustls::crypto::ring::default_provider()
         .install_default()
-        .map_err(|_| "Failed to install crypto provider")?;
+        .map_err(|_| anyhow::anyhow!("Failed to install crypto provider"))?;
     
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
-        .init();
+    println!("🔧 QUIC Echo 客户端启动...");
     
-    println!("🌟 msgtrans QUIC Echo客户端");
-    println!("=========================");
-    
-    let config = Config::default();
-    let transport = Builder::new().config(config).build().await?;
+    // 配置客户端
+    let config = configure_quic_client_insecure();
+    let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 0)))?;
+    endpoint.set_default_client_config(config);
     
     // 连接到服务器
-    println!("🔌 连接到QUIC Echo服务器: 127.0.0.1:8003");
-    let quic_config = QuicConfig::new("127.0.0.1:8003")?
-        .with_max_idle_timeout(Duration::from_secs(30))
-        .with_keep_alive_interval(Some(Duration::from_secs(10)))
-        .with_max_concurrent_streams(10);
+    let server_addr: SocketAddr = "127.0.0.1:8003".parse()?;
+    println!("🌐 连接到服务器: {}", server_addr);
     
-    match transport.connect(quic_config).await {
-        Ok(session_id) => {
-            println!("✅ QUIC连接建立成功 (SessionId: {})", session_id);
-            
-            // 启动事件监听
-            let mut events = transport.events();
-            let transport_clone = transport.clone();
-            
-            tokio::spawn(async move {
-                while let Some(event) = events.next().await {
-                    match event {
-                        Event::MessageReceived { session_id, packet } => {
-                            println!("📨 收到QUIC回显 (会话{}):", session_id);
-                            if let Some(content) = packet.payload_as_string() {
-                                println!("   内容: \"{}\"", content);
-                            }
-                            println!("   ✅ QUIC回显接收成功");
-                        }
-                        Event::ConnectionClosed { session_id, reason } => {
-                            println!("❌ QUIC连接关闭: 会话{}, 原因: {:?}", session_id, reason);
-                        }
-                        _ => {}
-                    }
-                }
-            });
-            
-            // 发送测试消息
-            let test_messages = vec![
-                "Hello, QUIC Echo Server!",
-                "QUIC中文测试消息",
-                "QUIC high-performance message",
-                "QUIC with low latency: 🚀",
-            ];
-            
-            for (i, message) in test_messages.iter().enumerate() {
-                let packet = Packet::data((i + 1) as u32, message.as_bytes());
-                
-                println!("📤 发送QUIC消息 #{}: \"{}\"", i + 1, message);
-                
-                match transport_clone.send_to_session(session_id, packet).await {
-                    Ok(()) => println!("   ✅ QUIC发送成功"),
-                    Err(e) => println!("   ❌ QUIC发送失败: {:?}", e),
-                }
-                
-                sleep(Duration::from_millis(500)).await;
-            }
-            
-            // 等待响应
-            println!("\n⏳ 等待QUIC服务器回显...");
-            sleep(Duration::from_secs(2)).await;
-            
-            println!("\n🎉 QUIC Echo测试完成！");
-            println!("💡 QUIC特性:");
-            println!("   🚀 低延迟连接建立");
-            println!("   🔒 内置TLS加密");
-            println!("   🌊 多路复用流");
-            println!("   📦 高效数据传输");
-        }
-        Err(e) => {
-            println!("❌ QUIC连接失败: {:?}", e);
-            println!("💡 提示:");
-            println!("   1. 请先启动Echo服务器: cargo run --example echo_server");
-            println!("   2. QUIC需要TLS证书，服务器可能使用自签名证书");
-            println!("   3. 某些网络环境可能阻止QUIC协议");
-        }
+    let connection = endpoint.connect(server_addr, "localhost")?.await?;
+    println!("✅ 已连接到 QUIC 服务器");
+    
+    // 发送消息并接收回显
+    let message = "Hello from QUIC client!";
+    let echo = send_and_receive_echo(&connection, message).await?;
+    
+    println!("📤 发送: {}", message);
+    println!("📥 回显: {}", echo);
+    
+    // 多次测试
+    for i in 1..=3 {
+        let test_message = format!("Test message #{}", i);
+        let echo = send_and_receive_echo(&connection, &test_message).await?;
+        println!("📤 发送: {}", test_message);
+        println!("📥 回显: {}", echo);
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
     
+    println!("🎯 QUIC 客户端测试完成");
+    
     Ok(())
+}
+
+async fn send_and_receive_echo(connection: &Connection, message: &str) -> Result<String> {
+    // 打开双向流
+    let (mut send, mut recv) = connection.open_bi().await?;
+    
+    // 发送消息
+    send.write_all(message.as_bytes()).await?;
+    send.flush().await?;
+    
+    // 接收回显
+    let mut buffer = [0u8; 1024];
+    let len = recv.read(&mut buffer).await?
+        .ok_or_else(|| anyhow::anyhow!("接收回显失败"))?;
+    
+    let echo = String::from_utf8_lossy(&buffer[..len]).to_string();
+    Ok(echo)
 } 
