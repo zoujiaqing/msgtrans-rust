@@ -372,6 +372,9 @@ impl QuicAdapter {
         addr: std::net::SocketAddr,
         config: QuicConfig,
     ) -> Result<Self, QuicError> {
+        // 确保crypto provider已安装
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        
         tracing::debug!("🔌 QUIC客户端连接到: {}", addr);
         
         // 使用新的配置函数（支持安全和非安全模式）
@@ -615,7 +618,11 @@ impl QuicServerBuilder {
     
     /// 构建服务器
     pub async fn build(self) -> Result<QuicServer, QuicError> {
-        let bind_addr = self.bind_address.unwrap_or_else(|| "127.0.0.1:0".parse().unwrap());
+        // 确保crypto provider已安装
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        
+        // 优先使用显式设置的bind_address，其次使用config中的bind_address
+        let bind_addr = self.bind_address.unwrap_or(self.config.bind_address);
         
         // 使用新的配置函数（支持PEM内容或自动生成自签名证书）
         let (server_config, _) = configure_server_with_config(&self.config)?;

@@ -1,4 +1,4 @@
-/// 多协议Echo服务器 - 支持TCP、WebSocket、QUIC
+/// 简化的多协议Echo服务器 - 直接使用quinn API
 use anyhow::Result;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_hdr_async, tungstenite::{self, Message}};
@@ -6,18 +6,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use futures::{SinkExt, StreamExt};
 use std::time::Duration;
 
-// 使用msgtrans的新API
-use msgtrans::{
-    protocol::{QuicConfig, ProtocolAdapter},
-    adapters::quic::QuicServerBuilder,
-    packet::{Packet, PacketType},
-};
-use bytes::BytesMut;
+// 直接使用quinn API
+use quinn::{Endpoint, Connection};
+use std::convert::TryInto;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("🌟 多协议Echo服务器");
-    println!("===================");
+    // 安装crypto provider
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .map_err(|_| anyhow::anyhow!("Failed to install crypto provider"))?;
+
+    println!("🌟 简化的多协议Echo服务器");
+    println!("========================");
     
     // 启动TCP Echo服务器 (端口 8001)
     tokio::spawn(async move {
@@ -43,35 +44,33 @@ async fn main() -> Result<()> {
         }
     });
     
-    // 启动QUIC Echo服务器 (端口 8003) - 使用新的msgtrans API
+    // 启动QUIC Echo服务器 (端口 8003) - 使用直接的quinn API
     tokio::spawn(async move {
         println!("启动 QUIC Echo 服务器，监听端口 8003...");
         
-        // 使用新的QuicConfig API，自动生成自签名证书
-        let config = QuicConfig::new("127.0.0.1:8003")
-            .unwrap()
-            .with_max_idle_timeout(Duration::from_secs(30))
-            .with_max_concurrent_streams(100);
+        // 使用自签名证书配置
+        let (server_config, _) = configure_server_insecure();
+        let endpoint = Endpoint::server(server_config, "127.0.0.1:8003".parse().unwrap()).unwrap();
         
-        let mut server = QuicServerBuilder::new()
-            .config(config)
-            .build()
-            .await
-            .unwrap();
+        println!("✅ QUIC服务器启动成功: {}", endpoint.local_addr().unwrap());
         
-        println!("✅ QUIC服务器启动成功: {}", server.local_addr().unwrap());
-        
-        while let Ok(connection) = server.accept().await {
-            let remote_addr = connection.connection_info().peer_addr;
-            println!("QUIC 新连接: {}", remote_addr);
-            tokio::spawn(handle_quic_connection(connection));
+        while let Some(incoming) = endpoint.accept().await {
+            match incoming.await {
+                Ok(connection) => {
+                    println!("QUIC 新连接: {}", connection.remote_address());
+                    tokio::spawn(handle_quic_connection(connection));
+                },
+                Err(e) => {
+                    eprintln!("QUIC 连接失败: {}", e);
+                }
+            }
         }
     });
     
     println!("\n🎯 测试方法:");
     println!("   TCP:       cargo run --example echo_client_tcp");
     println!("   WebSocket: cargo run --example echo_client_websocket");
-    println!("   QUIC:      cargo run --example echo_client_quic");
+    println!("   QUIC:      cargo run --example echo_client_quic_simple");
     println!("   Telnet:    telnet 127.0.0.1 8001");
     println!("\n按 Ctrl+C 停止服务器");
     
@@ -179,44 +178,49 @@ async fn handle_websocket_connection(stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
-// 使用新的msgtrans API处理QUIC连接
-async fn handle_quic_connection(mut connection: msgtrans::adapters::quic::QuicAdapter) -> Result<()> {
-    let remote_addr = connection.connection_info().peer_addr;
+// 直接使用quinn API处理QUIC连接
+async fn handle_quic_connection(connection: Connection) -> Result<()> {
+    let remote_addr = connection.remote_address();
     println!("处理 QUIC 连接: {}", remote_addr);
     
-    // 处理消息循环
-    loop {
-        match connection.receive().await {
-            Ok(Some(packet)) => {
-                let message = String::from_utf8_lossy(&packet.payload);
-                println!("QUIC 收到来自 {}: {}", remote_addr, message);
-                
-                // 创建回显包
-                let echo_packet = Packet {
-                    packet_type: PacketType::Data,
-                    message_id: packet.message_id,
-                    payload: packet.payload, // 直接回显原始数据
-                };
-                
-                // 发送回显
-                if let Err(e) = connection.send(echo_packet).await {
-                    eprintln!("QUIC 发送失败: {}", e);
-                    break;
-                }
-                
-                println!("QUIC 已回显给: {}", remote_addr);
-            }
-            Ok(None) => {
-                println!("QUIC 连接 {} 已关闭", remote_addr);
+    while let Ok((mut send, mut recv)) = connection.accept_bi().await {
+        println!("QUIC 新数据流来自: {}", remote_addr);
+        
+        let mut buffer = [0u8; 1024];
+        while let Ok(Some(len)) = recv.read(&mut buffer).await {
+            let message = &buffer[..len];
+            let text = String::from_utf8_lossy(message);
+            println!("QUIC 收到来自 {}: {}", remote_addr, text);
+            
+            // 发送回显
+            if let Err(e) = send.write_all(message).await {
+                eprintln!("QUIC 发送失败: {}", e);
                 break;
             }
-            Err(e) => {
-                eprintln!("QUIC 接收错误: {}", e);
+            if let Err(e) = send.flush().await {
+                eprintln!("QUIC 刷新失败: {}", e);
                 break;
             }
+            println!("QUIC 已回显给 {}: {} 字节", remote_addr, len);
         }
     }
     
-    println!("QUIC 连接 {} 处理结束", remote_addr);
+    println!("QUIC 连接关闭: {}", remote_addr);
     Ok(())
 }
+
+// 配置QUIC服务器（非安全模式）
+fn configure_server_insecure() -> (quinn::ServerConfig, rustls::pki_types::CertificateDer<'static>) {
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    let cert_der = cert.cert.der().clone();
+    let key_der = rustls::pki_types::PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der());
+    
+    let mut server_config = quinn::ServerConfig::with_single_cert(vec![cert_der.clone()], key_der.into()).unwrap();
+    
+    // 配置传输参数
+    let transport_config = std::sync::Arc::get_mut(&mut server_config.transport).unwrap();
+    transport_config.receive_window((1500u32 * 100).into());
+    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+    
+    (server_config, cert_der)
+} 
