@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::{io, sync::Arc, time::Duration};
 use bytes::BytesMut;
-use quinn::{Endpoint, Connection, ClientConfig, ServerConfig, RecvStream, SendStream};
+use quinn::{Endpoint, Connection, ClientConfig, ServerConfig, SendStream};
 use rustls::{
     pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
@@ -115,7 +115,7 @@ impl ServerCertVerifier for SkipServerVerification {
 }
 
 /// 配置不安全的QUIC客户端（跳过证书验证）
-pub fn configure_client_insecure() -> ClientConfig {
+pub(crate) fn configure_client_insecure() -> ClientConfig {
     let crypto = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
@@ -136,7 +136,7 @@ pub fn configure_client_insecure() -> ClientConfig {
 static mut CERT: Option<(Vec<u8>, Vec<u8>)> = None;
 
 /// 配置QUIC服务器（自签名证书）
-pub fn configure_server(recv_window_size: u32) -> (ServerConfig, CertificateDer<'static>) {
+pub(crate) fn configure_server(recv_window_size: u32) -> (ServerConfig, CertificateDer<'static>) {
     
     // 使用静态变量存储证书，确保每次生成相同的证书
     let (our_cert, our_priv_key) = unsafe {
@@ -176,7 +176,7 @@ fn gen_cert() -> (CertificateDer<'static>, PrivatePkcs8KeyDer<'static>) {
 }
 
 /// 配置QUIC服务器（支持PEM内容或自动生成自签名证书）
-pub fn configure_server_with_config(config: &QuicConfig) -> Result<(ServerConfig, Option<CertificateDer<'static>>), QuicError> {
+pub(crate) fn configure_server_with_config(config: &QuicConfig) -> Result<(ServerConfig, Option<CertificateDer<'static>>), QuicError> {
     match (&config.cert_pem, &config.key_pem) {
         (Some(cert_pem), Some(key_pem)) => {
             // 使用提供的PEM证书
@@ -195,7 +195,7 @@ pub fn configure_server_with_config(config: &QuicConfig) -> Result<(ServerConfig
 }
 
 /// 配置QUIC服务器（使用PEM内容）
-pub fn configure_server_with_pem_content(
+pub(crate) fn configure_server_with_pem_content(
     cert_pem: &str,
     key_pem: &str,
 ) -> Result<(ServerConfig, Option<CertificateDer<'static>>), QuicError> {
@@ -236,7 +236,7 @@ pub fn configure_server_with_pem_content(
 }
 
 /// 配置QUIC客户端（支持安全和非安全模式）
-pub fn configure_client_with_config(config: &QuicConfig) -> ClientConfig {
+pub(crate) fn configure_client_with_config(config: &QuicConfig) -> ClientConfig {
     match (&config.cert_pem, &config.key_pem) {
         (Some(cert_pem), Some(_key_pem)) => {
             // 使用提供的证书进行服务器验证
@@ -250,7 +250,7 @@ pub fn configure_client_with_config(config: &QuicConfig) -> ClientConfig {
 }
 
 /// 配置QUIC客户端（使用PEM证书进行服务器验证）
-pub fn configure_client_with_pem_content(cert_pem: &str) -> ClientConfig {
+pub(crate) fn configure_client_with_pem_content(cert_pem: &str) -> ClientConfig {
     // 解析证书链
     let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem)).collect();
     let certs = match certs {
@@ -304,17 +304,13 @@ pub struct QuicAdapter {
     connection: Connection,
     /// 发送流
     send_stream: Option<SendStream>,
-    /// 接收流
-    recv_stream: Option<RecvStream>,
     /// 连接状态
     is_connected: bool,
-    /// 是否为客户端模式
-    is_client: bool,
 }
 
 impl QuicAdapter {
     /// 创建新的QUIC适配器（客户端模式）
-    pub fn new(
+    pub(crate) fn new(
         config: QuicConfig,
         connection: Connection,
         local_addr: std::net::SocketAddr,
@@ -334,14 +330,12 @@ impl QuicAdapter {
             connection_info,
             connection,
             send_stream: None,
-            recv_stream: None,
             is_connected: true,
-            is_client: true, // 默认为客户端模式
         }
     }
     
     /// 创建新的QUIC适配器（服务器端模式）
-    pub fn new_server(
+    pub(crate) fn new_server(
         config: QuicConfig,
         connection: Connection,
         local_addr: std::net::SocketAddr,
@@ -361,14 +355,12 @@ impl QuicAdapter {
             connection_info,
             connection,
             send_stream: None,
-            recv_stream: None,
             is_connected: true,
-            is_client: false, // 服务器端模式
         }
     }
     
-    /// 连接到QUIC服务器
-    pub async fn connect(
+    /// 连接到QUIC服务器（内部使用）
+    pub(crate) async fn connect(
         addr: std::net::SocketAddr,
         config: QuicConfig,
     ) -> Result<Self, QuicError> {
@@ -524,15 +516,15 @@ impl ProtocolAdapter for QuicAdapter {
     }
 }
 
-/// QUIC服务器构建器
-pub struct QuicServerBuilder {
+/// QUIC服务器构建器（内部使用）
+pub(crate) struct QuicServerBuilder {
     config: QuicConfig,
     bind_address: Option<std::net::SocketAddr>,
 }
 
 impl QuicServerBuilder {
     /// 创建新的服务器构建器
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             config: QuicConfig::default(),
             bind_address: None,
@@ -540,19 +532,19 @@ impl QuicServerBuilder {
     }
     
     /// 设置绑定地址
-    pub fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.bind_address = Some(addr);
         self
     }
     
     /// 设置配置
-    pub fn config(mut self, config: QuicConfig) -> Self {
+    pub(crate) fn config(mut self, config: QuicConfig) -> Self {
         self.config = config;
         self
     }
     
     /// 构建服务器
-    pub async fn build(self) -> Result<QuicServer, QuicError> {
+    pub(crate) async fn build(self) -> Result<QuicServer, QuicError> {
         // 确保crypto provider已安装
         let _ = rustls::crypto::ring::default_provider().install_default();
         
@@ -580,20 +572,17 @@ impl Default for QuicServerBuilder {
     }
 }
 
-/// QUIC服务器
-pub struct QuicServer {
+/// QUIC服务器（内部使用）
+pub(crate) struct QuicServer {
     endpoint: Endpoint,
     config: QuicConfig,
 }
 
 impl QuicServer {
-    /// 创建服务器构建器
-    pub fn builder() -> QuicServerBuilder {
-        QuicServerBuilder::new()
-    }
+
     
     /// 接受新连接
-    pub async fn accept(&mut self) -> Result<QuicAdapter, QuicError> {
+    pub(crate) async fn accept(&mut self) -> Result<QuicAdapter, QuicError> {
         if let Some(incoming) = self.endpoint.accept().await {
             let connection = incoming.await?;
             let local_addr = self.endpoint.local_addr()?;
@@ -608,20 +597,20 @@ impl QuicServer {
     }
     
     /// 获取本地地址
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr, QuicError> {
+    pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, QuicError> {
         Ok(self.endpoint.local_addr()?)
     }
 }
 
-/// QUIC客户端构建器
-pub struct QuicClientBuilder {
+/// QUIC客户端构建器（内部使用）
+pub(crate) struct QuicClientBuilder {
     config: QuicConfig,
     target_address: Option<std::net::SocketAddr>,
 }
 
 impl QuicClientBuilder {
     /// 创建新的客户端构建器
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             config: QuicConfig::default(),
             target_address: None,
@@ -629,19 +618,19 @@ impl QuicClientBuilder {
     }
     
     /// 设置目标地址
-    pub fn target_address(mut self, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn target_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.target_address = Some(addr);
         self
     }
     
     /// 设置配置
-    pub fn config(mut self, config: QuicConfig) -> Self {
+    pub(crate) fn config(mut self, config: QuicConfig) -> Self {
         self.config = config;
         self
     }
     
     /// 连接到服务器
-    pub async fn connect(self) -> Result<QuicAdapter, QuicError> {
+    pub(crate) async fn connect(self) -> Result<QuicAdapter, QuicError> {
         let target_addr = self.target_address.ok_or_else(|| {
             QuicError::Connection("No target address specified".to_string())
         })?;

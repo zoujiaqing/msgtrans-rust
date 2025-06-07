@@ -264,15 +264,15 @@ impl ProtocolAdapter for TcpAdapter {
     }
 }
 
-/// TCP服务器构建器
-pub struct TcpServerBuilder {
+/// TCP服务器构建器（内部使用）
+pub(crate) struct TcpServerBuilder {
     config: TcpConfig,
     bind_address: Option<std::net::SocketAddr>,
 }
 
 impl TcpServerBuilder {
-    /// 创建新的TCP服务器构建器
-    pub fn new() -> Self {
+    /// 创建新的服务器构建器
+    pub(crate) fn new() -> Self {
         Self {
             config: TcpConfig::default(),
             bind_address: None,
@@ -280,27 +280,26 @@ impl TcpServerBuilder {
     }
     
     /// 设置绑定地址
-    pub fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.bind_address = Some(addr);
-        self.config.bind_address = addr;
         self
     }
     
     /// 设置配置
-    pub fn config(mut self, config: TcpConfig) -> Self {
-        if let Some(addr) = self.bind_address {
-            self.config = config;
-            self.config.bind_address = addr;
-        } else {
-            self.config = config;
-        }
+    pub(crate) fn config(mut self, config: TcpConfig) -> Self {
+        self.config = config;
         self
     }
     
-    /// 启动TCP服务器
-    pub async fn build(self) -> Result<TcpServer, TcpError> {
+    /// 构建服务器
+    pub(crate) async fn build(self) -> Result<TcpServer, TcpError> {
         let bind_addr = self.bind_address.unwrap_or(self.config.bind_address);
-        let listener = tokio::net::TcpListener::bind(bind_addr).await.map_err(TcpError::Io)?;
+        
+        tracing::debug!("🚀 TCP服务器启动在: {}", bind_addr);
+        
+        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+        
+        tracing::info!("✅ TCP服务器成功启动在: {}", listener.local_addr()?);
         
         Ok(TcpServer {
             listener,
@@ -315,39 +314,48 @@ impl Default for TcpServerBuilder {
     }
 }
 
-/// TCP服务器
-pub struct TcpServer {
+/// TCP服务器（内部使用）
+pub(crate) struct TcpServer {
     listener: tokio::net::TcpListener,
     config: TcpConfig,
 }
 
 impl TcpServer {
     /// 创建服务器构建器
-    pub fn builder() -> TcpServerBuilder {
+    pub(crate) fn builder() -> TcpServerBuilder {
         TcpServerBuilder::new()
     }
     
     /// 接受新连接
-    pub async fn accept(&mut self) -> Result<TcpAdapter, TcpError> {
-        let (stream, _) = self.listener.accept().await.map_err(TcpError::Io)?;
+    pub(crate) async fn accept(&mut self) -> Result<TcpAdapter, TcpError> {
+        let (stream, peer_addr) = self.listener.accept().await?;
+        let local_addr = self.listener.local_addr()?;
+        
+        // 应用TCP配置
+        if let Err(e) = stream.set_nodelay(self.config.nodelay) {
+            tracing::warn!("无法设置TCP_NODELAY: {}", e);
+        }
+        
+        tracing::debug!("🔗 TCP新连接来自: {}", peer_addr);
+        
         TcpAdapter::new(stream, self.config.clone()).await
     }
     
     /// 获取本地地址
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr, TcpError> {
-        self.listener.local_addr().map_err(TcpError::Io)
+    pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, TcpError> {
+        Ok(self.listener.local_addr()?)
     }
 }
 
-/// TCP客户端构建器
-pub struct TcpClientBuilder {
+/// TCP客户端构建器（内部使用）
+pub(crate) struct TcpClientBuilder {
     config: TcpConfig,
     target_address: Option<std::net::SocketAddr>,
 }
 
 impl TcpClientBuilder {
-    /// 创建新的TCP客户端构建器
-    pub fn new() -> Self {
+    /// 创建新的客户端构建器
+    pub(crate) fn new() -> Self {
         Self {
             config: TcpConfig::default(),
             target_address: None,
@@ -355,21 +363,22 @@ impl TcpClientBuilder {
     }
     
     /// 设置目标地址
-    pub fn target_address(mut self, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn target_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.target_address = Some(addr);
         self
     }
     
     /// 设置配置
-    pub fn config(mut self, config: TcpConfig) -> Self {
+    pub(crate) fn config(mut self, config: TcpConfig) -> Self {
         self.config = config;
         self
     }
     
     /// 连接到服务器
-    pub async fn connect(self) -> Result<TcpAdapter, TcpError> {
-        let target_addr = self.target_address
-            .ok_or_else(|| TcpError::Io(io::Error::new(io::ErrorKind::InvalidInput, "Target address not set")))?;
+    pub(crate) async fn connect(self) -> Result<TcpAdapter, TcpError> {
+        let target_addr = self.target_address.ok_or_else(|| {
+            TcpError::Io(io::Error::new(io::ErrorKind::InvalidInput, "No target address specified"))
+        })?;
         
         TcpAdapter::connect(target_addr, self.config).await
     }

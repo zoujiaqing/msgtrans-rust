@@ -426,7 +426,7 @@ pub struct QuicServerWrapper {
 }
 
 impl QuicServerWrapper {
-    pub fn new(server: quic::QuicServer) -> Self {
+    pub(crate) fn new(server: quic::QuicServer) -> Self {
         Self { inner: server }
     }
 }

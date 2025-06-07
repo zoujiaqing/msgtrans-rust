@@ -276,15 +276,15 @@ where
     }
 }
 
-/// WebSocket服务器构建器
-pub struct WebSocketServerBuilder {
+/// WebSocket服务器构建器（内部使用）
+pub(crate) struct WebSocketServerBuilder {
     config: WebSocketConfig,
     bind_address: Option<std::net::SocketAddr>,
 }
 
 impl WebSocketServerBuilder {
-    /// 创建新的WebSocket服务器构建器
-    pub fn new() -> Self {
+    /// 创建新的服务器构建器
+    pub(crate) fn new() -> Self {
         Self {
             config: WebSocketConfig::default(),
             bind_address: None,
@@ -292,27 +292,26 @@ impl WebSocketServerBuilder {
     }
     
     /// 设置绑定地址
-    pub fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.bind_address = Some(addr);
-        self.config.bind_address = addr;
         self
     }
     
     /// 设置配置
-    pub fn config(mut self, config: WebSocketConfig) -> Self {
-        if let Some(addr) = self.bind_address {
-            self.config = config;
-            self.config.bind_address = addr;
-        } else {
-            self.config = config;
-        }
+    pub(crate) fn config(mut self, config: WebSocketConfig) -> Self {
+        self.config = config;
         self
     }
     
-    /// 启动WebSocket服务器
-    pub async fn build(self) -> Result<WebSocketServer, WebSocketError> {
+    /// 构建服务器
+    pub(crate) async fn build(self) -> Result<WebSocketServer, WebSocketError> {
         let bind_addr = self.bind_address.unwrap_or(self.config.bind_address);
+        
+        tracing::debug!("🚀 WebSocket服务器启动在: {}", bind_addr);
+        
         let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+        
+        tracing::info!("✅ WebSocket服务器成功启动在: {}", listener.local_addr()?);
         
         Ok(WebSocketServer {
             listener,
@@ -327,44 +326,49 @@ impl Default for WebSocketServerBuilder {
     }
 }
 
-/// WebSocket服务器
-pub struct WebSocketServer {
+/// WebSocket服务器（内部使用）
+pub(crate) struct WebSocketServer {
     listener: tokio::net::TcpListener,
     config: WebSocketConfig,
 }
 
 impl WebSocketServer {
     /// 创建服务器构建器
-    pub fn builder() -> WebSocketServerBuilder {
+    pub(crate) fn builder() -> WebSocketServerBuilder {
         WebSocketServerBuilder::new()
     }
     
-    /// 接受新的WebSocket连接
-    pub async fn accept(&mut self) -> Result<WebSocketAdapter<tokio::net::TcpStream>, WebSocketError> {
+    /// 接受新连接
+    pub(crate) async fn accept(&mut self) -> Result<WebSocketAdapter<tokio::net::TcpStream>, WebSocketError> {
         let (stream, peer_addr) = self.listener.accept().await?;
-        let local_addr = stream.local_addr()?;
+        let local_addr = self.listener.local_addr()?;
+        
+        tracing::debug!("🔗 WebSocket新TCP连接来自: {}", peer_addr);
         
         // 执行WebSocket握手
-        let ws_stream = tokio_tungstenite::accept_async(stream).await?;
+        let ws_stream = tokio_tungstenite::accept_async(stream).await
+            .map_err(|e| WebSocketError::Serialization(format!("WebSocket握手失败: {}", e)))?;
+        
+        tracing::debug!("✅ WebSocket握手成功，连接来自: {}", peer_addr);
         
         Ok(WebSocketAdapter::new(ws_stream, self.config.clone(), local_addr, peer_addr))
     }
     
     /// 获取本地地址
-    pub fn local_addr(&self) -> Result<std::net::SocketAddr, WebSocketError> {
-        self.listener.local_addr().map_err(WebSocketError::Io)
+    pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, WebSocketError> {
+        Ok(self.listener.local_addr()?)
     }
 }
 
-/// WebSocket客户端构建器
-pub struct WebSocketClientBuilder {
+/// WebSocket客户端构建器（内部使用）
+pub(crate) struct WebSocketClientBuilder {
     config: WebSocketConfig,
     target_url: Option<String>,
 }
 
 impl WebSocketClientBuilder {
-    /// 创建新的WebSocket客户端构建器
-    pub fn new() -> Self {
+    /// 创建新的客户端构建器
+    pub(crate) fn new() -> Self {
         Self {
             config: WebSocketConfig::default(),
             target_url: None,
@@ -372,33 +376,35 @@ impl WebSocketClientBuilder {
     }
     
     /// 设置目标URL
-    pub fn target_url<S: Into<String>>(mut self, url: S) -> Self {
+    pub(crate) fn target_url<S: Into<String>>(mut self, url: S) -> Self {
         self.target_url = Some(url.into());
         self
     }
     
     /// 设置配置
-    pub fn config(mut self, config: WebSocketConfig) -> Self {
+    pub(crate) fn config(mut self, config: WebSocketConfig) -> Self {
         self.config = config;
         self
     }
     
-    /// 连接到WebSocket服务器
-    pub async fn connect(self) -> Result<WebSocketAdapter<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, WebSocketError> {
-        let url = self.target_url
-            .ok_or_else(|| WebSocketError::Io(io::Error::new(io::ErrorKind::InvalidInput, "Target URL not set")))?;
+    /// 连接到服务器
+    pub(crate) async fn connect(self) -> Result<WebSocketAdapter<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>, WebSocketError> {
+        let target_url = self.target_url.ok_or_else(|| {
+            WebSocketError::Io(io::Error::new(io::ErrorKind::InvalidInput, "No target URL specified"))
+        })?;
         
-        let parsed_url = url::Url::parse(&url)
+        // 连接到WebSocket服务器
+        let (ws_stream, _response) = tokio_tungstenite::connect_async(&target_url).await?;
+        
+        // 解析URL获取地址信息
+        let parsed_url = url::Url::parse(&target_url)
             .map_err(|e| WebSocketError::Serialization(format!("Invalid URL: {}", e)))?;
         
-        let (ws_stream, _response) = tokio_tungstenite::connect_async(&url).await?;
-        
-        // 提取地址信息
         let host = parsed_url.host_str().unwrap_or("unknown");
         let port = parsed_url.port().unwrap_or(if parsed_url.scheme() == "wss" { 443 } else { 80 });
         let peer_addr = format!("{}:{}", host, port).parse()
             .unwrap_or_else(|_| "0.0.0.0:0".parse().unwrap());
-        let local_addr = "0.0.0.0:0".parse().unwrap(); // 客户端本地地址通常不重要
+        let local_addr = "0.0.0.0:0".parse().unwrap(); // 客户端本地地址
         
         Ok(WebSocketAdapter::new(ws_stream, self.config, local_addr, peer_addr))
     }
