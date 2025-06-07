@@ -147,7 +147,7 @@ impl MultiProtocolEchoServer {
     /// 处理传输事件
     async fn handle_event(&mut self, event: Event) -> Result<(), TransportError> {
         match event {
-            Event::PacketReceived { session_id, packet } => {
+            Event::MessageReceived { session_id, packet } => {
                 self.message_count += 1;
                 
                 println!("📨 收到消息 #{} (会话{}): 类型{:?}, ID{}", 

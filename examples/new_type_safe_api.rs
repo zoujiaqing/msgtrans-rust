@@ -132,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Event::ConnectionClosed { session_id, .. } => {
                             println!("[事件] 会话断开: {}", session_id);
                         }
-                        Event::PacketReceived { session_id, packet } => {
+                        Event::MessageReceived { session_id, packet } => {
                             if let Some(data) = packet.payload_as_string() {
                                 println!("[事件] 收到数据 (会话 {}): {}", session_id, data);
                             }

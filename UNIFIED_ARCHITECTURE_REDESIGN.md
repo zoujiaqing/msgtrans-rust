@@ -70,8 +70,8 @@ pub enum TransportEvent {
     ConnectionClosed { session_id: SessionId, reason: CloseReason },
     
     /// 数据传输事件
-    PacketReceived { session_id: SessionId, packet: Packet },
-    PacketSent { session_id: SessionId, packet_id: PacketId },
+    MessageReceived { session_id: SessionId, packet: Packet },
+    MessageSent { session_id: SessionId, packet_id: PacketId },
     
     /// 错误事件
     TransportError { session_id: Option<SessionId>, error: TransportError },
@@ -126,7 +126,7 @@ impl EventStream {
     /// 只获取数据包事件
     pub fn packets(self) -> impl Stream<Item = (SessionId, Packet)> {
         self.filter_map(|event| match event {
-            TransportEvent::PacketReceived { session_id, packet } => Some((session_id, packet)),
+            TransportEvent::MessageReceived { session_id, packet } => Some((session_id, packet)),
             _ => None,
         })
     }
@@ -273,7 +273,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
                     match result {
                         Ok(Some(packet)) => {
                             self.stats.packets_received += 1;
-                            let _ = self.event_tx.send(TransportEvent::PacketReceived {
+                            let _ = self.event_tx.send(TransportEvent::MessageReceived {
                                 session_id: self.session_id,
                                 packet,
                             });
@@ -463,7 +463,7 @@ impl Stream for GenericReceiver {
             // 轮询Future
             if let Some(ref mut future) = self.recv_future {
                 match future.as_mut().poll(cx) {
-                    Poll::Ready(Ok(TransportEvent::PacketReceived { session_id, packet })) => {
+                    Poll::Ready(Ok(TransportEvent::MessageReceived { session_id, packet })) => {
                         if session_id == self.session_id {
                             self.recv_future = None;
                             return Poll::Ready(Some(Ok(packet)));
@@ -992,7 +992,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("New connection: {} from {}", session_id, info.peer_address);
             }
             
-            TransportEvent::PacketReceived { session_id, packet } => {
+            TransportEvent::MessageReceived { session_id, packet } => {
                 println!("Received from {}: {:?}", session_id, packet);
                 
                 // Echo back
@@ -1168,7 +1168,7 @@ while let Some(event) = events.next().await {
         TransportEvent::ConnectionEstablished { session_id, .. } => {
             println!("Connected: {}", session_id);
         }
-        TransportEvent::PacketReceived { session_id, packet } => {
+        TransportEvent::MessageReceived { session_id, packet } => {
             // 直接异步处理，错误正常传播
             match handle_message(session_id, packet).await {
                 Ok(response) => {
@@ -1245,7 +1245,7 @@ println!("Connection closed");
 ```rust
 // ✅ 组合子模式 - 无法在回调模式中实现
 server.events()
-    .filter(|e| matches!(e, TransportEvent::PacketReceived { .. }))
+    .filter(|e| matches!(e, TransportEvent::MessageReceived { .. }))
     .map(|e| extract_packet(e))
     .buffer_unordered(100)  // 并发处理100个请求
     .for_each_concurrent(10, |packet| async move {

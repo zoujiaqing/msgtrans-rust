@@ -174,7 +174,7 @@ impl EchoClient {
         messages_received: &Arc<Mutex<u64>>
     ) {
         match event {
-            Event::PacketReceived { session_id, packet } => {
+            Event::MessageReceived { session_id, packet } => {
                 // 更新接收计数器
                 {
                     let mut count = messages_received.lock().await;

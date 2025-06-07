@@ -18,11 +18,11 @@ pub enum TransportEvent {
     },
     
     /// 数据传输事件
-    PacketReceived { 
+    MessageReceived { 
         session_id: SessionId, 
         packet: Packet 
     },
-    PacketSent { 
+    MessageSent { 
         session_id: SessionId, 
         packet_id: PacketId 
     },
@@ -82,8 +82,8 @@ impl TransportEvent {
         match self {
             TransportEvent::ConnectionEstablished { session_id, .. } => Some(*session_id),
             TransportEvent::ConnectionClosed { session_id, .. } => Some(*session_id),
-            TransportEvent::PacketReceived { session_id, .. } => Some(*session_id),
-            TransportEvent::PacketSent { session_id, .. } => Some(*session_id),
+            TransportEvent::MessageReceived { session_id, .. } => Some(*session_id),
+            TransportEvent::MessageSent { session_id, .. } => Some(*session_id),
             TransportEvent::TransportError { session_id, .. } => *session_id,
             _ => None,
         }
@@ -100,8 +100,8 @@ impl TransportEvent {
     /// 判断是否为数据传输事件
     pub fn is_data_event(&self) -> bool {
         matches!(self, 
-            TransportEvent::PacketReceived { .. } | 
-            TransportEvent::PacketSent { .. }
+            TransportEvent::MessageReceived { .. } | 
+            TransportEvent::MessageSent { .. }
         )
     }
     

@@ -255,19 +255,19 @@ impl<A: ProtocolAdapter> GenericActor<A> {
         let packet_size = packet.payload.len();
         self.stats.record_packet_received(packet_size);
         
-        tracing::info!("🔍 Actor {} 发送PacketReceived事件到全局事件流", self.session_id);
+        tracing::info!("🔍 Actor {} 发送MessageReceived事件到全局事件流", self.session_id);
         
-        let event = TransportEvent::PacketReceived {
+        let event = TransportEvent::MessageReceived {
             session_id: self.session_id,
             packet,
         };
         
         match self.event_tx.send(event) {
             Ok(receiver_count) => {
-                tracing::info!("🔍 PacketReceived事件发送成功，有{}个接收者", receiver_count);
+                tracing::info!("🔍 MessageReceived事件发送成功，有{}个接收者", receiver_count);
             }
             Err(e) => {
-                tracing::error!("🔍 PacketReceived事件发送失败: {:?}", e);
+                tracing::error!("🔍 MessageReceived事件发送失败: {:?}", e);
             }
         }
     }

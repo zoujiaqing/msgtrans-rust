@@ -106,10 +106,10 @@ impl Transport {
     pub async fn send_to_session(
         &self,
         session_id: SessionId,
-        packet: Packet,
+        message: Packet,
     ) -> Result<(), TransportError> {
         if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
-            handle.send_packet(packet).await
+            handle.send_packet(message).await
         } else {
             Err(TransportError::SessionNotFound)
         }

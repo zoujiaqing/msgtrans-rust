@@ -191,7 +191,7 @@ impl PacketStream {
     /// 获取下一个数据包
     pub async fn next_packet(&mut self) -> Option<(SessionId, Packet)> {
         while let Some(event) = self.event_stream.next().await {
-            if let TransportEvent::PacketReceived { session_id, packet } = event {
+            if let TransportEvent::MessageReceived { session_id, packet } = event {
                 return Some((session_id, packet));
             }
         }
@@ -205,7 +205,7 @@ impl Stream for PacketStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             match Pin::new(&mut self.event_stream).poll_next(cx) {
-                Poll::Ready(Some(TransportEvent::PacketReceived { session_id, packet })) => {
+                Poll::Ready(Some(TransportEvent::MessageReceived { session_id, packet })) => {
                     return Poll::Ready(Some((session_id, packet)));
                 }
                 Poll::Ready(Some(_)) => {
@@ -355,7 +355,7 @@ impl StreamCombinator {
     ) -> impl Stream<Item = (SessionId, Packet)> {
         event_stream.filter_map(|event| async move {
             match event {
-                TransportEvent::PacketReceived { session_id, packet } => {
+                TransportEvent::MessageReceived { session_id, packet } => {
                     Some((session_id, packet))
                 }
                 _ => None,

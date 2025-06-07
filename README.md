@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     let mut events = transport.events();
     while let Some(event) = events.next().await {
         match event {
-            TransportEvent::PacketReceived { session_id, packet } => {
+            TransportEvent::MessageReceived { session_id, packet } => {
                 // 回显消息
                 let echo = Packet::echo(packet.message_id, &packet.payload);
                 transport.send_to_session(session_id, echo).await?;
