@@ -117,6 +117,21 @@ pub trait ProtocolConfig: Send + Sync + Clone + std::fmt::Debug + 'static {
     fn merge(self, other: Self) -> Self;
 }
 
+/// Object-safe 的协议配置 trait，用于统一 Builder 接口
+pub trait DynProtocolConfig: Send + Sync + 'static {
+    /// 获取协议名称
+    fn protocol_name(&self) -> &'static str;
+    
+    /// 验证配置
+    fn validate_dyn(&self) -> Result<(), ConfigError>;
+    
+    /// 转换为 Any 以支持向下转型
+    fn as_any(&self) -> &dyn std::any::Any;
+    
+    /// 克隆为 Box<dyn DynProtocolConfig>
+    fn clone_dyn(&self) -> Box<dyn DynProtocolConfig>;
+}
+
 /// 协议配置错误
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -381,6 +396,24 @@ impl ClientConfig for TcpConfig {
     }
 }
 
+impl DynProtocolConfig for TcpConfig {
+    fn protocol_name(&self) -> &'static str {
+        "tcp"
+    }
+    
+    fn validate_dyn(&self) -> Result<(), ConfigError> {
+        ProtocolConfig::validate(self)
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    
+    fn clone_dyn(&self) -> Box<dyn DynProtocolConfig> {
+        Box::new(self.clone())
+    }
+}
+
 /// WebSocket适配器配置
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WebSocketConfig {
@@ -583,6 +616,24 @@ impl ClientConfig for WebSocketConfig {
     
     fn protocol_name(&self) -> &'static str {
         "websocket"
+    }
+}
+
+impl DynProtocolConfig for WebSocketConfig {
+    fn protocol_name(&self) -> &'static str {
+        "websocket"
+    }
+    
+    fn validate_dyn(&self) -> Result<(), ConfigError> {
+        ProtocolConfig::validate(self)
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    
+    fn clone_dyn(&self) -> Box<dyn DynProtocolConfig> {
+        Box::new(self.clone())
     }
 }
 
@@ -815,4 +866,60 @@ pub trait ClientConfig: Send + Sync + 'static {
     
     /// 获取协议名称
     fn protocol_name(&self) -> &'static str;
-} 
+}
+
+  impl DynProtocolConfig for QuicConfig { fn protocol_name(&self) -> &'static str { "quic" } fn validate_dyn(&self) -> Result<(), ConfigError> { ProtocolConfig::validate(self) } fn as_any(&self) -> &dyn std::any::Any { self } fn clone_dyn(&self) -> Box<dyn DynProtocolConfig> { Box::new(self.clone()) } } 
+
+// ========== ConnectableConfig 实现 ==========
+// 让每个协议配置自己知道如何建立连接，避免硬编码协议判断
+
+#[async_trait::async_trait]
+impl crate::transport::api::ConnectableConfig for TcpConfig {
+    async fn connect(&self, transport: &crate::transport::api::Transport) -> Result<crate::SessionId, crate::TransportError> {
+        use crate::adapters::tcp::TcpClientBuilder;
+        
+        let adapter = TcpClientBuilder::new()
+            .target_address(self.bind_address)
+            .config(self.clone())
+            .connect()
+            .await
+            .map_err(|e| crate::TransportError::connection_error(format!("TCP connection failed: {:?}", e), true))?;
+        
+        transport.add_connection(adapter).await
+    }
+}
+
+#[cfg(feature = "websocket")]
+#[async_trait::async_trait]
+impl crate::transport::api::ConnectableConfig for WebSocketConfig {
+    async fn connect(&self, transport: &crate::transport::api::Transport) -> Result<crate::SessionId, crate::TransportError> {
+        use crate::adapters::websocket::WebSocketClientBuilder;
+        
+        let url = format!("ws://{}", self.bind_address);
+        let adapter = WebSocketClientBuilder::new()
+            .target_url(&url)
+            .config(self.clone())
+            .connect()
+            .await
+            .map_err(|e| crate::TransportError::connection_error(format!("WebSocket connection failed: {:?}", e), true))?;
+        
+        transport.add_connection(adapter).await
+    }
+}
+
+#[cfg(feature = "quic")]
+#[async_trait::async_trait]
+impl crate::transport::api::ConnectableConfig for QuicConfig {
+    async fn connect(&self, transport: &crate::transport::api::Transport) -> Result<crate::SessionId, crate::TransportError> {
+        use crate::adapters::quic::QuicClientBuilder;
+        
+        let adapter = QuicClientBuilder::new()
+            .target_address(self.bind_address)
+            .config(self.clone())
+            .connect()
+            .await
+            .map_err(|e| crate::TransportError::connection_error(format!("QUIC connection failed: {:?}", e), true))?;
+        
+        transport.add_connection(adapter).await
+    }
+}

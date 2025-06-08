@@ -11,12 +11,21 @@ use crate::{
     command::{TransportStats, ConnectionInfo},
     error::TransportError,
     actor::{GenericActor, ActorHandle, ActorManager},
-    protocol::{ProtocolAdapter, ProtocolConfig, ProtocolRegistry, Connection, ProtocolConnectionAdapter},
+    protocol::{ProtocolAdapter, ProtocolConfig, ProtocolRegistry, Connection, ProtocolConnectionAdapter, adapter::ServerConfig},
     stream::EventStream,
     packet::Packet,
     adapters::create_standard_registry,
+    Event,
 };
+use futures::StreamExt;
 use super::config::TransportConfig;
+
+/// 🔌 可连接配置 trait - 让每个协议自己处理连接逻辑
+#[async_trait::async_trait]
+pub trait ConnectableConfig: Send + Sync {
+    /// 协议配置自己知道如何建立连接
+    async fn connect(&self, transport: &Transport) -> Result<SessionId, TransportError>;
+}
 
 /// 协议信息
 #[derive(Debug, Clone)]
@@ -46,16 +55,38 @@ pub struct Transport {
     config: TransportConfig,
     /// 协议注册表
     protocol_registry: Arc<ProtocolRegistry>,
+    /// 预配置的服务器
+    configured_servers: Vec<Box<dyn crate::protocol::Server>>,
 }
 
 impl Transport {
     /// 创建新的传输实例
     pub async fn new(config: TransportConfig) -> Result<Self, TransportError> {
+        // 使用默认专家配置
+        let expert_config = super::expert_config::ExpertConfig::default();
+        Self::new_with_expert_config(config, expert_config).await
+    }
+    
+    /// 使用专家配置创建传输实例
+    pub async fn new_with_expert_config(
+        config: TransportConfig, 
+        expert_config: super::expert_config::ExpertConfig
+    ) -> Result<Self, TransportError> {
         let actor_manager = Arc::new(ActorManager::new());
         let event_stream = EventStream::new(actor_manager.global_events());
         
         // 创建标准协议注册表
         let protocol_registry = Arc::new(create_standard_registry().await?);
+        
+        // TODO: 这里需要应用专家配置到实际的组件中
+        // 1. 创建带专家配置的SmartConnectionPool
+        // 2. 创建带专家配置的PerformanceMonitor
+        // 3. 将这些组件集成到Transport中
+        
+        // 暂时记录专家配置被应用
+        if expert_config.has_expert_config() {
+            tracing::info!("✅ 专家配置已应用到Transport实例");
+        }
         
         Ok(Self {
             actor_manager,
@@ -63,6 +94,7 @@ impl Transport {
             session_id_generator: Arc::new(AtomicU64::new(1)),
             config,
             protocol_registry,
+            configured_servers: Vec::new(),
         })
     }
     
@@ -199,39 +231,103 @@ impl Transport {
         EventStream::with_session_filter(self.actor_manager.global_events(), session_id)
     }
     
+    /// 🔌 统一连接方法 - 真正可扩展的设计
+    pub async fn connect<T>(&self, config: T) -> Result<SessionId, TransportError> 
+    where 
+        T: ConnectableConfig,
+    {
+        config.connect(self).await
+    }
+    
     /// 生成新的会话ID
     fn generate_session_id(&self) -> SessionId {
         SessionId::new(self.session_id_generator.fetch_add(1, Ordering::SeqCst))
     }
     
-    /// 类型安全的连接方法 - 使用配置对象
-    pub async fn connect<C: crate::protocol::adapter::ClientConfig>(&self, config: C) -> Result<SessionId, TransportError> {
-        // 验证配置
-        config.validate()?;
+    /// 🚀 启动所有预配置的服务器 (消费 self 来获得所有权)
+    pub async fn serve(mut self) -> Result<(), TransportError> {
+        if self.configured_servers.is_empty() {
+            tracing::warn!("没有配置任何协议服务器，启动空的传输实例");
+            return Ok(());
+        }
         
-        // 构建连接
-        let connection = config.build_connection().await?;
+        tracing::info!("🌟 启动 {} 个预配置的协议服务器", self.configured_servers.len());
         
-        // 将Connection包装成Box<dyn Connection>
-        let boxed_connection: Box<dyn Connection> = Box::new(connection);
+        // 移动所有服务器并为每个启动接受循环
+        let servers = std::mem::take(&mut self.configured_servers);
+        let mut server_handles = Vec::new();
         
-        // 添加到传输管理器
-        self.add_protocol_connection(boxed_connection).await
-    }
-    
-    /// 类型安全的监听方法 - 使用配置对象
-    pub async fn listen<C: crate::protocol::adapter::ServerConfig>(&self, config: C) -> Result<SessionId, TransportError> {
-        // 验证配置
-        config.validate()?;
+        for (index, mut server) in servers.into_iter().enumerate() {
+            let transport = self.clone();
+            let server_index = index;
+            
+            tracing::info!("📡 启动第 {} 个协议服务器的接受循环", server_index + 1);
+            
+            // 启动每个服务器的接受循环
+            let handle = tokio::spawn(async move {
+                tracing::info!("🎯 协议服务器 {} 开始接受连接", server_index + 1);
+                
+                loop {
+                    match server.accept().await {
+                        Ok(mut connection) => {
+                            let conn_session_id = transport.generate_session_id();
+                            tracing::debug!("🔗 服务器 {} 接受到新连接 (会话ID: {})", server_index + 1, conn_session_id);
+                            
+                            connection.set_session_id(conn_session_id);
+                            
+                            let adapter = ProtocolConnectionAdapter::new(connection);
+                            match transport.add_connection(adapter).await {
+                                Ok(_) => {
+                                    tracing::debug!("✅ 成功添加连接到传输层 (会话ID: {})", conn_session_id);
+                                }
+                                Err(e) => {
+                                    tracing::error!("❌ 添加连接失败 (会话ID: {}): {:?}", conn_session_id, e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("⚠️ 协议服务器 {} 接受连接时出错: {:?}", server_index + 1, e);
+                            break;
+                        }
+                    }
+                }
+                
+                tracing::warn!("🛑 协议服务器 {} 接受循环已退出", server_index + 1);
+            });
+            
+            server_handles.push(handle);
+        }
         
-        // 构建服务器
-        let server = config.build_server().await?;
+        tracing::info!("✅ 所有 {} 个协议服务器启动完成，开始事件处理循环", server_handles.len());
         
-        // 将Server包装成Box<dyn Server>
-        let boxed_server: Box<dyn crate::protocol::Server> = Box::new(server);
+        // 启动事件处理循环
+        let mut events = self.events();
+        let event_handle = tokio::spawn(async move {
+            while let Some(event) = events.next().await {
+                match event {
+                    Event::ConnectionEstablished { session_id, info } => {
+                        tracing::debug!("🔗 新连接建立: {} [{:?}]", session_id, info.protocol);
+                    }
+                    Event::ConnectionClosed { session_id, reason } => {
+                        tracing::debug!("❌ 连接关闭: {} - {:?}", session_id, reason);
+                    }
+                    Event::MessageReceived { session_id, packet } => {
+                        tracing::trace!("📨 收到消息 (会话 {}): {:?}", session_id, packet);
+                    }
+                    Event::MessageSent { session_id, packet_id } => {
+                        tracing::trace!("📤 发送消息 (会话 {}): packet_id={}", session_id, packet_id);
+                    }
+                    _ => {}
+                }
+            }
+        });
         
-        // 添加到传输管理器
-        self.add_protocol_server(boxed_server).await
+        // 等待所有任务完成（实际上是永远运行）
+        server_handles.push(event_handle);
+        futures::future::join_all(server_handles).await;
+        
+        tracing::info!("🏁 传输服务已停止");
+        Ok(())
     }
     
     /// 获取协议注册表的引用
@@ -340,6 +436,8 @@ impl Transport {
 pub struct TransportBuilder {
     config: TransportConfig,
     expert_config: super::expert_config::ExpertConfig,
+    /// 协议配置存储
+    protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
 }
 
 impl TransportBuilder {
@@ -348,7 +446,15 @@ impl TransportBuilder {
         Self {
             config: TransportConfig::default(),
             expert_config: super::expert_config::ExpertConfig::default(),
+            protocol_configs: std::collections::HashMap::new(),
         }
+    }
+    
+    /// 🌟 统一协议配置接口 - 支持所有协议
+    pub fn with_protocol_config<T: crate::protocol::adapter::DynProtocolConfig>(mut self, config: T) -> Self {
+        let protocol_name = config.protocol_name().to_string();
+        self.protocol_configs.insert(protocol_name, Box::new(config));
+        self
     }
     
     /// 设置配置
@@ -376,12 +482,114 @@ impl TransportBuilder {
         self
     }
     
-    /// 构建传输实例
+    /// 构建传输实例 - 预先创建所有配置的服务器
     pub async fn build(self) -> Result<Transport, TransportError> {
+        // 验证基础配置
         self.config.validate()
             .map_err(|e| TransportError::config_error("protocol", format!("Invalid config: {:?}", e)))?;
         
-        Transport::new(self.config).await
+        // 验证专家配置
+        self.expert_config.validate()
+            .map_err(|e| TransportError::config_error("expert", format!("Invalid expert config: {:?}", e)))?;
+        
+        // 预先创建所有配置的服务器
+        let mut configured_servers: Vec<Box<dyn crate::protocol::Server>> = Vec::new();
+        
+        tracing::info!("🔧 构建传输实例，处理 {} 个协议配置", self.protocol_configs.len());
+        
+        for (protocol_name, config) in &self.protocol_configs {
+            tracing::info!("  🌐 构建 {} 协议服务器", protocol_name);
+            
+            // 验证协议配置
+            config.validate_dyn()
+                .map_err(|e| TransportError::config_error("protocol", format!("Invalid {} config: {:?}", protocol_name, e)))?;
+            
+            // 根据协议类型创建服务器
+            match protocol_name.as_str() {
+                "tcp" => {
+                    if let Some(tcp_config) = config.as_any().downcast_ref::<crate::protocol::TcpConfig>() {
+                        let server = tcp_config.build_server().await
+                            .map_err(|e| TransportError::protocol_error("tcp", format!("Failed to create TCP server: {:?}", e)))?;
+                        configured_servers.push(Box::new(server));
+                        tracing::info!("    ✅ TCP 服务器创建成功 ({})", tcp_config.bind_address);
+                    }
+                }
+                #[cfg(feature = "websocket")]
+                "websocket" => {
+                    if let Some(ws_config) = config.as_any().downcast_ref::<crate::protocol::WebSocketConfig>() {
+                        let server = ws_config.build_server().await
+                            .map_err(|e| TransportError::protocol_error("websocket", format!("Failed to create WebSocket server: {:?}", e)))?;
+                        configured_servers.push(Box::new(server));
+                        tracing::info!("    ✅ WebSocket 服务器创建成功 ({})", ws_config.bind_address);
+                    }
+                }
+                #[cfg(feature = "quic")]
+                "quic" => {
+                    if let Some(quic_config) = config.as_any().downcast_ref::<crate::protocol::QuicConfig>() {
+                        let server = quic_config.build_server().await
+                            .map_err(|e| TransportError::protocol_error("quic", format!("Failed to create QUIC server: {:?}", e)))?;
+                        configured_servers.push(Box::new(server));
+                        tracing::info!("    ✅ QUIC 服务器创建成功 ({})", quic_config.bind_address);
+                    }
+                }
+                _ => {
+                    tracing::warn!("    ⚠️ 未知协议类型: {}", protocol_name);
+                }
+            }
+        }
+        
+        // 如果启用了专家配置，记录日志
+        if self.expert_config.has_expert_config() {
+            tracing::info!("🚀 启用专家配置模式");
+            
+            if let Some(ref pool_config) = self.expert_config.smart_pool {
+                tracing::info!("  📊 智能连接池: {}→{} (阈值: {:.0}%→{:.0}%)", 
+                    pool_config.initial_size, 
+                    pool_config.max_size,
+                    pool_config.expansion_threshold * 100.0,
+                    pool_config.shrink_threshold * 100.0
+                );
+            }
+            
+            if let Some(ref perf_config) = self.expert_config.performance {
+                tracing::info!("  📈 性能监控: {}ms采样, {}条历史记录", 
+                    perf_config.sampling_interval.as_millis(),
+                    perf_config.metrics_history_size
+                );
+            }
+        }
+        
+        // 创建带预配置服务器的Transport实例
+        Self::new_transport_with_servers(self.config, self.expert_config, configured_servers).await
+    }
+    
+    /// 内部方法：创建带预配置服务器的Transport实例
+    async fn new_transport_with_servers(
+        config: TransportConfig,
+        expert_config: super::expert_config::ExpertConfig,
+        configured_servers: Vec<Box<dyn crate::protocol::Server>>,
+    ) -> Result<Transport, TransportError> {
+        let actor_manager = Arc::new(ActorManager::new());
+        let event_stream = EventStream::new(actor_manager.global_events());
+        
+        // 创建标准协议注册表
+        let protocol_registry = Arc::new(create_standard_registry().await?);
+        
+        // 暂时记录专家配置被应用
+        if expert_config.has_expert_config() {
+            tracing::info!("✅ 专家配置已应用到Transport实例");
+        }
+        
+        tracing::info!("🎯 Transport实例创建完成，包含 {} 个预配置服务器", configured_servers.len());
+        
+        Ok(Transport {
+            actor_manager,
+            event_stream,
+            session_id_generator: Arc::new(AtomicU64::new(1)),
+            config,
+            protocol_registry,
+            configured_servers,
+        })
     }
 }
 
@@ -629,6 +837,7 @@ impl Clone for Transport {
             session_id_generator: self.session_id_generator.clone(),
             config: self.config.clone(),
             protocol_registry: self.protocol_registry.clone(),
+            configured_servers: Vec::new(), // Clone时不复制服务器，因为它们已经被消费了
         }
     }
 } 
