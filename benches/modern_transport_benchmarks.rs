@@ -2,113 +2,36 @@
 /// 
 /// 测试内容：
 /// 1. 新的 TransportBuilder API 性能
-/// 2. 统一的协议接口性能对比 (TCP/WebSocket/QUIC)
-/// 3. 连接池和内存池的实际应用性能
-/// 4. 端到端的真实场景测试
+/// 2. 连接池和内存池的实际应用性能
+/// 3. 高并发场景测试
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
 use msgtrans::{
-    transport::TransportBuilder, 
-    protocol::{TcpConfig, WebSocketConfig, QuicConfig},
-    transport::{ConnectionPool, MemoryPool, BufferSize},
-    event::TransportEvent,
-    packet::Packet,
+    transport::{TransportBuilder, ConnectionPool, MemoryPool, BufferSize},
 };
 use std::time::Duration;
-use bytes::BytesMut;
 use std::sync::Arc;
-use futures::StreamExt;
 use tokio::sync::mpsc;
 
-/// 基准测试：现代化API连接建立性能
-fn bench_modern_api_connection(c: &mut Criterion) {
+/// 基准测试：现代化API创建性能
+fn bench_modern_api_creation(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     
-    let mut group = c.benchmark_group("modern_api_connection");
-    group.sample_size(20);
-    group.measurement_time(Duration::from_secs(30));
+    let mut group = c.benchmark_group("modern_api_creation");
+    group.sample_size(50);
+    group.measurement_time(Duration::from_secs(20));
     
-    let protocols = [
-        ("tcp", "127.0.0.1:18001"),
-        ("websocket", "127.0.0.1:18002"), 
-        ("quic", "127.0.0.1:18003"),
-    ];
-    
-    for (protocol, addr) in protocols.iter() {
-        group.bench_with_input(
-            BenchmarkId::new("connection_establishment", protocol),
-            &(protocol, addr),
-            |b, &(protocol, addr)| {
-                b.to_async(&rt).iter(|| async {
-                    let duration = modern_connection_test(protocol, addr).await;
-                    black_box(duration)
-                });
-            },
-        );
-    }
+    group.bench_function("transport_builder", |b| {
+        b.to_async(&rt).iter(|| async {
+            let transport = TransportBuilder::new()
+                .build()
+                .await
+                .expect("Failed to create transport");
+            black_box(transport)
+        });
+    });
     
     group.finish();
-}
-
-/// 现代化连接测试实现
-async fn modern_connection_test(protocol: &str, addr: &str) -> Duration {
-    let start = std::time::Instant::now();
-    
-    // 使用新的 TransportBuilder API
-    let server_transport = TransportBuilder::new()
-        .build()
-        .await
-        .expect("Failed to create server transport");
-    
-    let client_transport = TransportBuilder::new()
-        .build()
-        .await
-        .expect("Failed to create client transport");
-    
-    // 启动服务器
-    let _server_handle = match protocol {
-        "tcp" => {
-            let config = TcpConfig::new(addr).expect("Failed to create TCP config")
-                .with_nodelay(true)
-                .with_keepalive(Some(Duration::from_secs(60)));
-            server_transport.listen(config).await.expect("Failed to start TCP server")
-        }
-        "websocket" => {
-            let config = WebSocketConfig::new(addr).expect("Failed to create WebSocket config")
-                .with_path("/test".to_string());
-            server_transport.listen(config).await.expect("Failed to start WebSocket server")
-        }
-        "quic" => {
-            let config = QuicConfig::new(addr).expect("Failed to create QUIC config")
-                .with_max_idle_timeout(Duration::from_secs(30));
-            server_transport.listen(config).await.expect("Failed to start QUIC server")
-        }
-        _ => panic!("Unknown protocol: {}", protocol),
-    };
-    
-    // 等待服务器启动
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    
-    // 客户端连接
-    let _session_id = match protocol {
-        "tcp" => {
-            let config = TcpConfig::new(addr).expect("Failed to create TCP config")
-                .with_nodelay(true);
-            client_transport.connect(config).await.expect("Failed to connect TCP")
-        }
-        "websocket" => {
-            let config = WebSocketConfig::new(addr).expect("Failed to create WebSocket config")
-                .with_path("/test".to_string());
-            client_transport.connect(config).await.expect("Failed to connect WebSocket")
-        }
-        "quic" => {
-            let config = QuicConfig::new(addr).expect("Failed to create QUIC config");
-            client_transport.connect(config).await.expect("Failed to connect QUIC")
-        }
-        _ => panic!("Unknown protocol: {}", protocol),
-    };
-    
-    start.elapsed()
 }
 
 /// 基准测试：连接池性能
@@ -200,19 +123,78 @@ fn bench_memory_pool_realistic(c: &mut Criterion) {
     group.finish();
 }
 
+/// 基准测试：内存池vs标准分配器
+fn bench_memory_pool_vs_standard(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    
+    let mut group = c.benchmark_group("memory_allocation_comparison");
+    group.throughput(Throughput::Elements(1000));
+    
+    // 内存池分配
+    group.bench_function("memory_pool", |b| {
+        b.to_async(&rt).iter(|| async {
+            let pool = MemoryPool::new();
+            let mut buffers = Vec::new();
+            
+            // 分配1000个缓冲区
+            for i in 0..1000 {
+                let size = match i % 3 {
+                    0 => BufferSize::Small,
+                    1 => BufferSize::Medium,
+                    _ => BufferSize::Large,
+                };
+                
+                if let Ok(buffer) = pool.get_buffer(size).await {
+                    buffers.push((buffer, size));
+                }
+            }
+            
+            // 归还缓冲区
+            for (buffer, size) in buffers {
+                pool.return_buffer(buffer, size).await;
+            }
+            
+            black_box(pool.status().await)
+        })
+    });
+    
+    // 标准分配器
+    group.bench_function("standard_alloc", |b| {
+        b.iter(|| {
+            let mut buffers = Vec::new();
+            
+            // 分配1000个缓冲区
+            for i in 0..1000 {
+                let capacity = match i % 3 {
+                    0 => 1024,     // Small
+                    1 => 8192,     // Medium
+                    _ => 65536,    // Large
+                };
+                
+                let buffer = bytes::BytesMut::with_capacity(capacity);
+                buffers.push(buffer);
+            }
+            
+            black_box(buffers.len())
+        })
+    });
+    
+    group.finish();
+}
+
 /// 基准测试：高并发场景
 fn bench_high_concurrency(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     
     let mut group = c.benchmark_group("high_concurrency");
-    group.sample_size(5);
-    group.measurement_time(Duration::from_secs(60));
+    group.sample_size(10);  // 确保至少10个样本
+    group.measurement_time(Duration::from_secs(30));
     
     let concurrency_levels = [10, 50, 100];
     
     for &concurrency in concurrency_levels.iter() {
         group.bench_with_input(
-            BenchmarkId::new("concurrent_connections", concurrency),
+            BenchmarkId::new("concurrent_transport_creation", concurrency),
             &concurrency,
             |b, &concurrency| {
                 b.to_async(&rt).iter(|| async {
@@ -237,8 +219,8 @@ async fn high_concurrency_test(concurrency: usize) -> Duration {
     for i in 0..concurrency {
         let tx_clone = tx.clone();
         let handle = tokio::spawn(async move {
-            // 模拟连接和消息处理
-            let transport = TransportBuilder::new()
+            // 模拟传输层创建和使用
+            let _transport = TransportBuilder::new()
                 .build()
                 .await
                 .expect("Failed to create transport");
@@ -266,11 +248,54 @@ async fn high_concurrency_test(concurrency: usize) -> Duration {
     start.elapsed()
 }
 
+/// 基准测试：连接池扩展算法
+fn bench_pool_expansion_algorithms(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    
+    let mut group = c.benchmark_group("pool_expansion");
+    
+    // 智能扩展
+    group.bench_function("smart_expansion", |b| {
+        b.to_async(&rt).iter(|| async {
+            let mut pool = ConnectionPool::new(100, 10000);
+            
+            // 执行多次扩展
+            for _ in 0..20 {
+                let _ = pool.try_expand().await;
+            }
+            
+            black_box(pool.detailed_status().await)
+        })
+    });
+    
+    // 模拟线性扩展（对比）
+    group.bench_function("linear_expansion_simulation", |b| {
+        b.iter(|| {
+            let mut current_size = 100;
+            let increment = 100;
+            
+            for _ in 0..20 {
+                current_size += increment;
+                if current_size > 10000 {
+                    current_size = 10000;
+                    break;
+                }
+            }
+            
+            black_box(current_size)
+        })
+    });
+    
+    group.finish();
+}
+
 criterion_group!(
     benches,
-    bench_modern_api_connection,
+    bench_modern_api_creation,
     bench_connection_pool_performance,
     bench_memory_pool_realistic,
-    bench_high_concurrency
+    bench_memory_pool_vs_standard,
+    bench_high_concurrency,
+    bench_pool_expansion_algorithms
 );
 criterion_main!(benches); 
