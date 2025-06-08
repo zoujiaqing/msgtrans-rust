@@ -481,16 +481,18 @@ impl PerformanceMonitor {
             factor,
         };
 
-        let mut events = self.expansion_events.write().await;
-        events.push_back(event);
-        
-        // 保持最近1000个事件
-        if events.len() > 1000 {
-            events.pop_front();
-        }
+        {
+            let mut events = self.expansion_events.write().await;
+            events.push_back(event);
+            
+            // 保持最近1000个事件
+            if events.len() > 1000 {
+                events.pop_front();
+            }
+        } // 释放写锁
 
-        // 更新性能指标
-        self.update_metrics().await;
+        // 注意：暂时移除update_metrics调用以避免死锁
+        // TODO: 在后续版本中优化指标更新机制
     }
 
     /// 记录收缩事件
@@ -502,16 +504,18 @@ impl PerformanceMonitor {
             factor,
         };
 
-        let mut events = self.shrink_events.write().await;
-        events.push_back(event);
-        
-        // 保持最近1000个事件
-        if events.len() > 1000 {
-            events.pop_front();
-        }
+        {
+            let mut events = self.shrink_events.write().await;
+            events.push_back(event);
+            
+            // 保持最近1000个事件
+            if events.len() > 1000 {
+                events.pop_front();
+            }
+        } // 释放写锁
 
-        // 更新性能指标
-        self.update_metrics().await;
+        // 注意：暂时移除update_metrics调用以避免死锁
+        // TODO: 在后续版本中优化指标更新机制
     }
 
     /// 更新性能指标
