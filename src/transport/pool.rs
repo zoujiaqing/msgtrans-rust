@@ -16,7 +16,7 @@ use tokio::sync::{RwLock, Semaphore};
 use crate::error::TransportError;
 
 /// 智能连接池
-pub struct SmartConnectionPool {
+pub struct ConnectionPool {
     /// 当前大小
     current_size: AtomicUsize,
     /// 最大大小
@@ -70,7 +70,7 @@ impl Default for ExpansionStrategy {
     }
 }
 
-impl SmartConnectionPool {
+impl ConnectionPool {
     /// 创建智能连接池
     pub fn new(initial_size: usize, max_size: usize) -> Self {
         Self {

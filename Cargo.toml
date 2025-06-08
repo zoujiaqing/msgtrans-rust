@@ -56,14 +56,14 @@ rand = "0.8"
 name = "packet"
 path = "examples/packet.rs"
 
-# Benchmark configurations
-[[bench]]
-name = "internal_protocols"
-harness = false
-path = "benchmarks/internal_protocols.rs"
-
 # Phase 2 benchmarks
 [[bench]]
 name = "phase2_benchmarks"
 harness = false
 path = "benches/phase2_benchmarks.rs"
+
+# Modern transport benchmarks
+[[bench]]
+name = "modern_transport_benchmarks"
+harness = false
+path = "benches/modern_transport_benchmarks.rs"

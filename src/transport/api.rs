@@ -79,7 +79,7 @@ impl Transport {
         let protocol_registry = Arc::new(create_standard_registry().await?);
         
         // TODO: 这里需要应用专家配置到实际的组件中
-        // 1. 创建带专家配置的SmartConnectionPool
+        // 1. 创建带专家配置的ConnectionPool
         // 2. 创建带专家配置的PerformanceMonitor
         // 3. 将这些组件集成到Transport中
         

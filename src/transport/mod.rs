@@ -20,7 +20,7 @@ pub use core::{
 
 // 重新导出智能池管理
 pub use pool::{
-    SmartConnectionPool, ExpansionStrategy, PoolDetailedStatus,
+    ConnectionPool, ExpansionStrategy, PoolDetailedStatus,
     MemoryPool, MemoryPoolStatus, BufferSize,
     PerformanceMetrics
 };

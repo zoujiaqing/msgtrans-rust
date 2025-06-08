@@ -6,7 +6,7 @@
 /// 3. 不同负载模式下的性能表现
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
-use msgtrans::{SmartConnectionPool, MemoryPool, BufferSize};
+use msgtrans::{ConnectionPool, MemoryPool, transport::BufferSize};
 use std::time::Duration;
 use bytes::BytesMut;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ fn bench_smart_vs_fixed_pool(c: &mut Criterion) {
     // 智能扩展池
     group.bench_function("smart_pool", |b| {
         b.to_async(&rt).iter(|| async {
-            let mut pool = SmartConnectionPool::new(100, 2000);
+            let mut pool = ConnectionPool::new(100, 2000);
             
             // 模拟负载波动
             for _ in 0..10 {
@@ -38,7 +38,7 @@ fn bench_smart_vs_fixed_pool(c: &mut Criterion) {
     // 固定大小池（作为对比）
     group.bench_function("fixed_pool", |b| {
         b.to_async(&rt).iter(|| async {
-            let pool = SmartConnectionPool::new(1000, 1000); // 固定大小
+            let pool = ConnectionPool::new(1000, 1000); // 固定大小
             black_box(pool.detailed_status().await)
         })
     });
@@ -175,7 +175,7 @@ fn bench_expansion_algorithms(c: &mut Criterion) {
     // 渐进式扩展
     group.bench_function("progressive_expansion", |b| {
         b.to_async(&rt).iter(|| async {
-            let mut pool = SmartConnectionPool::new(100, 10000);
+            let mut pool = ConnectionPool::new(100, 10000);
             
             // 执行多次扩展
             for _ in 0..10 {
@@ -255,7 +255,7 @@ fn bench_realistic_workload(c: &mut Criterion) {
     // Web服务器负载模拟
     group.bench_function("web_server_load", |b| {
         b.to_async(&rt).iter(|| async {
-            let mut pool = SmartConnectionPool::new(50, 1000);
+            let mut pool = ConnectionPool::new(50, 1000);
             let memory_pool = pool.memory_pool();
             
             // 模拟Web服务器负载：突发流量 + 持续请求

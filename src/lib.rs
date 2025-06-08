@@ -73,7 +73,7 @@ pub use transport::{
     Transport, 
     TransportBuilder as Builder, 
     TransportConfig as Config,
-    SmartConnectionPool,
+    ConnectionPool,
     MemoryPool
 };
 pub use event::TransportEvent as Event;

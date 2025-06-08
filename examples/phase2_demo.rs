@@ -7,7 +7,7 @@
 /// 4. 智能负载适应
 
 use msgtrans::{
-    transport::{SmartConnectionPool, ExpansionStrategy, MemoryPool, BufferSize, PerformanceMetrics, PoolDetailedStatus, MemoryPoolStatus},
+    transport::{ConnectionPool, ExpansionStrategy, MemoryPool, BufferSize, PerformanceMetrics, PoolDetailedStatus, MemoryPoolStatus},
     TransportError
 };
 use std::time::Duration;
@@ -42,7 +42,7 @@ async fn demo_smart_connection_pool() -> Result<(), TransportError> {
     println!("\n📈 1. 智能连接池扩展演示");
     
     // 创建智能连接池：初始100，最大8000
-    let mut pool = SmartConnectionPool::new(100, 8000);
+    let mut pool = ConnectionPool::new(100, 8000);
     
     println!("初始状态:");
     let status = pool.detailed_status().await;
@@ -142,7 +142,7 @@ async fn demo_memory_pool() -> Result<(), TransportError> {
 async fn demo_performance_monitoring() -> Result<(), TransportError> {
     println!("\n📊 3. 性能监控演示");
     
-    let mut pool = SmartConnectionPool::new(100, 2000);
+    let mut pool = ConnectionPool::new(100, 2000);
     
     // 连续执行多次扩展和收缩操作
     println!("执行连续的扩展/收缩操作...");
@@ -174,7 +174,7 @@ async fn demo_stress_test_scenario() -> Result<(), TransportError> {
     println!("\n🔥 4. 压力测试场景演示");
     
     // 模拟高并发场景
-    let mut pool = SmartConnectionPool::new(50, 5000);
+    let mut pool = ConnectionPool::new(50, 5000);
     let memory_pool = pool.memory_pool();
     
     println!("模拟高并发请求突增...");

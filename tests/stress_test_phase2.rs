@@ -7,7 +7,7 @@
 /// 4. 测量性能指标和资源使用效率
 
 use msgtrans::{
-    transport::{SmartConnectionPool, MemoryPool, BufferSize, PoolDetailedStatus},
+    transport::{ConnectionPool, MemoryPool, BufferSize, PoolDetailedStatus},
     TransportError
 };
 use std::time::{Duration, Instant};
@@ -48,7 +48,7 @@ struct TestResults {
 async fn test_progressive_expansion_algorithm() -> Result<(), TransportError> {
     println!("🧪 测试渐进式扩展算法");
     
-    let mut pool = SmartConnectionPool::new(100, 10000);
+    let mut pool = ConnectionPool::new(100, 10000);
     
     // 验证扩展因子序列: 2.0 -> 1.5 -> 1.2 -> 1.1
     let expected_sizes = vec![
@@ -206,7 +206,7 @@ async fn test_sustained_load() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 运行压力测试
 async fn run_stress_test(config: StressTestConfig) -> Result<TestResults, Box<dyn std::error::Error>> {
-    let mut pool = SmartConnectionPool::new(config.initial_pool_size, config.max_pool_size);
+    let mut pool = ConnectionPool::new(config.initial_pool_size, config.max_pool_size);
     let memory_pool = pool.memory_pool();
     
     let total_requests = Arc::new(AtomicUsize::new(0));
