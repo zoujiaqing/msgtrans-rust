@@ -339,6 +339,7 @@ impl Transport {
 /// 用于创建配置好的传输实例
 pub struct TransportBuilder {
     config: TransportConfig,
+    expert_config: super::expert_config::ExpertConfig,
 }
 
 impl TransportBuilder {
@@ -346,12 +347,32 @@ impl TransportBuilder {
     pub fn new() -> Self {
         Self {
             config: TransportConfig::default(),
+            expert_config: super::expert_config::ExpertConfig::default(),
         }
     }
     
     /// 设置配置
     pub fn config(mut self, config: TransportConfig) -> Self {
         self.config = config;
+        self
+    }
+    
+    /// 设置智能连接池配置
+    pub fn with_smart_pool_config(mut self, config: super::expert_config::SmartPoolConfig) -> Self {
+        self.expert_config.smart_pool = Some(config);
+        self
+    }
+    
+    /// 设置性能监控配置
+    pub fn with_performance_config(mut self, config: super::expert_config::PerformanceConfig) -> Self {
+        self.expert_config.performance = Some(config);
+        self
+    }
+    
+    /// 启用高性能预设配置
+    pub fn high_performance(mut self) -> Self {
+        self.expert_config.smart_pool = Some(super::expert_config::SmartPoolConfig::high_performance());
+        self.expert_config.performance = Some(super::expert_config::PerformanceConfig::production());
         self
     }
     

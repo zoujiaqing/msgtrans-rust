@@ -5,10 +5,10 @@
 
 ---
 
-## 📋 Phase 1: 核心接口重构 (1-2周)
+## 📋 Phase 1: 核心接口重构 (1-2周) ✅ **已完成**
 
 ### 🔧 1.1 统一错误处理系统
-- [ ] **创建 `src/error.rs`**
+- [x] **创建 `src/error.rs`**
   ```rust
   pub enum TransportError {
       Connection { reason: String, retryable: bool },
