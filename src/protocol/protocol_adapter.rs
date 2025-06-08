@@ -67,7 +67,22 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
             }
             Err(e) => {
                 self.stats.record_error();
-                tracing::error!("🔍 ProtocolConnectionAdapter::receive - 接收错误: {:?}", e);
+                
+                // 根据错误类型决定日志级别和处理方式
+                let error_msg = format!("{:?}", e);
+                if error_msg.contains("Connection reset without closing handshake") ||
+                   error_msg.contains("timed out") ||
+                   error_msg.contains("connection closed") ||
+                   error_msg.contains("EOF") ||
+                   error_msg.contains("UnexpectedEof") ||
+                   error_msg.contains("Accept stream error") ||
+                   error_msg.contains("connection closed by peer") {
+                    // 这些是正常的连接关闭情况，使用info级别，并简化消息
+                    tracing::info!("🔍 连接正常关闭 - {:?}", e);
+                } else {
+                    // 其他错误使用error级别
+                    tracing::error!("🔍 ProtocolConnectionAdapter::receive - 接收错误: {:?}", e);
+                }
             }
         }
         

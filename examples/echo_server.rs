@@ -1,7 +1,7 @@
 /// Echo服务器 - 支持TCP、WebSocket、QUIC多协议回显
 use msgtrans::{
-    Builder, Config, Event, Packet,
-    protocol::adapter::{TcpConfig, WebSocketConfig, QuicConfig},
+    Builder, Event, Packet,
+    protocol::{TcpConfig, WebSocketConfig, QuicConfig},
 };
 use futures::StreamExt;
 use std::time::Duration;
@@ -16,8 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🌟 msgtrans 多协议Echo服务器");
     println!("==========================");
     
-    let config = Config::default();
-    let transport = Builder::new().config(config).build().await?;
+    let transport = Builder::new().build().await?;
     
     // 启动TCP服务器
     let tcp_config = TcpConfig::new("127.0.0.1:8001")?.with_nodelay(true);
