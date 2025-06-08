@@ -1,29 +1,32 @@
-/// TCP Echo客户端 - 连接到Echo服务器进行测试
-
+/// TCP Echo客户端 - 展示统一connect API
 use std::time::Duration;
 use tokio::time::sleep;
 use futures::StreamExt;
 
 use msgtrans::{
-    Builder, Config, Event, Packet,
-    protocol::adapter::TcpConfig,
+    transport::TransportBuilder,
+    protocol::TcpConfig,
+    Event, Packet,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
+        .with_max_level(tracing::Level::INFO)
         .init();
     
-    println!("🌟 msgtrans TCP Echo客户端");
-    println!("=======================");
+    println!("🌟 TCP Echo客户端（统一API）");
+    println!("===========================");
     
-    let config = Config::default();
-    let transport = Builder::new().config(config).build().await?;
+    // 🎯 创建传输实例
+    let transport = TransportBuilder::new().build().await?;
     
-    // 连接到服务器
+    // 🔌 统一连接方法 - 传入协议配置即可
     println!("🔌 连接到TCP Echo服务器: 127.0.0.1:8001");
-    let tcp_config = TcpConfig::new("127.0.0.1:8001")?.with_nodelay(true);
+    let tcp_config = TcpConfig {
+        bind_address: "127.0.0.1:8001".parse()?,
+        ..Default::default()
+    };
     
     match transport.connect(tcp_config).await {
         Ok(session_id) => {
@@ -36,6 +39,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokio::spawn(async move {
                 while let Some(event) = events.next().await {
                     match event {
+                        Event::ConnectionEstablished { session_id, info } => {
+                            println!("🔗 连接已建立: {} [{:?}]", session_id, info.protocol);
+                        }
                         Event::MessageReceived { session_id, packet } => {
                             println!("📨 收到回显 (会话{}):", session_id);
                             if let Some(content) = packet.payload_as_string() {
@@ -74,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             // 等待响应
             println!("\n⏳ 等待服务器回显...");
-            sleep(Duration::from_secs(2)).await;
+            sleep(Duration::from_secs(3)).await;
             
             println!("\n🎉 TCP Echo测试完成！");
         }
@@ -85,4 +91,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     Ok(())
-} 
+}
