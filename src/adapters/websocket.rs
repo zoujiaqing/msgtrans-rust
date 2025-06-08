@@ -33,11 +33,11 @@ pub enum WebSocketError {
 impl From<WebSocketError> for TransportError {
     fn from(error: WebSocketError) -> Self {
         match error {
-            WebSocketError::WebSocket(ws_err) => TransportError::Protocol(format!("WebSocket error: {}", ws_err)),
-            WebSocketError::Io(io_err) => TransportError::Io(io_err),
-            WebSocketError::ConnectionClosed => TransportError::Connection("Connection closed".to_string()),
-            WebSocketError::InvalidMessageType => TransportError::Protocol("Invalid message type".to_string()),
-            WebSocketError::Serialization(msg) => TransportError::Serialization(msg),
+            WebSocketError::WebSocket(ws_err) => TransportError::protocol_error("generic", format!("WebSocket error: {}", ws_err)),
+            WebSocketError::Io(io_err) => TransportError::connection_error(format!("IO error: {:?}", io_err), true),
+            WebSocketError::ConnectionClosed => TransportError::connection_error("Connection closed", true),
+            WebSocketError::InvalidMessageType => TransportError::protocol_error("generic", "Invalid message type".to_string()),
+            WebSocketError::Serialization(msg) => TransportError::protocol_error("serialization", msg),
         }
     }
 }

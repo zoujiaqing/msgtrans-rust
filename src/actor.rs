@@ -169,7 +169,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
         match command {
             TransportCommand::Send { session_id, packet, response_tx } => {
                 if session_id != self.session_id {
-                    let _ = response_tx.send(Err(TransportError::InvalidSession));
+                    let _ = response_tx.send(Err(TransportError::connection_error("Invalid session", false)));
                     return Ok(());
                 }
                 
@@ -191,7 +191,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
                     let _ = response_tx.send(result);
                     return Err(CommandHandlingResult::Stop);
                 }
-                let _ = response_tx.send(Err(TransportError::InvalidSession));
+                let _ = response_tx.send(Err(TransportError::connection_error("Invalid session", false)));
             }
             
             TransportCommand::GetStats { response_tx } => {
@@ -203,7 +203,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
                     let info = self.adapter.connection_info();
                     let _ = response_tx.send(Ok(info));
                 } else {
-                    let _ = response_tx.send(Err(TransportError::InvalidSession));
+                    let _ = response_tx.send(Err(TransportError::connection_error("Invalid session", false)));
                 }
             }
             
@@ -218,7 +218,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
                     let _ = response_tx.send(result);
                     return Err(CommandHandlingResult::Stop);
                 }
-                let _ = response_tx.send(Err(TransportError::InvalidSession));
+                let _ = response_tx.send(Err(TransportError::connection_error("Invalid session", false)));
             }
             
             TransportCommand::PauseSession { session_id, response_tx } => {
@@ -227,7 +227,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
                     tracing::info!("Pausing session {}", session_id);
                     let _ = response_tx.send(Ok(()));
                 } else {
-                    let _ = response_tx.send(Err(TransportError::InvalidSession));
+                    let _ = response_tx.send(Err(TransportError::connection_error("Invalid session", false)));
                 }
             }
             
@@ -237,7 +237,7 @@ impl<A: ProtocolAdapter> GenericActor<A> {
                     tracing::info!("Resuming session {}", session_id);
                     let _ = response_tx.send(Ok(()));
                 } else {
-                    let _ = response_tx.send(Err(TransportError::InvalidSession));
+                    let _ = response_tx.send(Err(TransportError::connection_error("Invalid session", false)));
                 }
             }
             
@@ -365,9 +365,9 @@ impl ActorHandle {
             session_id: self.session_id,
             packet,
             response_tx,
-        }).await.map_err(|_| TransportError::ChannelClosed)?;
+        }).await.map_err(|_| TransportError::connection_error("Channel closed", false))?;
         
-        response_rx.await.map_err(|_| TransportError::ChannelClosed)?
+        response_rx.await.map_err(|_| TransportError::connection_error("Channel closed", false))?
     }
     
     /// 关闭连接
@@ -377,9 +377,9 @@ impl ActorHandle {
         self.command_tx.send(TransportCommand::Close {
             session_id: self.session_id,
             response_tx,
-        }).await.map_err(|_| TransportError::ChannelClosed)?;
+        }).await.map_err(|_| TransportError::connection_error("Channel closed", false))?;
         
-        response_rx.await.map_err(|_| TransportError::ChannelClosed)?
+        response_rx.await.map_err(|_| TransportError::connection_error("Channel closed", false))?
     }
     
     /// 获取统计信息
@@ -387,9 +387,9 @@ impl ActorHandle {
         let (response_tx, response_rx) = tokio::sync::oneshot::channel();
         
         self.command_tx.send(TransportCommand::GetStats { response_tx })
-            .await.map_err(|_| TransportError::ChannelClosed)?;
+            .await.map_err(|_| TransportError::connection_error("Channel closed", false))?;
         
-        response_rx.await.map_err(|_| TransportError::ChannelClosed)
+        response_rx.await.map_err(|_| TransportError::connection_error("Channel closed", false))
     }
     
     /// 获取连接信息
@@ -399,9 +399,9 @@ impl ActorHandle {
         self.command_tx.send(TransportCommand::GetConnectionInfo {
             session_id: self.session_id,
             response_tx,
-        }).await.map_err(|_| TransportError::ChannelClosed)?;
+        }).await.map_err(|_| TransportError::connection_error("Channel closed", false))?;
         
-        response_rx.await.map_err(|_| TransportError::ChannelClosed)?
+        response_rx.await.map_err(|_| TransportError::connection_error("Channel closed", false))?
     }
     
     /// 创建事件接收器

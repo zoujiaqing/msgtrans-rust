@@ -368,10 +368,10 @@ impl CommandExecutor {
         
         command_tx.send(command)
             .await
-            .map_err(|_| TransportError::ChannelClosed)?;
+            .map_err(|_| TransportError::connection_error("Channel closed", false))?;
         
         response_rx.await
-            .map_err(|_| TransportError::ChannelClosed)?
+            .map_err(|_| TransportError::connection_error("Channel closed", false))?
     }
     
     /// 关闭连接并等待结果
@@ -383,10 +383,10 @@ impl CommandExecutor {
         
         command_tx.send(command)
             .await
-            .map_err(|_| TransportError::ChannelClosed)?;
+            .map_err(|_| TransportError::connection_error("Channel closed", false))?;
         
         response_rx.await
-            .map_err(|_| TransportError::ChannelClosed)?
+            .map_err(|_| TransportError::connection_error("Channel closed", false))?
     }
     
     /// 获取统计信息
@@ -397,9 +397,9 @@ impl CommandExecutor {
         
         command_tx.send(command)
             .await
-            .map_err(|_| TransportError::ChannelClosed)?;
+            .map_err(|_| TransportError::connection_error("Channel closed", false))?;
         
         response_rx.await
-            .map_err(|_| TransportError::ChannelClosed)
+            .map_err(|_| TransportError::connection_error("Channel closed", false))
     }
 } 

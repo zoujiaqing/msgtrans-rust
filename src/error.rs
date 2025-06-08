@@ -14,100 +14,185 @@ pub enum CloseReason {
     Forced,
 }
 
-/// 统一传输错误类型
-#[derive(Debug, thiserror::Error)]
+/// 统一传输错误类型 - 精简版
+#[derive(Debug, thiserror::Error, Clone)]
 pub enum TransportError {
     /// 连接相关错误
-    #[error("Connection error: {0}")]
-    Connection(String),
+    #[error("Connection error: {reason} (retryable: {retryable})")]
+    Connection { 
+        reason: String, 
+        retryable: bool,
+    },
     
     /// 协议相关错误
-    #[error("Protocol error: {0}")]
-    Protocol(String),
+    #[error("Protocol error ({protocol}): {reason}")]
+    Protocol { 
+        protocol: String, 
+        reason: String,
+    },
     
     /// 配置相关错误
-    #[error("Configuration error: {0}")]
-    Configuration(String),
+    #[error("Configuration error in field '{field}': {reason}")]
+    Configuration { 
+        field: String, 
+        reason: String,
+    },
     
-    /// IO错误
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    
-    /// 序列化错误
-    #[error("Serialization error: {0}")]
-    Serialization(String),
-    
-    /// 会话相关错误
-    #[error("Session not found")]
-    SessionNotFound,
-    
-    #[error("Unsupported protocol: {0}")]
-    UnsupportedProtocol(String),
-    
-    #[error("Protocol configuration error: {0}")]
-    ProtocolConfiguration(String),
-    
-    /// 无效会话
-    #[error("Invalid session")]
-    InvalidSession,
-    
-    /// 通道相关错误
-    #[error("Channel closed")]
-    ChannelClosed,
-    
-    /// 通道滞后
-    #[error("Channel lagged")]
-    ChannelLagged,
-    
-    /// Actor通信错误
-    #[error("Actor communication error")]
-    ActorCommunicationError,
-    
-    /// 广播失败
-    #[error("Broadcast failed to {} sessions", .0.len())]
-    BroadcastFailed(Vec<(SessionId, TransportError)>),
+    /// 资源相关错误
+    #[error("Resource '{resource}' exceeded: current {current}, limit {limit}")]
+    Resource { 
+        resource: String, 
+        current: usize, 
+        limit: usize,
+    },
     
     /// 超时错误
-    #[error("Operation timeout")]
-    Timeout,
-    
-    /// 认证错误
-    #[error("Authentication failed: {0}")]
-    Authentication(String),
-    
-    /// 权限错误
-    #[error("Permission denied: {0}")]
-    Permission(String),
-    
-    #[error("Transport shutdown")]
-    Shutdown,
-    
-    /// 插件相关错误
-    #[error("Plugin error: {0}")]
-    Plugin(String),
+    #[error("Operation '{operation}' timeout after {duration:?}")]
+    Timeout { 
+        operation: String, 
+        duration: Duration,
+    },
 }
 
-impl Clone for TransportError {
-    fn clone(&self) -> Self {
+impl TransportError {
+    /// 判断错误是否可重试
+    pub fn is_retryable(&self) -> bool {
         match self {
-            TransportError::Connection(s) => TransportError::Connection(s.clone()),
-            TransportError::Protocol(s) => TransportError::Protocol(s.clone()),
-            TransportError::Configuration(s) => TransportError::Configuration(s.clone()),
-            TransportError::Io(e) => TransportError::Io(std::io::Error::new(e.kind(), e.to_string())),
-            TransportError::Serialization(s) => TransportError::Serialization(s.clone()),
-            TransportError::SessionNotFound => TransportError::SessionNotFound,
-            TransportError::UnsupportedProtocol(s) => TransportError::UnsupportedProtocol(s.clone()),
-            TransportError::ProtocolConfiguration(s) => TransportError::ProtocolConfiguration(s.clone()),
-            TransportError::InvalidSession => TransportError::InvalidSession,
-            TransportError::ChannelClosed => TransportError::ChannelClosed,
-            TransportError::ChannelLagged => TransportError::ChannelLagged,
-            TransportError::ActorCommunicationError => TransportError::ActorCommunicationError,
-            TransportError::BroadcastFailed(v) => TransportError::BroadcastFailed(v.clone()),
-            TransportError::Timeout => TransportError::Timeout,
-            TransportError::Authentication(s) => TransportError::Authentication(s.clone()),
-            TransportError::Permission(s) => TransportError::Permission(s.clone()),
-            TransportError::Shutdown => TransportError::Shutdown,
-            TransportError::Plugin(s) => TransportError::Plugin(s.clone()),
+            TransportError::Connection { retryable, .. } => *retryable,
+            TransportError::Protocol { .. } => true,  // 协议错误通常可重试
+            TransportError::Configuration { .. } => false, // 配置错误不可重试
+            TransportError::Resource { .. } => true,  // 资源错误可重试（等待资源释放）
+            TransportError::Timeout { .. } => true,   // 超时可重试
+        }
+    }
+    
+    /// 获取建议的重试延迟
+    pub fn retry_delay(&self) -> Option<Duration> {
+        if !self.is_retryable() {
+            return None;
+        }
+        
+        match self {
+            TransportError::Connection { .. } => Some(Duration::from_millis(1000)),
+            TransportError::Protocol { .. } => Some(Duration::from_millis(100)),
+            TransportError::Resource { .. } => Some(Duration::from_millis(500)),
+            TransportError::Timeout { .. } => Some(Duration::from_millis(200)),
+            _ => None,
+        }
+    }
+    
+    /// 获取错误代码
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            TransportError::Connection { .. } => "CONNECTION_ERROR",
+            TransportError::Protocol { .. } => "PROTOCOL_ERROR",
+            TransportError::Configuration { .. } => "CONFIG_ERROR",
+            TransportError::Resource { .. } => "RESOURCE_ERROR",
+            TransportError::Timeout { .. } => "TIMEOUT_ERROR",
+        }
+    }
+    
+    /// 添加会话上下文
+    pub fn with_session(mut self, session_id: SessionId) -> Self {
+        match &mut self {
+            TransportError::Connection { reason, .. } => {
+                if !reason.contains("session:") {
+                    *reason = format!("{} (session: {})", reason, session_id);
+                }
+            },
+            TransportError::Protocol { reason, .. } => {
+                if !reason.contains("session:") {
+                    *reason = format!("{} (session: {})", reason, session_id);
+                }
+            },
+            _ => {} // 其他错误类型不需要会话信息
+        }
+        self
+    }
+    
+    /// 添加操作上下文
+    pub fn with_operation(mut self, op: &'static str) -> Self {
+        match &mut self {
+            TransportError::Connection { reason, .. } => {
+                if !reason.contains("operation:") {
+                    *reason = format!("{} (operation: {})", reason, op);
+                }
+            },
+            TransportError::Protocol { reason, .. } => {
+                if !reason.contains("operation:") {
+                    *reason = format!("{} (operation: {})", reason, op);
+                }
+            },
+            TransportError::Timeout { operation, .. } => {
+                if operation.is_empty() {
+                    *operation = op.to_string();
+                }
+            },
+            _ => {}
+        }
+        self
+    }
+}
+
+/// 便利构造函数
+impl TransportError {
+    /// 创建连接错误
+    pub fn connection_error(reason: impl Into<String>, retryable: bool) -> Self {
+        Self::Connection {
+            reason: reason.into(),
+            retryable,
+        }
+    }
+    
+    /// 创建协议错误
+    pub fn protocol_error(protocol: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::Protocol {
+            protocol: protocol.into(),
+            reason: reason.into(),
+        }
+    }
+    
+    /// 创建配置错误
+    pub fn config_error(field: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::Configuration {
+            field: field.into(),
+            reason: reason.into(),
+        }
+    }
+    
+    /// 创建资源错误
+    pub fn resource_error(resource: impl Into<String>, current: usize, limit: usize) -> Self {
+        Self::Resource {
+            resource: resource.into(),
+            current,
+            limit,
+        }
+    }
+    
+    /// 创建超时错误
+    pub fn timeout_error(operation: impl Into<String>, duration: Duration) -> Self {
+        Self::Timeout {
+            operation: operation.into(),
+            duration,
+        }
+    }
+}
+
+/// 兼容性转换 - 从标准IO错误
+impl From<std::io::Error> for TransportError {
+    fn from(error: std::io::Error) -> Self {
+        let retryable = match error.kind() {
+            std::io::ErrorKind::ConnectionRefused |
+            std::io::ErrorKind::ConnectionAborted |
+            std::io::ErrorKind::ConnectionReset |
+            std::io::ErrorKind::TimedOut |
+            std::io::ErrorKind::Interrupted => true,
+            _ => false,
+        };
+        
+        TransportError::Connection {
+            reason: format!("IO error: {}", error),
+            retryable,
         }
     }
 }
@@ -121,261 +206,36 @@ impl From<TransportError> for TransportEvent {
     }
 }
 
-/// 错误恢复策略
-#[derive(Debug, Clone)]
-pub enum RecoveryStrategy {
-    /// 重试
-    Retry {
-        max_attempts: u32,
-        backoff: Duration,
-    },
-    /// 重连
-    Reconnect {
-        delay: Duration,
-    },
-    /// 降级
-    Fallback {
-        alternative: String,
-    },
-    /// 中止
-    Abort,
-    /// 忽略错误继续
-    Ignore,
-}
-
-/// 错误处理器trait
-#[async_trait::async_trait]
-pub trait ErrorHandler: Send + Sync {
-    /// 处理错误并返回恢复策略
-    async fn handle_error(&self, error: &TransportError) -> RecoveryStrategy;
-    
-    /// 恢复成功时的回调
-    async fn on_recovery_success(&self, error: &TransportError);
-    
-    /// 恢复失败时的回调
-    async fn on_recovery_failure(&self, error: &TransportError, strategy: &RecoveryStrategy);
-}
-
-/// 默认错误处理器
-#[derive(Debug, Default)]
-pub struct DefaultErrorHandler {
-    pub max_retry_attempts: u32,
-    pub retry_backoff: Duration,
-    pub reconnect_delay: Duration,
-}
-
-impl DefaultErrorHandler {
-    pub fn new() -> Self {
-        Self {
-            max_retry_attempts: 3,
-            retry_backoff: Duration::from_millis(100),
-            reconnect_delay: Duration::from_secs(1),
-        }
-    }
-    
-    pub fn with_max_retries(mut self, max_attempts: u32) -> Self {
-        self.max_retry_attempts = max_attempts;
-        self
-    }
-    
-    pub fn with_retry_backoff(mut self, backoff: Duration) -> Self {
-        self.retry_backoff = backoff;
-        self
-    }
-    
-    pub fn with_reconnect_delay(mut self, delay: Duration) -> Self {
-        self.reconnect_delay = delay;
-        self
-    }
-}
-
-#[async_trait::async_trait]
-impl ErrorHandler for DefaultErrorHandler {
-    async fn handle_error(&self, error: &TransportError) -> RecoveryStrategy {
-        match error {
-            // 网络相关错误 - 尝试重连
-            TransportError::Io(_) |
-            TransportError::Connection(_) => {
-                RecoveryStrategy::Reconnect {
-                    delay: self.reconnect_delay,
-                }
-            }
-            
-            // 协议错误 - 尝试重试
-            TransportError::Protocol(_) |
-            TransportError::Serialization(_) => {
-                RecoveryStrategy::Retry {
-                    max_attempts: self.max_retry_attempts,
-                    backoff: self.retry_backoff,
-                }
-            }
-            
-            // 超时错误 - 重试
-            TransportError::Timeout => {
-                RecoveryStrategy::Retry {
-                    max_attempts: self.max_retry_attempts,
-                    backoff: self.retry_backoff,
-                }
-            }
-            
-            // 配置错误 - 中止
-            TransportError::Configuration(_) |
-            TransportError::UnsupportedProtocol(_) |
-            TransportError::ProtocolConfiguration(_) |
-            TransportError::Authentication(_) |
-            TransportError::Permission(_) => {
-                RecoveryStrategy::Abort
-            }
-            
-            // 会话相关错误 - 忽略
-            TransportError::SessionNotFound |
-            TransportError::InvalidSession => {
-                RecoveryStrategy::Ignore
-            }
-            
-            // 通道错误 - 重连
-            TransportError::ChannelClosed |
-            TransportError::ChannelLagged |
-            TransportError::ActorCommunicationError => {
-                RecoveryStrategy::Reconnect {
-                    delay: self.reconnect_delay,
-                }
-            }
-            
-            // 广播失败 - 忽略
-            TransportError::BroadcastFailed(_) => {
-                RecoveryStrategy::Ignore
-            }
-            
-            // 其他错误 - 中止
-            TransportError::Shutdown |
-            TransportError::Plugin(_) => {
-                RecoveryStrategy::Abort
-            }
-        }
-    }
-    
-    async fn on_recovery_success(&self, error: &TransportError) {
-        tracing::info!("Recovered from error: {:?}", error);
-    }
-    
-    async fn on_recovery_failure(&self, error: &TransportError, strategy: &RecoveryStrategy) {
-        tracing::error!("Failed to recover from error: {:?} using strategy: {:?}", error, strategy);
-    }
-}
-
-/// 错误分类器
-pub struct ErrorClassifier;
-
-impl ErrorClassifier {
-    /// 判断错误是否可重试
-    pub fn is_retryable(error: &TransportError) -> bool {
-        matches!(error,
-            TransportError::Protocol(_) |
-            TransportError::Serialization(_) |
-            TransportError::Timeout |
-            TransportError::ChannelLagged
-        )
-    }
-    
-    /// 判断错误是否需要重连
-    pub fn needs_reconnection(error: &TransportError) -> bool {
-        matches!(error,
-            TransportError::Io(_) |
-            TransportError::Connection(_) |
-            TransportError::ChannelClosed |
-            TransportError::ActorCommunicationError
-        )
-    }
-    
-    /// 判断错误是否是致命的
-    pub fn is_fatal(error: &TransportError) -> bool {
-        matches!(error,
-            TransportError::Configuration(_) |
-            TransportError::UnsupportedProtocol(_) |
-            TransportError::ProtocolConfiguration(_) |
-            TransportError::Authentication(_) |
-            TransportError::Permission(_)
-        )
-    }
-    
-    /// 获取错误的严重程度
-    pub fn severity(error: &TransportError) -> ErrorSeverity {
-        match error {
-            TransportError::Configuration(_) |
-            TransportError::UnsupportedProtocol(_) |
-            TransportError::ProtocolConfiguration(_) |
-            TransportError::Authentication(_) |
-            TransportError::Permission(_) => ErrorSeverity::Critical,
-            
-            TransportError::Io(_) |
-            TransportError::Connection(_) |
-            TransportError::ChannelClosed |
-            TransportError::ActorCommunicationError => ErrorSeverity::High,
-            
-            TransportError::Protocol(_) |
-            TransportError::Serialization(_) |
-            TransportError::Timeout |
-            TransportError::ChannelLagged => ErrorSeverity::Medium,
-            
-            TransportError::SessionNotFound |
-            TransportError::InvalidSession |
-            TransportError::BroadcastFailed(_) => ErrorSeverity::Low,
-            
-            TransportError::Shutdown |
-            TransportError::Plugin(_) => ErrorSeverity::Critical,
-        }
-    }
-}
-
-/// 错误严重程度
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ErrorSeverity {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-/// 错误统计信息
-#[derive(Debug, Clone)]
+/// 错误统计
+#[derive(Debug, Default, Clone)]
 pub struct ErrorStats {
     pub total_errors: u64,
+    pub connection_errors: u64,
+    pub protocol_errors: u64,
+    pub config_errors: u64,
+    pub resource_errors: u64,
+    pub timeout_errors: u64,
     pub retries: u64,
-    pub reconnections: u64,
-    pub fatal_errors: u64,
     pub last_error: Option<TransportError>,
-}
-
-impl Default for ErrorStats {
-    fn default() -> Self {
-        Self {
-            total_errors: 0,
-            retries: 0,
-            reconnections: 0,
-            fatal_errors: 0,
-            last_error: None,
-        }
-    }
 }
 
 impl ErrorStats {
     pub fn record_error(&mut self, error: TransportError) {
         self.total_errors += 1;
         
-        if ErrorClassifier::is_retryable(&error) {
-            self.retries += 1;
-        }
-        
-        if ErrorClassifier::needs_reconnection(&error) {
-            self.reconnections += 1;
-        }
-        
-        if ErrorClassifier::is_fatal(&error) {
-            self.fatal_errors += 1;
+        match &error {
+            TransportError::Connection { .. } => self.connection_errors += 1,
+            TransportError::Protocol { .. } => self.protocol_errors += 1,
+            TransportError::Configuration { .. } => self.config_errors += 1,
+            TransportError::Resource { .. } => self.resource_errors += 1,
+            TransportError::Timeout { .. } => self.timeout_errors += 1,
         }
         
         self.last_error = Some(error);
+    }
+    
+    pub fn record_retry(&mut self) {
+        self.retries += 1;
     }
     
     pub fn clear(&mut self) {
@@ -383,9 +243,58 @@ impl ErrorStats {
     }
 }
 
-// 添加从ConfigError到TransportError的转换
-impl From<crate::protocol::adapter::ConfigError> for TransportError {
-    fn from(error: crate::protocol::adapter::ConfigError) -> Self {
-        TransportError::ProtocolConfiguration(format!("Config error: {:?}", error))
+/// 错误分级
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ErrorSeverity {
+    Low,      // 可忽略的错误
+    Medium,   // 需要关注的错误
+    High,     // 需要处理的错误
+    Critical, // 严重错误
+}
+
+impl TransportError {
+    /// 获取错误严重性
+    pub fn severity(&self) -> ErrorSeverity {
+        match self {
+            TransportError::Configuration { .. } => ErrorSeverity::Critical,
+            TransportError::Resource { current, limit, .. } => {
+                let usage_ratio = *current as f64 / *limit as f64;
+                if usage_ratio > 0.9 {
+                    ErrorSeverity::Critical
+                } else if usage_ratio > 0.8 {
+                    ErrorSeverity::High
+                } else {
+                    ErrorSeverity::Medium
+                }
+            },
+            TransportError::Connection { retryable, .. } => {
+                if *retryable {
+                    ErrorSeverity::Medium
+                } else {
+                    ErrorSeverity::High
+                }
+            },
+            TransportError::Protocol { .. } => ErrorSeverity::Medium,
+            TransportError::Timeout { .. } => ErrorSeverity::Medium,
+        }
+    }
+}
+
+/// 向后兼容的错误转换 - 用于旧代码迁移
+impl TransportError {
+    /// 兼容旧的Connection错误格式
+    pub fn connection_legacy(reason: impl Into<String>) -> Self {
+        Self::Connection {
+            reason: reason.into(),
+            retryable: true,
+        }
+    }
+    
+    /// 兼容旧的Protocol错误格式
+    pub fn protocol_legacy(reason: impl Into<String>) -> Self {
+        Self::Protocol {
+            protocol: "unknown".to_string(),
+            reason: reason.into(),
+        }
     }
 } 

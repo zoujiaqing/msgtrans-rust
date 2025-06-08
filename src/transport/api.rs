@@ -124,7 +124,7 @@ impl Transport {
         if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
             handle.send_packet(message).await
         } else {
-            Err(TransportError::SessionNotFound)
+            Err(TransportError::connection_error("Session not found", false))
         }
     }
     
@@ -142,7 +142,7 @@ impl Transport {
         }
         
         if !errors.is_empty() {
-            Err(TransportError::BroadcastFailed(errors))
+            Err(TransportError::protocol_error("broadcast", format!("Broadcast failed to {} sessions", errors.len())))
         } else {
             Ok(())
         }
@@ -155,7 +155,7 @@ impl Transport {
             self.actor_manager.remove_actor(&session_id).await;
             Ok(())
         } else {
-            Err(TransportError::SessionNotFound)
+            Err(TransportError::connection_error("Session not found", false))
         }
     }
     
@@ -169,7 +169,7 @@ impl Transport {
         if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
             handle.connection_info().await
         } else {
-            Err(TransportError::SessionNotFound)
+            Err(TransportError::connection_error("Session not found", false))
         }
     }
     
@@ -358,7 +358,7 @@ impl TransportBuilder {
     /// 构建传输实例
     pub async fn build(self) -> Result<Transport, TransportError> {
         self.config.validate()
-            .map_err(|e| TransportError::ProtocolConfiguration(format!("Invalid config: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("protocol", format!("Invalid config: {:?}", e)))?;
         
         Transport::new(self.config).await
     }
@@ -397,7 +397,7 @@ impl ConnectionManager {
             .config(config)
             .connect()
             .await
-            .map_err(|e| TransportError::Connection(format!("TCP connection failed: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("TCP connection failed: {:?}", e), true))?;
         
         self.transport.add_connection(adapter).await
     }
@@ -417,7 +417,7 @@ impl ConnectionManager {
             .config(config)
             .connect()
             .await
-            .map_err(|e| TransportError::Connection(format!("WebSocket connection failed: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("WebSocket connection failed: {:?}", e), true))?;
         
         self.transport.add_connection(adapter).await
     }
@@ -437,7 +437,7 @@ impl ConnectionManager {
             .config(config)
             .connect()
             .await
-            .map_err(|e| TransportError::Connection(format!("QUIC connection failed: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("QUIC connection failed: {:?}", e), true))?;
         
         self.transport.add_connection(adapter).await
     }
@@ -489,7 +489,7 @@ impl ServerManager {
             .config(config.clone())
             .build()
             .await
-            .map_err(|e| TransportError::Configuration(format!("Failed to start TCP server: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("server", format!("Failed to start TCP server: {:?}", e)))?;
         
         // 启动接受循环
         let transport = self.transport.clone();
@@ -508,7 +508,7 @@ impl ServerManager {
             .config(config)
             .build()
             .await
-            .map_err(|e| TransportError::Configuration(format!("Failed to start TCP server: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("server", format!("Failed to start TCP server: {:?}", e)))?;
         
         tokio::spawn(async move {
             let mut server = server_for_spawn;
@@ -549,7 +549,7 @@ impl ServerManager {
             .config(config.clone())
             .build()
             .await
-            .map_err(|e| TransportError::Configuration(format!("Failed to start WebSocket server: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("server", format!("Failed to start WebSocket server: {:?}", e)))?;
         
         // 启动接受循环
         let transport = self.transport.clone();
@@ -568,7 +568,7 @@ impl ServerManager {
             .config(config)
             .build()
             .await
-            .map_err(|e| TransportError::Configuration(format!("Failed to start WebSocket server: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("server", format!("Failed to start WebSocket server: {:?}", e)))?;
         
         tokio::spawn(async move {
             let mut server = server_for_spawn;

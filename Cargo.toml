@@ -49,6 +49,8 @@ tracing-subscriber = "0.3"
 toml = "0.8"
 # Benchmark dependencies
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
+# Phase 2 testing dependencies
+rand = "0.8"
 
 [[example]]
 name = "packet"
@@ -59,3 +61,9 @@ path = "examples/packet.rs"
 name = "internal_protocols"
 harness = false
 path = "benchmarks/internal_protocols.rs"
+
+# Phase 2 benchmarks
+[[bench]]
+name = "phase2_benchmarks"
+harness = false
+path = "benches/phase2_benchmarks.rs"

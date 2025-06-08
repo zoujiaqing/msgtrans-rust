@@ -73,9 +73,8 @@ pub use transport::{
     Transport, 
     TransportBuilder as Builder, 
     TransportConfig as Config,
-    GlobalConfig,
-    ConnectionManager, 
-    ServerManager
+    SmartConnectionPool,
+    MemoryPool
 };
 pub use event::TransportEvent as Event;
 pub use stream::EventStream;

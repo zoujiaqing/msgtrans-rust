@@ -335,7 +335,7 @@ impl ServerConfig for TcpConfig {
     type Server = crate::adapters::factories::TcpServerWrapper;
     
     fn validate(&self) -> Result<(), TransportError> {
-        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("TCP config validation failed: {:?}", e)))
+        ProtocolConfig::validate(self).map_err(|e| TransportError::config_error("protocol", format!("TCP config validation failed: {:?}", e)))
     }
     
     async fn build_server(&self) -> Result<Self::Server, TransportError> {
@@ -346,7 +346,7 @@ impl ServerConfig for TcpConfig {
             .config(self.clone())
             .build()
             .await
-            .map_err(|e| TransportError::Connection(format!("Failed to build TCP server: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("Failed to build TCP server: {:?}", e), true))?;
             
         Ok(crate::adapters::factories::TcpServerWrapper::new(server))
     }
@@ -360,7 +360,7 @@ impl ClientConfig for TcpConfig {
     type Connection = crate::adapters::factories::TcpConnection;
     
     fn validate(&self) -> Result<(), TransportError> {
-        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("TCP config validation failed: {:?}", e)))
+        ProtocolConfig::validate(self).map_err(|e| TransportError::config_error("protocol", format!("TCP config validation failed: {:?}", e)))
     }
     
     async fn build_connection(&self) -> Result<Self::Connection, TransportError> {
@@ -371,7 +371,7 @@ impl ClientConfig for TcpConfig {
             .config(self.clone())
             .connect()
             .await
-            .map_err(|e| TransportError::Connection(format!("Failed to build TCP connection: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("Failed to build TCP connection: {:?}", e), true))?;
             
         Ok(crate::adapters::factories::TcpConnection::new(adapter))
     }
@@ -537,7 +537,7 @@ impl ServerConfig for WebSocketConfig {
     type Server = crate::adapters::factories::WebSocketServerWrapper;
     
     fn validate(&self) -> Result<(), TransportError> {
-        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("WebSocket config validation failed: {:?}", e)))
+        ProtocolConfig::validate(self).map_err(|e| TransportError::config_error("protocol", format!("WebSocket config validation failed: {:?}", e)))
     }
     
     async fn build_server(&self) -> Result<Self::Server, TransportError> {
@@ -548,7 +548,7 @@ impl ServerConfig for WebSocketConfig {
             .config(self.clone())
             .build()
             .await
-            .map_err(|e| TransportError::Connection(format!("Failed to build WebSocket server: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("Failed to build WebSocket server: {:?}", e), true))?;
             
         Ok(crate::adapters::factories::WebSocketServerWrapper::new(server))
     }
@@ -562,7 +562,7 @@ impl ClientConfig for WebSocketConfig {
     type Connection = crate::adapters::factories::WebSocketConnection<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
     
     fn validate(&self) -> Result<(), TransportError> {
-        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("WebSocket config validation failed: {:?}", e)))
+        ProtocolConfig::validate(self).map_err(|e| TransportError::config_error("protocol", format!("WebSocket config validation failed: {:?}", e)))
     }
     
     async fn build_connection(&self) -> Result<Self::Connection, TransportError> {
@@ -576,7 +576,7 @@ impl ClientConfig for WebSocketConfig {
             .config(self.clone())
             .connect()
             .await
-            .map_err(|e| TransportError::Connection(format!("Failed to build WebSocket connection: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("Failed to build WebSocket connection: {:?}", e), true))?;
             
         Ok(crate::adapters::factories::WebSocketConnection::new(adapter))
     }
@@ -743,7 +743,7 @@ impl ServerConfig for QuicConfig {
     type Server = crate::adapters::factories::QuicServerWrapper;
     
     fn validate(&self) -> Result<(), TransportError> {
-        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("QUIC config validation failed: {:?}", e)))
+        ProtocolConfig::validate(self).map_err(|e| TransportError::config_error("protocol", format!("QUIC config validation failed: {:?}", e)))
     }
     
     async fn build_server(&self) -> Result<Self::Server, TransportError> {
@@ -754,7 +754,7 @@ impl ServerConfig for QuicConfig {
             .config(self.clone())
             .build()
             .await
-            .map_err(|e| TransportError::Connection(format!("Failed to build QUIC server: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("Failed to build QUIC server: {:?}", e), true))?;
             
         Ok(crate::adapters::factories::QuicServerWrapper::new(server))
     }
@@ -768,7 +768,7 @@ impl ClientConfig for QuicConfig {
     type Connection = crate::adapters::factories::QuicConnection;
     
     fn validate(&self) -> Result<(), TransportError> {
-        ProtocolConfig::validate(self).map_err(|e| TransportError::ProtocolConfiguration(format!("QUIC config validation failed: {:?}", e)))
+        ProtocolConfig::validate(self).map_err(|e| TransportError::config_error("protocol", format!("QUIC config validation failed: {:?}", e)))
     }
     
     async fn build_connection(&self) -> Result<Self::Connection, TransportError> {
@@ -779,7 +779,7 @@ impl ClientConfig for QuicConfig {
             .config(self.clone())
             .connect()
             .await
-            .map_err(|e| TransportError::Connection(format!("Failed to build QUIC connection: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("Failed to build QUIC connection: {:?}", e), true))?;
             
         Ok(crate::adapters::factories::QuicConnection::new(adapter))
     }

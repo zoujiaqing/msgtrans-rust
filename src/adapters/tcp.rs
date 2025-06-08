@@ -29,10 +29,10 @@ pub enum TcpError {
 impl From<TcpError> for TransportError {
     fn from(error: TcpError) -> Self {
         match error {
-            TcpError::Io(io_err) => TransportError::Io(io_err),
-            TcpError::ConnectionClosed => TransportError::Connection("Connection closed".to_string()),
-            TcpError::Packet(p_err) => TransportError::Protocol(format!("Packet error: {}", p_err)),
-            TcpError::BufferOverflow => TransportError::Protocol("Buffer overflow".to_string()),
+            TcpError::Io(io_err) => TransportError::connection_error(format!("IO error: {:?}", io_err), true),
+            TcpError::ConnectionClosed => TransportError::connection_error("Connection closed", true),
+            TcpError::Packet(p_err) => TransportError::protocol_error("generic", format!("Packet error: {}", p_err)),
+            TcpError::BufferOverflow => TransportError::protocol_error("generic", "Buffer overflow".to_string()),
         }
     }
 }

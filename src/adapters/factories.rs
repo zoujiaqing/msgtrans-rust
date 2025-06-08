@@ -79,7 +79,7 @@ impl Server for TcpServerWrapper {
         
         let adapter = self.inner.accept().await.map_err(|e| {
             tracing::error!("TcpServerWrapper::accept - TCP accept 错误: {:?}", e);
-            TransportError::Connection(format!("TCP accept error: {:?}", e))
+            TransportError::connection_error(format!("TCP accept error: {:?}", e), true)
         })?;
         
         tracing::info!("TcpServerWrapper::accept - 成功接受新的TCP连接");
@@ -133,7 +133,7 @@ impl ProtocolFactory for TcpFactory {
         };
         
         let adapter = tcp::TcpAdapter::connect(addr, tcp_config).await
-            .map_err(|e| TransportError::Connection(format!("TCP connection failed: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("TCP connection failed: {:?}", e), true))?;
         
         Ok(Box::new(TcpConnection::new(adapter)))
     }
@@ -144,7 +144,7 @@ impl ProtocolFactory for TcpFactory {
         config: Option<Box<dyn Any + Send + Sync>>
     ) -> Result<Box<dyn Server>, TransportError> {
         let addr: std::net::SocketAddr = bind_addr.parse()
-            .map_err(|_| TransportError::ProtocolConfiguration(format!("Invalid bind address: {}", bind_addr)))?;
+            .map_err(|_| TransportError::config_error("protocol", format!("Invalid bind address: {}", bind_addr)))?;
         
         let tcp_config = if let Some(config_box) = config {
             if let Ok(config) = config_box.downcast::<TcpConfig>() {
@@ -161,7 +161,7 @@ impl ProtocolFactory for TcpFactory {
             .config(tcp_config)
             .build()
             .await
-            .map_err(|e| TransportError::ProtocolConfiguration(format!("TCP server creation failed: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("protocol", format!("TCP server creation failed: {:?}", e)))?;
         
         Ok(Box::new(TcpServerWrapper::new(server)))
     }
@@ -176,25 +176,25 @@ impl ProtocolFactory for TcpFactory {
             if let Ok(addr) = stripped.parse::<std::net::SocketAddr>() {
                 Ok((addr, HashMap::new()))
             } else {
-                Err(TransportError::Configuration(format!("Invalid TCP URI: {}", uri)))
+                Err(TransportError::config_error("general", format!("Invalid TCP URI: {}", uri)))
             }
         } else if let Some(stripped) = uri.strip_prefix("tcp4://") {
             if let Ok(addr) = stripped.parse::<std::net::SocketAddr>() {
                 Ok((addr, HashMap::new()))
             } else {
-                Err(TransportError::Configuration(format!("Invalid TCP4 URI: {}", uri)))
+                Err(TransportError::config_error("general", format!("Invalid TCP4 URI: {}", uri)))
             }
         } else if let Some(stripped) = uri.strip_prefix("tcp6://") {
             if let Ok(addr) = stripped.parse::<std::net::SocketAddr>() {
                 Ok((addr, HashMap::new()))
             } else {
-                Err(TransportError::Configuration(format!("Invalid TCP6 URI: {}", uri)))
+                Err(TransportError::config_error("general", format!("Invalid TCP6 URI: {}", uri)))
             }
         } else if let Ok(addr) = uri.parse::<std::net::SocketAddr>() {
             // 支持没有scheme的 host:port 格式
             Ok((addr, HashMap::new()))
         } else {
-            Err(TransportError::Configuration(format!("Invalid TCP URI: {}", uri)))
+            Err(TransportError::config_error("general", format!("Invalid TCP URI: {}", uri)))
         }
     }
 }
@@ -262,7 +262,7 @@ impl WebSocketServerWrapper {
 #[async_trait]
 impl Server for WebSocketServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
-        let adapter = self.inner.accept().await.map_err(|e| TransportError::Connection(format!("WebSocket accept error: {:?}", e)))?;
+        let adapter = self.inner.accept().await.map_err(|e| TransportError::connection_error(format!("WebSocket accept error: {:?}", e), true))?;
         Ok(Box::new(WebSocketConnection::new(adapter)))
     }
     
@@ -314,7 +314,7 @@ impl ProtocolFactory for WebSocketFactory {
             .config(ws_config)
             .connect()
             .await
-            .map_err(|e| TransportError::Connection(format!("WebSocket connection failed: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("WebSocket connection failed: {:?}", e), true))?;
         
         Ok(Box::new(WebSocketConnection::new(adapter)))
     }
@@ -325,7 +325,7 @@ impl ProtocolFactory for WebSocketFactory {
         config: Option<Box<dyn Any + Send + Sync>>
     ) -> Result<Box<dyn Server>, TransportError> {
         let addr: std::net::SocketAddr = bind_addr.parse()
-            .map_err(|_| TransportError::ProtocolConfiguration(format!("Invalid bind address: {}", bind_addr)))?;
+            .map_err(|_| TransportError::config_error("protocol", format!("Invalid bind address: {}", bind_addr)))?;
         
         let ws_config = if let Some(config_box) = config {
             if let Ok(config) = config_box.downcast::<WebSocketConfig>() {
@@ -342,7 +342,7 @@ impl ProtocolFactory for WebSocketFactory {
             .config(ws_config)
             .build()
             .await
-            .map_err(|e| TransportError::ProtocolConfiguration(format!("WebSocket server creation failed: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("protocol", format!("WebSocket server creation failed: {:?}", e)))?;
         
         Ok(Box::new(WebSocketServerWrapper::new(server)))
     }
@@ -357,16 +357,16 @@ impl ProtocolFactory for WebSocketFactory {
             if let Ok(addr) = url.parse::<std::net::SocketAddr>() {
                 Ok((addr, HashMap::new()))
             } else {
-                Err(TransportError::ProtocolConfiguration(format!("Invalid WebSocket URI: {}", uri)))
+                Err(TransportError::config_error("protocol", format!("Invalid WebSocket URI: {}", uri)))
             }
         } else if let Some(url) = uri.strip_prefix("wss://") {
             if let Ok(addr) = url.parse::<std::net::SocketAddr>() {
                 Ok((addr, HashMap::new()))
             } else {
-                Err(TransportError::ProtocolConfiguration(format!("Invalid WebSocket URI: {}", uri)))
+                Err(TransportError::config_error("protocol", format!("Invalid WebSocket URI: {}", uri)))
             }
         } else {
-            Err(TransportError::ProtocolConfiguration(format!("Unsupported WebSocket scheme: {}", uri)))
+            Err(TransportError::config_error("protocol", format!("Unsupported WebSocket scheme: {}", uri)))
         }
     }
 }
@@ -434,12 +434,12 @@ impl QuicServerWrapper {
 #[async_trait]
 impl Server for QuicServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
-        let adapter = self.inner.accept().await.map_err(|e| TransportError::Connection(format!("QUIC accept error: {:?}", e)))?;
+        let adapter = self.inner.accept().await.map_err(|e| TransportError::connection_error(format!("QUIC accept error: {:?}", e), true))?;
         Ok(Box::new(QuicConnection::new(adapter)))
     }
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
-        self.inner.local_addr().map_err(|e| TransportError::Connection(format!("Failed to get local addr: {:?}", e)))
+        self.inner.local_addr().map_err(|e| TransportError::connection_error(format!("Failed to get local addr: {:?}", e), true))
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
@@ -484,7 +484,7 @@ impl ProtocolFactory for QuicFactory {
         };
         
         let adapter = quic::QuicAdapter::connect(addr, quic_config).await
-            .map_err(|e| TransportError::Connection(format!("QUIC connection failed: {:?}", e)))?;
+            .map_err(|e| TransportError::connection_error(format!("QUIC connection failed: {:?}", e), true))?;
         
         Ok(Box::new(QuicConnection::new(adapter)))
     }
@@ -495,7 +495,7 @@ impl ProtocolFactory for QuicFactory {
         config: Option<Box<dyn Any + Send + Sync>>
     ) -> Result<Box<dyn Server>, TransportError> {
         let addr: std::net::SocketAddr = bind_addr.parse()
-            .map_err(|_| TransportError::ProtocolConfiguration(format!("Invalid bind address: {}", bind_addr)))?;
+            .map_err(|_| TransportError::config_error("protocol", format!("Invalid bind address: {}", bind_addr)))?;
         
         let quic_config = if let Some(config_box) = config {
             if let Ok(config) = config_box.downcast::<QuicConfig>() {
@@ -512,7 +512,7 @@ impl ProtocolFactory for QuicFactory {
             .config(quic_config)
             .build()
             .await
-            .map_err(|e| TransportError::ProtocolConfiguration(format!("QUIC server creation failed: {:?}", e)))?;
+            .map_err(|e| TransportError::config_error("protocol", format!("QUIC server creation failed: {:?}", e)))?;
         
         Ok(Box::new(QuicServerWrapper::new(server)))
     }
@@ -526,7 +526,7 @@ impl ProtocolFactory for QuicFactory {
             if let Ok(addr) = url.parse::<std::net::SocketAddr>() {
                 Ok((addr, HashMap::new()))
             } else {
-                Err(TransportError::ProtocolConfiguration(format!("Invalid QUIC URI: {}", uri)))
+                Err(TransportError::config_error("protocol", format!("Invalid QUIC URI: {}", uri)))
             }
         } else {
             // 默认解析为 host:port

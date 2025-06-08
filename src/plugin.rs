@@ -54,7 +54,7 @@ impl PluginRegistry {
         let name = plugin.name().to_string();
         
         if plugins.contains_key(&name) {
-            return Err(TransportError::Plugin(format!(
+            return Err(TransportError::config_error("plugin", format!(
                 "Protocol '{}' is already registered", name
             )));
         }
@@ -69,7 +69,7 @@ impl PluginRegistry {
         if plugins.remove(name).is_some() {
             Ok(())
         } else {
-            Err(TransportError::Plugin(format!(
+            Err(TransportError::config_error("plugin", format!(
                 "Protocol '{}' is not registered", name
             )))
         }
@@ -163,7 +163,7 @@ impl PluginManager {
         
         // 检查是否为内置协议
         if !self.allow_override && self.is_builtin_protocol(name) {
-            return Err(TransportError::Plugin(format!(
+            return Err(TransportError::config_error("plugin", format!(
                 "Cannot override builtin protocol '{}'. Use with_override() to allow this.", name
             )));
         }
@@ -238,7 +238,7 @@ impl PluginManager {
         if let Some(plugin) = self.get_plugin(protocol) {
             plugin.create_server(config).await
         } else {
-            Err(TransportError::Plugin(format!(
+            Err(TransportError::config_error("plugin", format!(
                 "Protocol '{}' not found. Available protocols: {:?}", 
                 protocol, 
                 self.list_protocols()
@@ -255,7 +255,7 @@ impl PluginManager {
         if let Some(plugin) = self.get_plugin(protocol) {
             plugin.create_connection_factory(config).await
         } else {
-            Err(TransportError::Plugin(format!(
+            Err(TransportError::config_error("plugin", format!(
                 "Protocol '{}' not found. Available protocols: {:?}", 
                 protocol, 
                 self.list_protocols()

@@ -118,7 +118,7 @@ impl Server for TcpServer {
     
     async fn accept(&mut self) -> Result<Self::Connection, TransportError> {
         let adapter = self.inner.accept().await.map_err(|e| {
-            TransportError::Protocol(format!("TCP accept failed: {:?}", e))
+            TransportError::protocol_error("generic", format!("TCP accept failed: {:?}", e))
         })?;
         
         Ok(TcpConnection::new(adapter))
@@ -126,7 +126,7 @@ impl Server for TcpServer {
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
         self.inner.local_addr().map_err(|e| {
-            TransportError::Protocol(format!("Failed to get local address: {:?}", e))
+            TransportError::protocol_error("generic", format!("Failed to get local address: {:?}", e))
         })
     }
     
@@ -155,7 +155,7 @@ impl ConnectionFactory for TcpConnectionFactory {
     async fn connect(&self) -> Result<Self::Connection, TransportError> {
         let adapter = crate::adapters::tcp::TcpAdapter::connect(self.target_addr, self.config.clone())
             .await
-            .map_err(|e| TransportError::Protocol(format!("TCP connect failed: {:?}", e)))?;
+            .map_err(|e| TransportError::protocol_error("generic", format!("TCP connect failed: {:?}", e)))?;
         
         Ok(TcpConnection::new(adapter))
     }

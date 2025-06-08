@@ -91,7 +91,7 @@ pub trait ProtocolFactory: Send + Sync {
         if let Ok(addr) = uri.parse::<std::net::SocketAddr>() {
             Ok((addr, HashMap::new()))
         } else {
-            Err(TransportError::Configuration(format!("Invalid URI: {}", uri)))
+            Err(TransportError::config_error("uri", format!("Invalid URI: {}", uri)))
         }
     }
     
@@ -131,7 +131,8 @@ impl ProtocolRegistry {
         {
             let mut factories = self.factories.write().await;
             if factories.contains_key(&protocol_name) {
-                return Err(TransportError::Configuration(
+                return Err(TransportError::config_error(
+                    "protocol_name", 
                     format!("Protocol '{}' already registered", protocol_name)
                 ));
             }
@@ -143,7 +144,8 @@ impl ProtocolRegistry {
             let mut schemes_map = self.schemes.write().await;
             for scheme in schemes {
                 if schemes_map.contains_key(scheme) {
-                    return Err(TransportError::Configuration(
+                    return Err(TransportError::config_error(
+                        "scheme", 
                         format!("Scheme '{}' already registered", scheme)
                     ));
                 }
@@ -176,7 +178,7 @@ impl ProtocolRegistry {
         if let Some(factory) = self.get_factory_by_scheme(&scheme).await {
             factory.create_connection(uri, config).await
         } else {
-            Err(TransportError::UnsupportedProtocol(scheme))
+            Err(TransportError::protocol_error("unknown", format!("Unsupported protocol scheme: {}", scheme)))
         }
     }
     
@@ -190,7 +192,7 @@ impl ProtocolRegistry {
         if let Some(factory) = self.get_factory(protocol).await {
             factory.create_server(bind_addr, config).await
         } else {
-            Err(TransportError::UnsupportedProtocol(protocol.to_string()))
+            Err(TransportError::protocol_error("unknown", format!("Unsupported protocol: {}", protocol)))
         }
     }
     
@@ -213,7 +215,8 @@ impl ProtocolRegistry {
             if uri.parse::<std::net::SocketAddr>().is_ok() {
                 Ok("tcp".to_string()) // 默认为TCP
             } else {
-                Err(TransportError::Configuration(
+                Err(TransportError::config_error(
+                    "uri", 
                     format!("Invalid URI format: {}", uri)
                 ))
             }
@@ -261,6 +264,6 @@ impl PluginManager {
     /// 预留方法：从动态库加载协议
     pub fn load_from_dylib(&mut self, _path: &std::path::Path) -> Result<(), TransportError> {
         // TODO: 第三阶段实现
-        Err(TransportError::Configuration("Plugin loading not yet implemented".to_string()))
+        Err(TransportError::config_error("plugin", "Plugin loading not yet implemented"))
     }
 } 

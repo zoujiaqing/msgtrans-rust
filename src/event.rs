@@ -150,7 +150,7 @@ impl ProtocolEvent for TcpEvent {
             TcpEvent::AcceptError { error } => {
                 TransportEvent::TransportError {
                     session_id: None,
-                    error: TransportError::Io(std::io::Error::new(std::io::ErrorKind::Other, error)),
+                    error: TransportError::connection_error(format!("IO error: {:?}", std::io::Error::new(std::io::ErrorKind::Other, error)), true)
                 }
             }
             TcpEvent::ConnectionTimeout { session_id } => {
@@ -209,14 +209,14 @@ impl ProtocolEvent for WebSocketEvent {
             WebSocketEvent::InvalidFrame { session_id, error } => {
                 TransportEvent::TransportError {
                     session_id: Some(session_id),
-                    error: TransportError::Protocol(error),
+                    error: TransportError::protocol_error("generic", error),
                 }
             }
             _ => {
                 // Ping/Pong 事件不需要转换为通用事件
                 TransportEvent::TransportError {
                     session_id: self.session_id(),
-                    error: TransportError::Protocol("Unhandled WebSocket event".to_string()),
+                    error: TransportError::protocol_error("generic", "Unhandled WebSocket event".to_string()),
                 }
             }
         }
@@ -283,7 +283,7 @@ impl ProtocolEvent for QuicEvent {
                 // 其他QUIC事件暂时不转换
                 TransportEvent::TransportError {
                     session_id: self.session_id(),
-                    error: TransportError::Protocol("Unhandled QUIC event".to_string()),
+                    error: TransportError::protocol_error("generic", "Unhandled QUIC event".to_string()),
                 }
             }
         }

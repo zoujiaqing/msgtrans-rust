@@ -51,15 +51,15 @@ pub enum QuicError {
 impl From<QuicError> for TransportError {
     fn from(error: QuicError) -> Self {
         match error {
-            QuicError::Connection(msg) => TransportError::Connection(msg),
-            QuicError::Io(io_err) => TransportError::Io(io_err),
-            QuicError::ConnectionClosed => TransportError::Connection("Connection closed".to_string()),
-            QuicError::Stream(msg) => TransportError::Protocol(format!("Stream error: {}", msg)),
-            QuicError::Certificate(msg) => TransportError::Authentication(msg),
-            QuicError::Serialization(msg) => TransportError::Serialization(msg),
-            QuicError::Quinn(e) => TransportError::Connection(format!("Quinn connection error: {}", e)),
-            QuicError::EndpointGeneric => TransportError::Connection("Quinn endpoint error".to_string()),
-            QuicError::ConnectGeneric => TransportError::Connection("Quinn connect error".to_string()),
+            QuicError::Connection(msg) => TransportError::connection_error(msg, true),
+            QuicError::Io(io_err) => TransportError::connection_error(format!("IO error: {:?}", io_err), true),
+            QuicError::ConnectionClosed => TransportError::connection_error("Connection closed", true),
+            QuicError::Stream(msg) => TransportError::protocol_error("generic", format!("Stream error: {}", msg)),
+            QuicError::Certificate(msg) => TransportError::protocol_error("auth", msg),
+            QuicError::Serialization(msg) => TransportError::protocol_error("serialization", msg),
+            QuicError::Quinn(e) => TransportError::connection_error(format!("Quinn connection error: {}", e), true),
+            QuicError::EndpointGeneric => TransportError::connection_error("Quinn endpoint error", true),
+            QuicError::ConnectGeneric => TransportError::connection_error("Quinn connect error", true),
         }
     }
 }
