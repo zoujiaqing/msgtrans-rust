@@ -47,7 +47,15 @@ zstd = { version = "0.13", optional = true }
 [dev-dependencies]
 tracing-subscriber = "0.3"
 toml = "0.8"
+# Benchmark dependencies
+criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 
 [[example]]
 name = "packet"
 path = "examples/packet.rs"
+
+# Benchmark configurations
+[[bench]]
+name = "internal_protocols"
+harness = false
+path = "benchmarks/internal_protocols.rs"
