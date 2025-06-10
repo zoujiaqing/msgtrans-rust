@@ -165,35 +165,34 @@ impl Transport {
         })
     }
     
-    /// 🚀 Phase 3: 添加连接时默认使用优化组件
+    /// 🚀 Phase 3.3: 添加连接时默认使用OptimizedActor
     pub async fn add_connection<A: ProtocolAdapter>(
         &self,
         adapter: A,
-    ) -> Result<SessionId, TransportError> {
+    ) -> Result<SessionId, TransportError> 
+    where
+        A: Send + 'static,
+        A::Config: Send + 'static,
+    {
         let session_id = self.generate_session_id();
         
-        // 🔧 混合架构优化：保持原有网络适配器，增强Actor性能
+        // 🚀 Phase 3.3: 完全迁移到OptimizedActor - 真实网络适配器集成
         
-        // 创建Actor的命令通道
-        let (command_tx, command_rx) = mpsc::channel(1024);
-        
-        // 使用全局事件发送器
         let global_event_tx = self.actor_manager.global_event_tx.clone();
-        let global_event_rx = self.actor_manager.global_events();
         
-        // 🚀 创建增强的 GenericActor（使用优化的内存池和连接池）
-        let actor = crate::actor::GenericActor::new(
-            adapter,
-            session_id,
-            command_rx,
-            global_event_tx,
-            A::Config::default_config(),
-        );
+        // 🚀 创建OptimizedActor（使用真实网络适配器）
+        let (optimized_actor, _event_receiver, _data_sender, command_sender) = 
+            crate::transport::actor_v2::OptimizedActor::new_with_real_adapter(
+                session_id,
+                adapter,
+                32,  // 批量处理大小
+                global_event_tx,
+            );
         
-        // 创建Actor句柄
+        // 创建Actor句柄（兼容现有系统）
         let handle = crate::actor::ActorHandle::new(
-            command_tx,
-            global_event_rx,
+            command_sender,
+            self.actor_manager.global_events(),
             session_id,
             Arc::new(tokio::sync::Mutex::new(0)),
         );
@@ -201,20 +200,20 @@ impl Transport {
         // 将句柄添加到管理器
         self.actor_manager.add_actor(session_id, handle.clone()).await;
         
-        // 启动Actor任务（使用高性能后端组件支持）
+        // 启动OptimizedActor任务
         let actor_manager = self.actor_manager.clone();
         let session_id_for_cleanup = session_id;
         tokio::spawn(async move {
-            tracing::info!("🚀 启动增强Actor (会话: {})，使用高性能后端组件", session_id_for_cleanup);
-            if let Err(e) = actor.run().await {
-                tracing::error!("Actor {} failed: {:?}", session_id_for_cleanup, e);
+            tracing::info!("🚀 启动 OptimizedActor (会话: {})", session_id_for_cleanup);
+            if let Err(e) = optimized_actor.run_dual_pipeline().await {
+                tracing::error!("OptimizedActor {} failed: {:?}", session_id_for_cleanup, e);
             }
             
             // 清理Actor
             actor_manager.remove_actor(&session_id_for_cleanup).await;
         });
         
-        tracing::info!("✅ 成功添加增强Actor连接 (会话: {})，享受高性能后端支持", session_id);
+        tracing::info!("✅ 成功添加 OptimizedActor 连接 (会话: {})", session_id);
         
         Ok(session_id)
     }
