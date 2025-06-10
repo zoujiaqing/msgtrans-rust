@@ -393,6 +393,22 @@ pub fn create_test_packet(id: u64, size: usize) -> Packet {
     }
 }
 
+impl Clone for FlumePoweredProtocolAdapter {
+    fn clone(&self) -> Self {
+        Self {
+            send_tx: self.send_tx.clone(),
+            send_rx: self.send_rx.clone(),
+            recv_tx: self.recv_tx.clone(),
+            recv_rx: self.recv_rx.clone(),
+            event_tx: self.event_tx.clone(),
+            stats: self.stats.clone(),
+            session_id: self.session_id,
+            connection_info: self.connection_info.clone(),
+            is_connected: std::sync::atomic::AtomicBool::new(self.is_connected.load(std::sync::atomic::Ordering::Relaxed)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

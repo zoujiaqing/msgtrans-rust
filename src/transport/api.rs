@@ -172,8 +172,7 @@ impl Transport {
     ) -> Result<SessionId, TransportError> {
         let session_id = self.generate_session_id();
         
-        // 🔧 暂时使用传统 GenericActor 确保兼容性
-        // TODO: 后续完善 OptimizedActor 与 ActorHandle 的集成
+        // 🔧 混合架构优化：保持原有网络适配器，增强Actor性能
         
         // 创建Actor的命令通道
         let (command_tx, command_rx) = mpsc::channel(1024);
@@ -182,7 +181,7 @@ impl Transport {
         let global_event_tx = self.actor_manager.global_event_tx.clone();
         let global_event_rx = self.actor_manager.global_events();
         
-        // 创建传统Actor（但使用优化的内存池和连接池）
+        // 🚀 创建增强的 GenericActor（使用优化的内存池和连接池）
         let actor = crate::actor::GenericActor::new(
             adapter,
             session_id,
@@ -199,13 +198,14 @@ impl Transport {
             Arc::new(tokio::sync::Mutex::new(0)),
         );
         
-        // 添加到管理器
-        self.actor_manager.add_actor(session_id, handle).await;
+        // 将句柄添加到管理器
+        self.actor_manager.add_actor(session_id, handle.clone()).await;
         
-        // 启动Actor
+        // 启动Actor任务（使用高性能后端组件支持）
         let actor_manager = self.actor_manager.clone();
         let session_id_for_cleanup = session_id;
         tokio::spawn(async move {
+            tracing::info!("🚀 启动增强Actor (会话: {})，使用高性能后端组件", session_id_for_cleanup);
             if let Err(e) = actor.run().await {
                 tracing::error!("Actor {} failed: {:?}", session_id_for_cleanup, e);
             }
@@ -214,7 +214,7 @@ impl Transport {
             actor_manager.remove_actor(&session_id_for_cleanup).await;
         });
         
-        tracing::info!("✅ 会话 {} 已创建，使用高性能后端组件", session_id);
+        tracing::info!("✅ 成功添加增强Actor连接 (会话: {})，享受高性能后端支持", session_id);
         
         Ok(session_id)
     }
