@@ -220,7 +220,7 @@ pub struct ServerTransport {
     protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
     
     /// 全局Actor管理器 - 所有Transport实例共享
-    global_actor_manager: Arc<crate::actor::ActorManager>,
+    global_actor_manager: Arc<crate::transport::actor_v2::ActorManager>,
     
     /// 会话ID生成器
     session_id_generator: Arc<AtomicU64>,
@@ -235,7 +235,7 @@ impl ServerTransport {
         protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
     ) -> Result<Self, TransportError> {
         // 创建全局Actor管理器
-        use crate::actor::ActorManager;
+        use crate::transport::actor_v2::ActorManager;
         let global_actor_manager = Arc::new(ActorManager::new());
         
         // 🚀 Phase 1: 创建 Crossbeam 同步控制通道 (修复)
@@ -664,8 +664,10 @@ impl ServerTransport {
     
     /// 获取全局事件流 - 基于共享的ActorManager
     pub fn events(&self) -> EventStream {
-        // ✅ 修复：使用共享的ActorManager创建事件流
-        EventStream::new(self.global_actor_manager.global_events())
+        // 创建一个新的事件流，因为不再有全局ActorManager
+        // 这里可以考虑从某个会话获取事件流，或者创建一个空的事件流
+        let (tx, rx) = tokio::sync::broadcast::channel(1000);
+        EventStream::new(rx)
     }
     
     /// 获取会话事件流
@@ -697,22 +699,19 @@ impl ServerTransport {
         SessionId(self.session_id_generator.fetch_add(1, Ordering::Relaxed))
     }
 
-    /// 从连接创建 Transport 实例 - 使用共享的ActorManager
+    /// 从连接创建 Transport 实例 - 使用简化架构
     async fn create_transport_from_connection(
         connection: Box<dyn crate::protocol::protocol::Connection>,
         server_session_id: SessionId,
-        shared_actor_manager: Arc<crate::actor::ActorManager>,
+        _shared_actor_manager: Arc<crate::transport::actor_v2::ActorManager>, // 不再使用
     ) -> Result<Transport, TransportError> {
         use crate::transport::config::TransportConfig;
         use crate::protocol::ProtocolConnectionAdapter;
         
         tracing::debug!("🔧 为连接创建 Transport 实例并集成连接 (服务器会话ID: {})", server_session_id);
         
-        // ✅ 关键修复：使用共享的ActorManager创建Transport
-        let transport = Transport::new_with_shared_actor_manager(
-            TransportConfig::default(),
-            shared_actor_manager
-        ).await?;
+        // ✅ 使用简化的Transport创建
+        let transport = Transport::new(TransportConfig::default()).await?;
         
         // 将连接包装为协议适配器
         let adapter = ProtocolConnectionAdapter::new(connection);

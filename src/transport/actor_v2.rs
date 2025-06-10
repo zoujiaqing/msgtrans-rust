@@ -158,7 +158,7 @@ pub struct OptimizedActor<A: ProtocolAdapter> {
     max_batch_size: usize,
     
     /// 🌐 全局事件发送器（兼容现有系统）
-    global_event_sender: tokio::sync::broadcast::Sender<crate::Event>,
+    global_event_sender: tokio::sync::broadcast::Sender<crate::TransportEvent>,
 }
 
 impl<A: ProtocolAdapter> OptimizedActor<A> {
@@ -167,7 +167,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
         session_id: SessionId,
         protocol_adapter: A,
         max_batch_size: usize,
-        global_event_sender: tokio::sync::broadcast::Sender<crate::Event>,
+        global_event_sender: tokio::sync::broadcast::Sender<crate::TransportEvent>,
     ) -> (Self, FlumeReceiver<ActorEvent>, FlumeSender<Packet>, mpsc::Sender<TransportCommand>) {
         let (event_sender, event_receiver) = flume_unbounded();
         let (data_sender, data_receiver) = flume_unbounded();
@@ -347,7 +347,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                                         stats.record_packet_sent(packet.payload.len());
                                         
                                         // 发送全局事件（兼容现有系统）
-                                        let transport_event = crate::Event::MessageSent {
+                                        let transport_event = crate::TransportEvent::MessageSent {
                                             session_id,
                                             packet_id: packet.message_id,
                                         };
@@ -366,7 +366,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                                         }
                                         
                                         // 发送错误事件
-                                        let transport_event = crate::Event::TransportError {
+                                        let transport_event = crate::TransportEvent::TransportError {
                                             session_id: Some(session_id),
                                             error: TransportError::connection_error(format!("{:?}", e), false),
                                         };
@@ -424,7 +424,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                         });
                         
                         // 🌐 发送全局事件（兼容现有系统）
-                        let transport_event = crate::Event::MessageReceived {
+                        let transport_event = crate::TransportEvent::MessageReceived {
                             session_id,
                             packet: packet.clone(),
                         };
@@ -485,7 +485,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                         let _ = event_sender.send(ActorEvent::Shutdown);
                         
                         // 发送全局关闭事件
-                        let transport_event = crate::Event::ConnectionClosed {
+                        let transport_event = crate::TransportEvent::ConnectionClosed {
                             session_id,
                             reason: crate::CloseReason::Normal,
                         };

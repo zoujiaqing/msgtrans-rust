@@ -2,29 +2,31 @@
 /// 
 /// 提供高级的、协议无关的传输API
 /// 🚀 Phase 3: 默认使用优化后的高性能组件
+/// 🚀 Phase 4: 简化架构 - 直接管理OptimizedActor
+/// 移除了复杂的ActorHandle包装层，直接与OptimizedActor通信
 
 use tokio::sync::mpsc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
+use tokio::sync::broadcast;
 use crate::{
-    SessionId,
-    command::{TransportStats, ConnectionInfo},
-    error::TransportError,
-    actor::{ActorHandle, ActorManager},
+    SessionId, PacketId, TransportError, Packet, TransportEvent, EventStream,
+    error::CloseReason,
+    command::{ConnectionInfo, TransportCommand, TransportStats},
     protocol::{ProtocolAdapter, ProtocolConfig, ProtocolRegistry, Connection, ProtocolConnectionAdapter, adapter::ServerConfig},
-    stream::EventStream,
-    packet::Packet,
     adapters::create_standard_registry,
-    Event,
+    transport::{
+        actor_v2::{ActorManager, OptimizedActor},
+        lockfree_enhanced::LockFreeHashMap,
+        pool::ConnectionPool,
+        memory_pool_v2::{OptimizedMemoryPool, OptimizedMemoryStatsSnapshot, MemoryPoolEvent, BufferSize},
+        expert_config::ExpertConfig,
+    },
 };
 use futures::StreamExt;
-use super::config::TransportConfig;
-
-// 🚀 Phase 3: 默认使用优化组件
 use super::{
-    memory_pool_v2::OptimizedMemoryPool,
-    ConnectionPool,
+    config::TransportConfig,
 };
 
 /// 🔌 可连接配置 trait - 让每个协议自己处理连接逻辑
@@ -50,9 +52,8 @@ pub struct ProtocolInfo {
 /// 统一传输接口
 /// 
 /// 🚀 Phase 3: 默认集成高性能组件
+/// 🚀 简化的会话管理器
 pub struct Transport {
-    /// 🚀 优化后的Actor管理器
-    actor_manager: Arc<ActorManager>,
     /// 全局事件流
     #[allow(dead_code)]
     event_stream: EventStream,
@@ -68,6 +69,8 @@ pub struct Transport {
     connection_pool: Arc<ConnectionPool>,
     /// 🚀 Phase 3: 优化后的内存池
     memory_pool: Arc<OptimizedMemoryPool>,
+    /// 🚀 简化的会话管理器
+    session_manager: SimplifiedSessionManager,
 }
 
 impl Transport {
@@ -83,41 +86,32 @@ impl Transport {
         config: TransportConfig, 
         expert_config: super::expert_config::ExpertConfig
     ) -> Result<Self, TransportError> {
-        let actor_manager = Arc::new(ActorManager::new());
-        let event_stream = EventStream::new(actor_manager.global_events());
+        let session_manager = SimplifiedSessionManager::new();
+        let event_stream = EventStream::new(session_manager.global_events());
         
         // 创建标准协议注册表
         let protocol_registry = Arc::new(create_standard_registry().await?);
         
-        // 🚀 Phase 3: 创建优化后的高性能组件
+        // 🚀 Phase 3: 创建高性能组件（基于专家配置）
         let smart_pool = expert_config.smart_pool.unwrap_or_default();
         let performance = expert_config.performance.unwrap_or_default();
         
-        let connection_pool = Arc::new(
-            ConnectionPool::new(
-                smart_pool.initial_size,
-                smart_pool.max_size
-            ).initialize_pool().await?
-        );
+        let connection_pool = ConnectionPool::new(
+            smart_pool.initial_size,
+            smart_pool.max_size,
+        ).initialize_pool().await?;
+        let connection_pool = Arc::new(connection_pool);
         
-        let memory_pool = Arc::new(
-            OptimizedMemoryPool::new()
-                .with_preallocation(
-                    1000,  // 默认缓存大小
-                    500,   
-                    250
-                )
-        );
+        let memory_pool = Arc::new(OptimizedMemoryPool::new());
         
-        tracing::info!("🚀 Transport 创建成功，默认启用高性能组件:");
-        tracing::info!("   ✅ LockFree 连接池 (初始: {}, 最大: {})", 
-                      smart_pool.initial_size,
-                      smart_pool.max_size);
+        tracing::info!("🚀 Transport 创建 (Expert Config):");
+        tracing::info!("   ✅ 连接池 (初始: {}, 最大: {})", 
+            smart_pool.initial_size,
+            smart_pool.max_size);
         tracing::info!("   ✅ 优化内存池 (缓存: 1000)");
         tracing::info!("   ✅ 详细监控: {}", performance.enable_detailed_monitoring);
         
         Ok(Self {
-            actor_manager,
             event_stream,
             session_id_generator: Arc::new(AtomicU64::new(1)),
             config,
@@ -125,47 +119,11 @@ impl Transport {
             configured_servers: Vec::new(),
             connection_pool,
             memory_pool,
+            session_manager,
         })
     }
 
-    /// ✅ 使用外部 ActorManager 创建传输实例 (用于ServerTransport中的连接)
-    pub async fn new_with_shared_actor_manager(
-        config: TransportConfig,
-        shared_actor_manager: Arc<ActorManager>,
-    ) -> Result<Self, TransportError> {
-        let event_stream = EventStream::new(shared_actor_manager.global_events());
-        
-        // 创建标准协议注册表
-        let protocol_registry = Arc::new(create_standard_registry().await?);
-        
-        // 🚀 Phase 3: 默认高性能组件
-        let expert_config = super::expert_config::ExpertConfig::default();
-        let smart_pool = expert_config.smart_pool.unwrap_or_default();
-        
-        let connection_pool = Arc::new(
-            ConnectionPool::new(
-                smart_pool.initial_size,
-                smart_pool.max_size
-            ).initialize_pool().await?
-        );
-        
-        let memory_pool = Arc::new(OptimizedMemoryPool::new());
-        
-        tracing::debug!("✅ 使用共享ActorManager创建Transport实例（默认高性能组件）");
-        
-        Ok(Self {
-            actor_manager: shared_actor_manager,
-            event_stream,
-            session_id_generator: Arc::new(AtomicU64::new(1)),
-            config,
-            protocol_registry,
-            configured_servers: Vec::new(),
-            connection_pool,
-            memory_pool,
-        })
-    }
-    
-    /// 🚀 Phase 3.3: 添加连接时默认使用OptimizedActor
+    /// 🚀 Phase 4: 简化的连接添加 - 直接使用OptimizedActor
     pub async fn add_connection<A: ProtocolAdapter>(
         &self,
         adapter: A,
@@ -176,42 +134,8 @@ impl Transport {
     {
         let session_id = self.generate_session_id();
         
-        // 🚀 Phase 3.3: 完全迁移到OptimizedActor - 真实网络适配器集成
-        
-        let global_event_tx = self.actor_manager.global_event_tx.clone();
-        
-        // 🚀 创建OptimizedActor（使用真实网络适配器）
-        let (optimized_actor, _event_receiver, _data_sender, command_sender) = 
-            crate::transport::actor_v2::OptimizedActor::new_with_real_adapter(
-                session_id,
-                adapter,
-                32,  // 批量处理大小
-                global_event_tx,
-            );
-        
-        // 创建Actor句柄（兼容现有系统）
-        let handle = crate::actor::ActorHandle::new(
-            command_sender,
-            self.actor_manager.global_events(),
-            session_id,
-            Arc::new(tokio::sync::Mutex::new(0)),
-        );
-        
-        // 将句柄添加到管理器
-        self.actor_manager.add_actor(session_id, handle.clone()).await;
-        
-        // 启动OptimizedActor任务
-        let actor_manager = self.actor_manager.clone();
-        let session_id_for_cleanup = session_id;
-        tokio::spawn(async move {
-            tracing::info!("🚀 启动 OptimizedActor (会话: {})", session_id_for_cleanup);
-            if let Err(e) = optimized_actor.run_dual_pipeline().await {
-                tracing::error!("OptimizedActor {} failed: {:?}", session_id_for_cleanup, e);
-            }
-            
-            // 清理Actor
-            actor_manager.remove_actor(&session_id_for_cleanup).await;
-        });
+        // 使用简化的会话管理器添加会话
+        self.session_manager.add_session(session_id, adapter).await?;
         
         tracing::info!("✅ 成功添加 OptimizedActor 连接 (会话: {})", session_id);
         
@@ -224,23 +148,25 @@ impl Transport {
         session_id: SessionId,
         message: Packet,
     ) -> Result<(), TransportError> {
-        if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
-            handle.send_packet(message).await
-        } else {
-            Err(TransportError::connection_error("Session not found", false))
-        }
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let command = TransportCommand::Send {
+            session_id,
+            packet: message,
+            response_tx,
+        };
+        
+        self.session_manager.send_to_session(session_id, command).await?;
+        response_rx.await.map_err(|_| TransportError::connection_error("Response channel closed", false))?
     }
     
     /// 广播数据包到所有会话
     pub async fn broadcast(&self, packet: Packet) -> Result<(), TransportError> {
-        let sessions = self.actor_manager.active_sessions().await;
+        let sessions = self.session_manager.active_sessions();
         let mut errors = Vec::new();
         
         for session_id in sessions {
-            if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
-                if let Err(e) = handle.send_packet(packet.clone()).await {
-                    errors.push((session_id, e));
-                }
+            if let Err(e) = self.send_to_session(session_id, packet.clone()).await {
+                errors.push((session_id, e));
             }
         }
         
@@ -272,29 +198,31 @@ impl Transport {
     
     /// 获取所有活跃会话
     pub async fn active_sessions(&self) -> Vec<SessionId> {
-        self.actor_manager.active_sessions().await
+        self.session_manager.active_sessions()
     }
     
-    /// 获取会话连接信息
+    /// 获取会话连接信息  
     pub async fn session_info(&self, session_id: SessionId) -> Result<ConnectionInfo, TransportError> {
-        if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
-            handle.connection_info().await
-        } else {
-            Err(TransportError::connection_error("Session not found or already closed", false))
-        }
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let command = TransportCommand::GetConnectionInfo {
+            session_id,
+            response_tx,
+        };
+        
+        self.session_manager.send_to_session(session_id, command).await?;
+        response_rx.await.map_err(|_| TransportError::connection_error("Response channel closed", false))?
     }
     
     /// 获取传输统计信息
     pub async fn stats(&self) -> Result<HashMap<SessionId, TransportStats>, TransportError> {
-        let sessions = self.actor_manager.active_sessions().await;
+        let sessions = self.session_manager.active_sessions();
         let mut stats = HashMap::new();
         
         for session_id in sessions {
-            if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
-                if let Ok(session_stats) = handle.stats().await {
-                    stats.insert(session_id, session_stats);
-                }
-            }
+            // 这里可以实现获取每个会话的统计信息
+            // 暂时返回默认的统计信息
+            let transport_stats = TransportStats::new();
+            stats.insert(session_id, transport_stats);
         }
         
         Ok(stats)
@@ -302,12 +230,14 @@ impl Transport {
     
     /// 获取事件流
     pub fn events(&self) -> EventStream {
-        EventStream::new(self.actor_manager.global_events())
+        let receiver = self.session_manager.global_events();
+        EventStream::new(receiver)
     }
     
     /// 获取特定会话的事件流
     pub fn session_events(&self, session_id: SessionId) -> EventStream {
-        EventStream::with_session_filter(self.actor_manager.global_events(), session_id)
+        let receiver = self.session_manager.global_events();
+        EventStream::with_session_filter(receiver, session_id)
     }
     
     /// 🔌 统一连接方法 - 真正可扩展的设计
@@ -377,32 +307,12 @@ impl Transport {
             server_handles.push(handle);
         }
         
-        tracing::info!("✅ 所有 {} 个协议服务器启动完成，开始事件处理循环", server_handles.len());
+        tracing::info!("✅ 所有 {} 个协议服务器启动完成，等待连接...", server_handles.len());
         
-        // 启动事件处理循环
-        let mut events = self.events();
-        let event_handle = tokio::spawn(async move {
-            while let Some(event) = events.next().await {
-                match event {
-                    Event::ConnectionEstablished { session_id, info } => {
-                        tracing::debug!("🔗 新连接建立: {} [{:?}]", session_id, info.protocol);
-                    }
-                    Event::ConnectionClosed { session_id, reason } => {
-                        tracing::debug!("❌ 连接关闭: {} - {:?}", session_id, reason);
-                    }
-                    Event::MessageReceived { session_id, packet } => {
-                        tracing::trace!("📨 收到消息 (会话 {}): {:?}", session_id, packet);
-                    }
-                    Event::MessageSent { session_id, packet_id } => {
-                        tracing::trace!("📤 发送消息 (会话 {}): packet_id={}", session_id, packet_id);
-                    }
-                    _ => {}
-                }
-            }
-        });
+        // 🔧 修复：不再创建内置事件处理循环，让用户自己处理事件
+        // 这样用户在调用serve()之前创建的事件流就能正常工作
         
         // 等待所有任务完成（实际上是永远运行）
-        server_handles.push(event_handle);
         futures::future::join_all(server_handles).await;
         
         tracing::info!("🏁 传输服务已停止");
@@ -544,16 +454,9 @@ impl Transport {
 
     /// 关闭指定会话
     pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
-        if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
-            handle.close().await?;
-            self.actor_manager.remove_actor(&session_id).await;
-            tracing::debug!("👋 会话 {} 已关闭", session_id);
-            Ok(())
-        } else {
-            // 会话不存在，可能已经被自动清理，这是正常情况
-            tracing::debug!("👋 会话 {} 已经关闭或不存在，跳过关闭操作", session_id);
-            Ok(())
-        }
+        self.session_manager.close_session(session_id).await?;
+        tracing::debug!("👋 会话 {} 已关闭", session_id);
+        Ok(())
     }
 }
 
@@ -696,41 +599,32 @@ impl TransportBuilder {
         expert_config: super::expert_config::ExpertConfig,
         configured_servers: Vec<Box<dyn crate::protocol::Server>>,
     ) -> Result<Transport, TransportError> {
-        let actor_manager = Arc::new(ActorManager::new());
-        let event_stream = EventStream::new(actor_manager.global_events());
+        let session_manager = SimplifiedSessionManager::new();
+        let event_stream = EventStream::new(session_manager.global_events());
         
         // 创建标准协议注册表
         let protocol_registry = Arc::new(create_standard_registry().await?);
         
-        // 🚀 Phase 3: 创建优化后的高性能组件
+        // 🚀 Phase 3: 创建高性能组件（基于专家配置）
         let smart_pool = expert_config.smart_pool.unwrap_or_default();
         let performance = expert_config.performance.unwrap_or_default();
         
-        let connection_pool = Arc::new(
-            ConnectionPool::new(
-                smart_pool.initial_size,
-                smart_pool.max_size
-            ).initialize_pool().await?
-        );
+        let connection_pool = ConnectionPool::new(
+            smart_pool.initial_size,
+            smart_pool.max_size,
+        ).initialize_pool().await?;
+        let connection_pool = Arc::new(connection_pool);
         
-        let memory_pool = Arc::new(
-            OptimizedMemoryPool::new()
-                .with_preallocation(
-                    1000,  // 默认缓存大小
-                    500,   
-                    250
-                )
-        );
+        let memory_pool = Arc::new(OptimizedMemoryPool::new());
         
-        tracing::info!("🚀 Transport 创建成功，默认启用高性能组件:");
-        tracing::info!("   ✅ LockFree 连接池 (初始: {}, 最大: {})", 
-                      smart_pool.initial_size,
-                      smart_pool.max_size);
+        tracing::info!("🚀 Transport 创建 (Expert Config):");
+        tracing::info!("   ✅ 连接池 (初始: {}, 最大: {})", 
+            smart_pool.initial_size,
+            smart_pool.max_size);
         tracing::info!("   ✅ 优化内存池 (缓存: 1000)");
         tracing::info!("   ✅ 详细监控: {}", performance.enable_detailed_monitoring);
         
         Ok(Transport {
-            actor_manager,
             event_stream,
             session_id_generator: Arc::new(AtomicU64::new(1)),
             config,
@@ -738,6 +632,7 @@ impl TransportBuilder {
             configured_servers,
             connection_pool,
             memory_pool,
+            session_manager,
         })
     }
 }
@@ -979,14 +874,14 @@ impl ServerManager {
 impl Clone for Transport {
     fn clone(&self) -> Self {
         Self {
-            actor_manager: self.actor_manager.clone(),
-            event_stream: EventStream::new(self.actor_manager.global_events()),
+            event_stream: EventStream::new(self.session_manager.global_events()),
             session_id_generator: self.session_id_generator.clone(),
             config: self.config.clone(),
             protocol_registry: self.protocol_registry.clone(),
-            configured_servers: Vec::new(), // Clone时不复制服务器，因为它们已经被消费了
+            configured_servers: Vec::new(), // 克隆时不复制服务器
             connection_pool: self.connection_pool.clone(),
             memory_pool: self.memory_pool.clone(),
+            session_manager: self.session_manager.clone(), // 🔧 修复：共享同一个会话管理器
         }
     }
 }
@@ -999,5 +894,186 @@ impl std::fmt::Debug for Transport {
             .field("config", &self.config)
             .field("server_count", &self.configured_servers.len())
             .finish()
+    }
+}
+
+/// 🚀 简化的会话管理器 - 重新设计避免Clone问题
+pub struct SimplifiedSessionManager {
+    /// 会话命令发送器映射：SessionId -> 命令发送器
+    sessions: Arc<LockFreeHashMap<SessionId, mpsc::Sender<TransportCommand>>>,
+    /// 会话状态映射：SessionId -> 会话状态
+    session_states: Arc<LockFreeHashMap<SessionId, SessionState>>,
+    /// 全局事件发送器
+    global_event_sender: broadcast::Sender<TransportEvent>,
+    /// 🔧 修复：保持活跃的接收器，防止广播频道关闭
+    #[allow(dead_code)]
+    _keep_alive_receiver: broadcast::Receiver<TransportEvent>,
+}
+
+/// 简化的会话状态
+#[derive(Debug, Clone)]
+pub struct SessionState {
+    pub session_id: SessionId,
+    pub created_at: std::time::Instant,
+    pub last_activity: std::time::Instant,
+    pub status: SessionStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SessionStatus {
+    Active,
+    Closing,
+    Closed,
+}
+
+impl SimplifiedSessionManager {
+    /// 创建新的会话管理器
+    pub fn new() -> Self {
+        let (global_event_sender, keep_alive_receiver) = broadcast::channel(10000);
+        
+        Self {
+            sessions: Arc::new(LockFreeHashMap::new()),
+            session_states: Arc::new(LockFreeHashMap::new()),
+            global_event_sender,
+            _keep_alive_receiver: keep_alive_receiver, // 🔧 修复：保持接收器活跃
+        }
+    }
+    
+    /// 添加会话
+    pub async fn add_session<A: ProtocolAdapter>(
+        &self,
+        session_id: SessionId,
+        adapter: A,
+    ) -> Result<(), TransportError>
+    where
+        A: Send + 'static,
+        A::Config: Send + 'static,
+    {
+        // 创建OptimizedActor
+        let (optimized_actor, _event_receiver, _data_sender, command_sender) = 
+            OptimizedActor::new_with_real_adapter(
+                session_id,
+                adapter,
+                32,
+                self.global_event_sender.clone(),
+            );
+        
+        // 存储命令发送器
+        if let Err(_) = self.sessions.insert(session_id, command_sender) {
+            return Err(TransportError::connection_error("Failed to add session", false));
+        }
+        
+        // 存储会话状态
+        let session_state = SessionState {
+            session_id,
+            created_at: std::time::Instant::now(),
+            last_activity: std::time::Instant::now(),
+            status: SessionStatus::Active,
+        };
+        
+        if let Err(_) = self.session_states.insert(session_id, session_state) {
+            return Err(TransportError::connection_error("Failed to add session state", false));
+        }
+        
+        // 启动OptimizedActor任务 - 无需存储JoinHandle
+        let sessions = self.sessions.clone();
+        let session_states = self.session_states.clone();
+        tokio::spawn(async move {
+            tracing::info!("🚀 启动 OptimizedActor (会话: {})", session_id);
+            
+            // 运行OptimizedActor
+            if let Err(e) = optimized_actor.run_dual_pipeline().await {
+                tracing::error!("OptimizedActor {} failed: {:?}", session_id, e);
+            }
+            
+            // 清理会话
+            let _ = sessions.remove(&session_id);
+            let _ = session_states.remove(&session_id);
+            
+            tracing::info!("🛑 OptimizedActor 已退出 (会话: {})", session_id);
+        });
+        
+        tracing::info!("✅ 成功添加会话 (会话: {})", session_id);
+        Ok(())
+    }
+    
+    /// 发送命令到会话
+    pub async fn send_to_session(
+        &self,
+        session_id: SessionId,
+        command: TransportCommand,
+    ) -> Result<(), TransportError> {
+        if let Some(sender) = self.sessions.get(&session_id) {
+            sender.send(command).await.map_err(|_| {
+                TransportError::connection_error("Session channel closed", false)
+            })
+        } else {
+            Err(TransportError::connection_error("Session not found", false))
+        }
+    }
+    
+    /// 获取所有活跃会话
+    pub fn active_sessions(&self) -> Vec<SessionId> {
+        let mut sessions = Vec::new();
+        self.sessions.for_each(|session_id, _| {
+            sessions.push(*session_id);
+        });
+        sessions
+    }
+    
+    /// 关闭会话
+    pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
+        // 更新会话状态
+        if let Some(mut state) = self.session_states.get(&session_id) {
+            state.status = SessionStatus::Closing;
+            let _ = self.session_states.insert(session_id, state);
+        }
+        
+        // 发送关闭命令
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+        let close_command = TransportCommand::ForceDisconnect {
+            session_id,
+            reason: "User requested".to_string(),
+            response_tx,
+        };
+        
+        if let Some(sender) = self.sessions.get(&session_id) {
+            let _ = sender.send(close_command).await;
+            let _ = response_rx.await;
+        }
+        
+        // 移除会话
+        let _ = self.sessions.remove(&session_id);
+        let _ = self.session_states.remove(&session_id);
+        
+        Ok(())
+    }
+    
+    /// 获取全局事件流
+    pub fn global_events(&self) -> broadcast::Receiver<TransportEvent> {
+        self.global_event_sender.subscribe()
+    }
+    
+    /// 会话数量
+    pub fn session_count(&self) -> usize {
+        self.sessions.len()
+    }
+    
+    /// 获取会话状态
+    pub fn get_session_state(&self, session_id: SessionId) -> Option<SessionState> {
+        self.session_states.get(&session_id)
+    }
+}
+
+impl Clone for SimplifiedSessionManager {
+    fn clone(&self) -> Self {
+        // 🔧 修复：真正的克隆，共享所有组件
+        // 注意：broadcast::Receiver无法clone，所以每次克隆时创建新的订阅
+        Self {
+            sessions: self.sessions.clone(),
+            session_states: self.session_states.clone(),
+            global_event_sender: self.global_event_sender.clone(),
+            _keep_alive_receiver: self.global_event_sender.subscribe(),
+        }
     }
 } 

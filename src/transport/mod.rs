@@ -43,18 +43,21 @@ pub mod memory_pool_v2;
 pub mod protocol_adapter_v2;
 pub mod actor_v2;
 
-// 重新导出核心API (使用api模块的实现)
+// 🚀 Phase 4: 架构清理完成 - 传统组件已完全移除
+// OptimizedActor 已成为唯一的Actor实现
+
+// 重新导出核心API
 pub use api::{
     Transport, TransportBuilder, ConnectionManager, ServerManager
 };
 
-// 重新导出配置和其他核心类型
+// 重新导出配置
 pub use config::TransportConfig;
 
-// 重新导出协议适配器 trait (保持原有的trait接口)
+// 重新导出协议适配器 trait
 pub use crate::protocol::adapter::ProtocolAdapter as ProtocolAdapterTrait;
 
-// 🚀 Phase 3: 默认导出优化组件 (替代旧组件)
+// 🚀 优化组件导出 (统一命名)
 pub use memory_pool_v2::{
     OptimizedMemoryPool as MemoryPool,
     OptimizedMemoryStats as MemoryStats, 
@@ -67,7 +70,7 @@ pub use protocol_adapter_v2::{
     LockFreeProtocolStats as ProtocolStats, 
     ProtocolStatsSnapshot,
     ProtocolEvent, 
-    PerformanceMetrics as ProtocolPerformanceMetrics,
+    PerformanceMetrics,
     create_test_packet
 };
 
@@ -77,18 +80,18 @@ pub use actor_v2::{
     LockFreeActorStats as ActorStats
 };
 
-// 🚀 Phase 3: 智能连接池 (已经是优化版本)
+// 连接池导出
 pub use pool::{
     ConnectionPool, ExpansionStrategy, PoolDetailedStatus,
-    PerformanceMetrics
+    OptimizedPoolStatsSnapshot
 };
 
-// 重新导出专家配置
+// 专家配置导出
 pub use expert_config::{
     SmartPoolConfig, PerformanceConfig, ExpertConfig
 };
 
-// 重新导出分离式Builder和传输层
+// 客户端和服务端Builder导出
 pub use client::{
     TransportClientBuilder, ClientTransport, ProtocolConnectionBuilder,
     ConnectionPoolConfig, RetryConfig, LoadBalancerConfig, CircuitBreakerConfig,
@@ -100,25 +103,8 @@ pub use server::{
     ServerOptions, LoggingMiddleware, AuthMiddleware
 };
 
-// 🚀 Phase 3: LockFree核心组件
+// LockFree核心组件导出
 pub use lockfree_enhanced::{
     LockFreeHashMap, LockFreeQueue, LockFreeCounter,
     LockFreeStats, QueueStats, CounterStats
 };
-
-// 📦 Legacy 组件导出 (保持向后兼容)
-pub mod legacy {
-    // 注意：原始 MemoryPool 已经删除，legacy 用户应该直接使用 OptimizedMemoryPool
-    // 这里提供一个兼容别名
-    pub use super::memory_pool_v2::{
-        OptimizedMemoryPool as LegacyMemoryPool, 
-        OptimizedMemoryStats as LegacyMemoryPoolStatus
-    };
-    
-    // 旧的actor实现
-    pub use crate::actor::{
-        GenericActor as LegacyActor,
-        ActorHandle as LegacyActorHandle,
-        ActorManager as LegacyActorManager
-    };
-}

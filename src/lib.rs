@@ -16,7 +16,6 @@ pub mod protocol;
 pub mod packet;
 pub mod event;
 pub mod error;
-pub mod actor;
 pub mod command;
 pub mod stream;
 
@@ -71,16 +70,18 @@ impl From<SessionId> for u64 {
 pub use packet::{Packet, PacketType, PacketError};
 pub use transport::{
     Transport, 
-    TransportBuilder as Builder, 
-    TransportConfig as Config,
+    TransportBuilder, 
+    TransportConfig,
     ConnectionPool,
-    MemoryPool
+    MemoryPool,
+    BufferSize,
+    PerformanceMetrics,
 };
-pub use event::TransportEvent as Event;
+pub use transport::Actor;  // OptimizedActor导出为Actor
+pub use event::TransportEvent;  // 🔧 移除别名，直接导出TransportEvent
 pub use stream::EventStream;
 pub use error::{TransportError, CloseReason};
 pub use command::{ConnectionInfo, TransportStats};
-
 
 pub use protocol::{TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebSocketServerConfig, QuicClientConfig, QuicServerConfig, ServerConfig, ClientConfig};
 // 重新导出新的抽象
