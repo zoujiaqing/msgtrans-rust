@@ -6,6 +6,7 @@ pub mod client;
 pub mod server;
 // 第一阶段：专注无锁优化
 pub mod lockfree_enhanced;
+pub mod memory_pool_v2;
 
 // 重新导出核心API (使用api模块的实现)
 pub use api::{
@@ -23,6 +24,12 @@ pub use pool::{
     ConnectionPool, ExpansionStrategy, PoolDetailedStatus,
     MemoryPool, MemoryPoolStatus, BufferSize,
     PerformanceMetrics
+};
+
+// 🚀 Phase 3.1.2: 重新导出优化后的内存池
+pub use memory_pool_v2::{
+    OptimizedMemoryPool, OptimizedMemoryStats, OptimizedMemoryStatsSnapshot,
+    MemoryPoolEvent
 };
 
 // 重新导出专家配置
