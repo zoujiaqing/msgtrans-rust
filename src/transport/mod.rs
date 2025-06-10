@@ -4,14 +4,11 @@ pub mod pool;
 pub mod expert_config;
 pub mod client;
 pub mod server;
-// 第一阶段：专注无锁优化
+
+// 🚀 Phase 3: 核心高性能组件 (默认启用)
 pub mod lockfree_enhanced;
 pub mod memory_pool_v2;
-
-// Phase 3.2.1: Flume异步协议适配器
 pub mod protocol_adapter_v2;
-
-// Phase 3.2.2: 双管道Actor优化
 pub mod actor_v2;
 
 // 重新导出核心API (使用api模块的实现)
@@ -22,33 +19,36 @@ pub use api::{
 // 重新导出配置和其他核心类型
 pub use config::TransportConfig;
 
-// 重新导出协议适配器
-pub use crate::protocol::adapter::ProtocolAdapter;
+// 重新导出协议适配器 trait (保持原有的trait接口)
+pub use crate::protocol::adapter::ProtocolAdapter as ProtocolAdapterTrait;
 
-// 重新导出智能池管理
-pub use pool::{
-    ConnectionPool, ExpansionStrategy, PoolDetailedStatus,
-    MemoryPool, MemoryPoolStatus, BufferSize,
-    PerformanceMetrics
-};
-
-// 🚀 Phase 3.1.2: 重新导出优化后的内存池
+// 🚀 Phase 3: 默认导出优化组件 (替代旧组件)
 pub use memory_pool_v2::{
-    OptimizedMemoryPool, OptimizedMemoryStats, OptimizedMemoryStatsSnapshot,
-    MemoryPoolEvent
+    OptimizedMemoryPool as MemoryPool,
+    OptimizedMemoryStats as MemoryStats, 
+    OptimizedMemoryStatsSnapshot as MemoryStatsSnapshot,
+    MemoryPoolEvent, BufferSize
 };
 
-// 🚀 Phase 3.2.1: 重新导出Flume协议适配器
 pub use protocol_adapter_v2::{
-    FlumePoweredProtocolAdapter, LockFreeProtocolStats, ProtocolStatsSnapshot,
-    ProtocolEvent, PerformanceMetrics as ProtocolPerformanceMetrics,
+    FlumePoweredProtocolAdapter as ProtocolAdapter,
+    LockFreeProtocolStats as ProtocolStats, 
+    ProtocolStatsSnapshot,
+    ProtocolEvent, 
+    PerformanceMetrics as ProtocolPerformanceMetrics,
     create_test_packet
 };
 
-// 🚀 Phase 3.2.2: 重新导出双管道Actor优化
 pub use actor_v2::{
-    OptimizedActor, ActorManager, ActorCommand, ActorEvent, 
+    OptimizedActor as Actor,
+    ActorManager, ActorCommand, ActorEvent, 
     ActorStats, LockFreeActorStats
+};
+
+// 🚀 Phase 3: 智能连接池 (已经是优化版本)
+pub use pool::{
+    ConnectionPool, ExpansionStrategy, PoolDetailedStatus,
+    PerformanceMetrics
 };
 
 // 重新导出专家配置
@@ -68,8 +68,23 @@ pub use server::{
     ServerOptions, LoggingMiddleware, AuthMiddleware
 };
 
-// 第一阶段：导出无锁优化
+// 🚀 Phase 3: LockFree核心组件
 pub use lockfree_enhanced::{
     LockFreeHashMap, LockFreeQueue, LockFreeCounter,
     LockFreeStats, QueueStats, CounterStats
 };
+
+// 📦 Legacy 组件导出 (保持向后兼容)
+pub mod legacy {
+    pub use super::pool::{
+        MemoryPool as LegacyMemoryPool, 
+        MemoryPoolStatus as LegacyMemoryPoolStatus
+    };
+    
+    // 旧的actor实现
+    pub use crate::actor::{
+        GenericActor as LegacyActor,
+        ActorHandle as LegacyActorHandle,
+        ActorManager as LegacyActorManager
+    };
+}
