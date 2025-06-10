@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 配置 QUIC 客户端
     let quic_config = QuicClientConfig {
-        target_address: "127.0.0.1:8004".parse()?, // 匹配echo_server_simple.rs中的QUIC端口
+        target_address: "127.0.0.1:8003".parse()?, // 匹配echo_server_simple.rs中的QUIC端口
         server_name: Some("localhost".to_string()), // TLS服务器名称
         connect_timeout: Duration::from_secs(10),
         verify_certificate: false, // 开发模式下跳过证书验证
