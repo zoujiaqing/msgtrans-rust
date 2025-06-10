@@ -35,7 +35,7 @@ pub use client::{
     ConnectionOptions, ConnectionPriority
 };
 pub use server::{
-    TransportServerBuilder, ServerTransport, ProtocolServerBuilder,
+    TransportServerBuilder, ServerTransport,
     AcceptorConfig, BackpressureStrategy, RateLimiterConfig, ServerMiddleware,
     ServerOptions, LoggingMiddleware, AuthMiddleware
 };

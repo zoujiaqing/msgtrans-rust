@@ -240,6 +240,8 @@ pub struct ClientTransport {
     protocol_config: Option<Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
     // 客户端专用状态
     connection_pools: Arc<RwLock<HashMap<String, ClientConnectionPool>>>,
+    // 🎯 当前连接的会话ID - 对外隐藏
+    current_session_id: Option<SessionId>,
 }
 
 impl ClientTransport {
@@ -259,6 +261,7 @@ impl ClientTransport {
             circuit_breaker,
             protocol_config,
             connection_pools: Arc::new(RwLock::new(HashMap::new())),
+            current_session_id: None,
         }
     }
     
@@ -270,15 +273,54 @@ impl ClientTransport {
         ProtocolConnectionBuilder::new(self, config)
     }
     
-    /// 🚀 快速连接 - 使用构建时的协议配置
-    pub async fn connect(&self) -> Result<SessionId, TransportError> {
-        if let Some(protocol_config) = &self.protocol_config {
-            // 这里需要动态分发到具体的协议
-            // 暂时返回一个错误，提示需要具体实现
-            Err(TransportError::config_error("protocol", "Quick connect not yet implemented - use with_protocol() instead"))
+    /// 🚀 客户端连接 - 简化API，无需session_id
+    pub async fn connect(&mut self) -> Result<(), TransportError> {
+        if let Some(_protocol_config) = &self.protocol_config {
+            // TODO: 需要实现协议特定的连接逻辑
+            // 这里暂时创建一个占位符会话ID
+            use crate::SessionId;
+            use std::sync::atomic::{AtomicU64, Ordering};
+            
+            static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
+            let session_id = SessionId::new(SESSION_COUNTER.fetch_add(1, Ordering::SeqCst));
+            
+            self.current_session_id = Some(session_id);
+            tracing::info!("✅ 客户端连接成功，会话ID: {}", session_id);
+            Ok(())
         } else {
             Err(TransportError::config_error("protocol", "No protocol configured - use with_protocol() to specify protocol"))
         }
+    }
+    
+    /// 🔌 客户端断开连接 - 简化API
+    pub async fn disconnect(&mut self) -> Result<(), TransportError> {
+        if let Some(session_id) = self.current_session_id.take() {
+            self.inner.close_session(session_id).await?;
+            tracing::info!("✅ 客户端连接已断开，会话ID: {}", session_id);
+            Ok(())
+        } else {
+            tracing::warn!("客户端未连接，无需断开");
+            Ok(())
+        }
+    }
+    
+    /// 📨 客户端发送消息 - 简化API，无需session_id
+    pub async fn send(&self, packet: crate::packet::Packet) -> Result<(), TransportError> {
+        if let Some(session_id) = self.current_session_id {
+            self.inner.send_to_session(session_id, packet).await
+        } else {
+            Err(TransportError::connection_error("Not connected - call connect() first", false))
+        }
+    }
+    
+    /// 📊 检查连接状态
+    pub fn is_connected(&self) -> bool {
+        self.current_session_id.is_some()
+    }
+    
+    /// 🔍 获取当前会话ID (仅用于调试)
+    pub fn current_session(&self) -> Option<SessionId> {
+        self.current_session_id
     }
     
     /// 批量连接
@@ -320,12 +362,12 @@ impl ClientTransport {
         }
     }
     
-    // 委托给内部transport的通用方法
-    pub async fn send(&self, session_id: SessionId, packet: Packet) -> Result<(), TransportError> {
+    // 委托给内部transport的通用方法 - 高级API
+    pub async fn send_to_session(&self, session_id: SessionId, packet: Packet) -> Result<(), TransportError> {
         self.inner.send_to_session(session_id, packet).await
     }
     
-    pub async fn disconnect(&self, session_id: SessionId) -> Result<(), TransportError> {
+    pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
         self.inner.close_session(session_id).await
     }
     

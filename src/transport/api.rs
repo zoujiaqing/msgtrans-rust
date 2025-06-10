@@ -97,6 +97,28 @@ impl Transport {
             configured_servers: Vec::new(),
         })
     }
+
+    /// ✅ 使用外部 ActorManager 创建传输实例 (用于ServerTransport中的连接)
+    pub async fn new_with_shared_actor_manager(
+        config: TransportConfig,
+        shared_actor_manager: Arc<ActorManager>,
+    ) -> Result<Self, TransportError> {
+        let event_stream = EventStream::new(shared_actor_manager.global_events());
+        
+        // 创建标准协议注册表
+        let protocol_registry = Arc::new(create_standard_registry().await?);
+        
+        tracing::debug!("✅ 使用共享ActorManager创建Transport实例");
+        
+        Ok(Self {
+            actor_manager: shared_actor_manager,
+            event_stream,
+            session_id_generator: Arc::new(AtomicU64::new(1)),
+            config,
+            protocol_registry,
+            configured_servers: Vec::new(),
+        })
+    }
     
     /// 添加新的连接
     pub async fn add_connection<A: ProtocolAdapter>(
@@ -181,13 +203,19 @@ impl Transport {
     }
     
     /// 关闭指定会话
+    /// 
+    /// 如果会话已经关闭或不存在，这是一个无害的操作，会返回成功。
+    /// 这避免了双重关闭的竞争条件问题。
     pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
         if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
             handle.close().await?;
             self.actor_manager.remove_actor(&session_id).await;
+            tracing::debug!("👋 会话 {} 已关闭", session_id);
             Ok(())
         } else {
-            Err(TransportError::connection_error("Session not found", false))
+            // 会话不存在，可能已经被自动清理，这是正常情况
+            tracing::debug!("👋 会话 {} 已经关闭或不存在，跳过关闭操作", session_id);
+            Ok(())
         }
     }
     
@@ -201,7 +229,7 @@ impl Transport {
         if let Some(handle) = self.actor_manager.get_actor(&session_id).await {
             handle.connection_info().await
         } else {
-            Err(TransportError::connection_error("Session not found", false))
+            Err(TransportError::connection_error("Session not found or already closed", false))
         }
     }
     
