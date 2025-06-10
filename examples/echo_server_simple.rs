@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_connections(100)
         .with_protocol(tcp_server_config)
         // .with_protocol(web_socket_server_config)
-        // .with_protocol(quic_server_config)
+        .with_protocol(quic_server_config)
         .build()
         .await?;
 
