@@ -8,6 +8,12 @@ pub mod server;
 pub mod lockfree_enhanced;
 pub mod memory_pool_v2;
 
+// Phase 3.2.1: Flume异步协议适配器
+pub mod protocol_adapter_v2;
+
+// Phase 3.2.2: 双管道Actor优化
+pub mod actor_v2;
+
 // 重新导出核心API (使用api模块的实现)
 pub use api::{
     Transport, TransportBuilder, ConnectionManager, ServerManager
@@ -30,6 +36,19 @@ pub use pool::{
 pub use memory_pool_v2::{
     OptimizedMemoryPool, OptimizedMemoryStats, OptimizedMemoryStatsSnapshot,
     MemoryPoolEvent
+};
+
+// 🚀 Phase 3.2.1: 重新导出Flume协议适配器
+pub use protocol_adapter_v2::{
+    FlumePoweredProtocolAdapter, LockFreeProtocolStats, ProtocolStatsSnapshot,
+    ProtocolEvent, PerformanceMetrics as ProtocolPerformanceMetrics,
+    create_test_packet
+};
+
+// 🚀 Phase 3.2.2: 重新导出双管道Actor优化
+pub use actor_v2::{
+    OptimizedActor, ActorManager, ActorCommand, ActorEvent, 
+    ActorStats, LockFreeActorStats
 };
 
 // 重新导出专家配置
