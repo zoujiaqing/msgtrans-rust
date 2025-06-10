@@ -4,6 +4,8 @@ pub mod pool;
 pub mod expert_config;
 pub mod client;
 pub mod server;
+// 第一阶段：专注无锁优化
+pub mod lockfree_enhanced;
 
 // 重新导出核心API (使用api模块的实现)
 pub use api::{
@@ -38,4 +40,10 @@ pub use server::{
     TransportServerBuilder, ServerTransport,
     AcceptorConfig, BackpressureStrategy, RateLimiterConfig, ServerMiddleware,
     ServerOptions, LoggingMiddleware, AuthMiddleware
+};
+
+// 第一阶段：导出无锁优化
+pub use lockfree_enhanced::{
+    LockFreeHashMap, LockFreeQueue, LockFreeCounter,
+    LockFreeStats, QueueStats, CounterStats
 };

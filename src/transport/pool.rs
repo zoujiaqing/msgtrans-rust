@@ -14,6 +14,7 @@ use bytes::BytesMut;
 use tokio::sync::{RwLock, Semaphore};
 
 use crate::error::TransportError;
+use crate::transport::lockfree_enhanced::{LockFreeHashMap, LockFreeQueue, LockFreeCounter};
 
 /// 智能连接池
 pub struct ConnectionPool {
@@ -29,6 +30,10 @@ pub struct ConnectionPool {
     memory_pool: Arc<MemoryPool>,
     /// 性能监控器
     monitor: Arc<PerformanceMonitor>,
+    /// 🚀 第一阶段：无锁优化选项
+    lockfree_enabled: bool,
+    /// 无锁连接计数器
+    lockfree_counter: Option<Arc<LockFreeCounter>>,
 }
 
 /// 扩展策略
@@ -80,17 +85,88 @@ impl ConnectionPool {
             expansion_strategy: ExpansionStrategy::default(),
             memory_pool: Arc::new(MemoryPool::new()),
             monitor: Arc::new(PerformanceMonitor::new()),
+            lockfree_enabled: false,
+            lockfree_counter: None,
         }
     }
 
-    /// 获取当前使用率
+    /// 🚀 第一阶段：启用无锁优化
+    pub fn with_lockfree_optimization(mut self) -> Self {
+        self.lockfree_enabled = true;
+        self.lockfree_counter = Some(Arc::new(LockFreeCounter::new(
+            self.current_size.load(Ordering::Relaxed)
+        )));
+        self
+    }
+
+    /// 获取当前使用率 - 无锁优化版本
     pub fn utilization(&self) -> f64 {
-        let current = self.current_size.load(Ordering::Relaxed);
+        let current = if self.lockfree_enabled {
+            if let Some(ref counter) = self.lockfree_counter {
+                counter.get()
+            } else {
+                self.current_size.load(Ordering::Relaxed)
+            }
+        } else {
+            self.current_size.load(Ordering::Relaxed)
+        };
+        
         current as f64 / self.max_size as f64
+    }
+
+    /// 🚀 无锁优化的扩展操作
+    pub async fn try_expand_lockfree(&mut self) -> Result<bool, TransportError> {
+        if !self.lockfree_enabled {
+            return self.force_expand().await;
+        }
+
+        let counter = self.lockfree_counter.as_ref()
+            .ok_or_else(|| TransportError::config_error("lockfree", "Counter not initialized"))?;
+
+        // 获取当前扩展因子
+        let factor = self.get_current_expansion_factor();
+        let current_size = counter.get();
+        let new_size = ((current_size as f64) * factor) as usize;
+        
+        // 检查是否超过最大限制
+        if new_size > self.max_size {
+            return Err(TransportError::resource_error(
+                "connection_pool_lockfree", 
+                new_size, 
+                self.max_size
+            ));
+        }
+
+        // 无锁更新大小
+        counter.set(new_size);
+        self.current_size.store(new_size, Ordering::Relaxed);
+        
+        // 更新统计
+        self.stats.expansion_count.fetch_add(1, Ordering::Relaxed);
+        *self.stats.last_expansion.write().await = Some(Instant::now());
+        
+        // 更新扩展因子索引
+        self.advance_expansion_factor();
+        
+        // 记录性能指标
+        self.monitor.record_expansion(current_size, new_size, factor).await;
+        
+        tracing::info!(
+            "🚀 LockFree Pool expanded: {} -> {} (factor: {:.1}x)", 
+            current_size, 
+            new_size, 
+            factor
+        );
+
+        Ok(true)
     }
 
     /// 智能扩展决策
     pub async fn try_expand(&mut self) -> Result<bool, TransportError> {
+        if self.lockfree_enabled {
+            return self.try_expand_lockfree().await;
+        }
+        
         self.force_expand().await
     }
 
@@ -257,6 +333,12 @@ pub struct MemoryPool {
     small_semaphore: Semaphore,
     medium_semaphore: Semaphore,
     large_semaphore: Semaphore,
+    /// 🚀 第一阶段：无锁优化选项
+    lockfree_enabled: bool,
+    /// 无锁队列
+    lockfree_small_queue: Option<Arc<LockFreeQueue<BytesMut>>>,
+    lockfree_medium_queue: Option<Arc<LockFreeQueue<BytesMut>>>,
+    lockfree_large_queue: Option<Arc<LockFreeQueue<BytesMut>>>,
 }
 
 /// 内存池统计
@@ -301,11 +383,68 @@ impl MemoryPool {
             small_semaphore: Semaphore::new(1000),   // 最多1000个小缓冲区
             medium_semaphore: Semaphore::new(500),   // 最多500个中缓冲区
             large_semaphore: Semaphore::new(100),    // 最多100个大缓冲区
+            lockfree_enabled: false,
+            lockfree_small_queue: None,
+            lockfree_medium_queue: None,
+            lockfree_large_queue: None,
         }
     }
 
-    /// 获取缓冲区
-    pub async fn get_buffer(&self, size: BufferSize) -> Result<BytesMut, TransportError> {
+    /// 🚀 第一阶段：启用无锁优化
+    pub fn with_lockfree_optimization(mut self) -> Self {
+        self.lockfree_enabled = true;
+        self.lockfree_small_queue = Some(Arc::new(LockFreeQueue::new()));
+        self.lockfree_medium_queue = Some(Arc::new(LockFreeQueue::new()));
+        self.lockfree_large_queue = Some(Arc::new(LockFreeQueue::new()));
+        self
+    }
+
+    /// 🚀 无锁获取缓冲区
+    pub async fn get_buffer_lockfree(&self, size: BufferSize) -> Result<BytesMut, TransportError> {
+        if !self.lockfree_enabled {
+            return self.get_buffer_standard(size).await;
+        }
+
+        match size {
+            BufferSize::Small => {
+                if let Some(ref queue) = self.lockfree_small_queue {
+                    if let Some(mut buffer) = queue.pop() {
+                        buffer.clear();
+                        self.stats.small_allocated.fetch_add(1, Ordering::Relaxed);
+                        return Ok(buffer);
+                    }
+                }
+                // 如果队列为空，创建新缓冲区
+                self.stats.small_allocated.fetch_add(1, Ordering::Relaxed);
+                Ok(BytesMut::with_capacity(1024)) // 1KB
+            },
+            BufferSize::Medium => {
+                if let Some(ref queue) = self.lockfree_medium_queue {
+                    if let Some(mut buffer) = queue.pop() {
+                        buffer.clear();
+                        self.stats.medium_allocated.fetch_add(1, Ordering::Relaxed);
+                        return Ok(buffer);
+                    }
+                }
+                self.stats.medium_allocated.fetch_add(1, Ordering::Relaxed);
+                Ok(BytesMut::with_capacity(8192)) // 8KB
+            },
+            BufferSize::Large => {
+                if let Some(ref queue) = self.lockfree_large_queue {
+                    if let Some(mut buffer) = queue.pop() {
+                        buffer.clear();
+                        self.stats.large_allocated.fetch_add(1, Ordering::Relaxed);
+                        return Ok(buffer);
+                    }
+                }
+                self.stats.large_allocated.fetch_add(1, Ordering::Relaxed);
+                Ok(BytesMut::with_capacity(65536)) // 64KB
+            },
+        }
+    }
+
+    /// 标准获取缓冲区方法 - 避免递归
+    pub async fn get_buffer_standard(&self, size: BufferSize) -> Result<BytesMut, TransportError> {
         match size {
             BufferSize::Small => {
                 let _permit = self.small_semaphore.acquire().await
@@ -349,6 +488,15 @@ impl MemoryPool {
                     Ok(BytesMut::with_capacity(65536)) // 64KB
                 }
             }
+        }
+    }
+
+    /// 获取缓冲区 - 统一入口
+    pub async fn get_buffer(&self, size: BufferSize) -> Result<BytesMut, TransportError> {
+        if self.lockfree_enabled {
+            self.get_buffer_lockfree(size).await
+        } else {
+            self.get_buffer_standard(size).await
         }
     }
 

@@ -33,6 +33,14 @@ tracing = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 url = "2.4.0"
 
+# Lock-free data structures
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+crossbeam-utils = "0.8"
+parking_lot = "0.12"
+slab = "0.4"
+sharded-slab = "0.1"
+
 # Protocol-specific dependencies
 tokio-tungstenite = "0.24"
 quinn = "0.11"
