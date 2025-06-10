@@ -6,34 +6,173 @@
 /// - 后期保守扩展: 1.2x (6G→7.2G)
 /// - 最终精细扩展: 1.1x (7.2G→7.9G→8.7G)
 
+/// 🚀 Phase 3: 高性能连接池全面优化
+/// 
+/// 基于 Phase 1-2 的成功经验，将混合架构策略应用到连接池：
+/// - LockFree + Crossbeam: 同步高频路径 (连接获取/归还)
+/// - Flume: 异步处理路径 (连接管理命令)  
+/// - Tokio: 生态集成路径 (事件广播)
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::collections::VecDeque;
 use bytes::BytesMut;
 use tokio::sync::{RwLock, Semaphore};
+use crossbeam_channel::{unbounded as crossbeam_unbounded, Receiver as CrossbeamReceiver, Sender as CrossbeamSender};
+use flume::{unbounded as flume_unbounded, Receiver as FlumeReceiver, Sender as FlumeSender};
 
 use crate::error::TransportError;
 use crate::transport::lockfree_enhanced::{LockFreeHashMap, LockFreeQueue, LockFreeCounter};
+use crate::SessionId;
 
-/// 智能连接池
+/// 🚀 Phase 3: 优化后的智能连接池
 pub struct ConnectionPool {
-    /// 当前大小
-    current_size: AtomicUsize,
-    /// 最大大小
+    /// 连接ID计数器
+    connection_id_counter: AtomicU64,
+    
+    /// 🚀 LockFree 连接存储
+    active_connections: Arc<LockFreeHashMap<ConnectionId, PoolConnection>>,
+    available_connections: Arc<LockFreeQueue<ConnectionId>>,
+    
+    /// ⚡ Crossbeam 同步控制
+    pool_control_tx: CrossbeamSender<PoolControlCommand>,
+    pool_control_rx: CrossbeamReceiver<PoolControlCommand>,
+    
+    /// 📡 Tokio 事件广播
+    pub event_broadcaster: tokio::sync::broadcast::Sender<PoolEvent>,
+    
+    /// 配置和状态
     max_size: usize,
-    /// 扩展统计
-    stats: Arc<PoolStats>,
-    /// 扩展策略
+    initial_size: usize,
+    
+    /// 🚀 Phase 3: 优化后的统计
+    stats: Arc<OptimizedPoolStats>,
+    /// 扩展策略 (保持兼容)
     expansion_strategy: ExpansionStrategy,
     /// 内存池
     memory_pool: Arc<MemoryPool>,
     /// 性能监控器
     monitor: Arc<PerformanceMonitor>,
-    /// 🚀 第一阶段：无锁优化选项
-    lockfree_enabled: bool,
-    /// 无锁连接计数器
-    lockfree_counter: Option<Arc<LockFreeCounter>>,
+}
+
+/// 连接ID类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConnectionId(pub u64);
+
+impl ConnectionId {
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+}
+
+/// 池中的连接
+#[derive(Debug, Clone)]
+pub struct PoolConnection {
+    pub id: ConnectionId,
+    pub session_id: Option<SessionId>,
+    pub created_at: Instant,
+    pub last_used: Instant,
+    pub use_count: u64,
+    pub state: ConnectionState,
+}
+
+/// 连接状态
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionState {
+    Available,
+    InUse,
+    Maintenance,
+    Error,
+}
+
+/// ⚡ Phase 3: Crossbeam 控制命令
+#[derive(Debug)]
+pub enum PoolControlCommand {
+    GetConnection {
+        response_tx: crossbeam_channel::Sender<Result<ConnectionId, TransportError>>,
+    },
+    ReturnConnection {
+        connection_id: ConnectionId,
+        response_tx: crossbeam_channel::Sender<Result<(), TransportError>>,
+    },
+    CreateConnection {
+        count: usize,
+        response_tx: crossbeam_channel::Sender<Result<Vec<ConnectionId>, TransportError>>,
+    },
+    RemoveConnection {
+        connection_id: ConnectionId,
+        response_tx: crossbeam_channel::Sender<Result<(), TransportError>>,
+    },
+    GetStats {
+        response_tx: crossbeam_channel::Sender<OptimizedPoolStatsSnapshot>,
+    },
+}
+
+/// 📡 Phase 3: Tokio 事件类型
+#[derive(Debug, Clone)]
+pub enum PoolEvent {
+    ConnectionCreated { connection_id: ConnectionId },
+    ConnectionAcquired { connection_id: ConnectionId },
+    ConnectionReleased { connection_id: ConnectionId },
+    ConnectionRemoved { connection_id: ConnectionId },
+    PoolExpanded { from_size: usize, to_size: usize },
+    PoolShrunk { from_size: usize, to_size: usize },
+    PoolError { error: String },
+}
+
+/// 🚀 Phase 3: 优化后的池统计
+#[derive(Debug, Default)]
+pub struct OptimizedPoolStats {
+    /// 总连接数
+    pub total_connections: AtomicU64,
+    /// 活跃连接数
+    pub active_connections: AtomicU64,
+    /// 可用连接数
+    pub available_connections: AtomicU64,
+    /// 获取操作计数
+    pub get_operations: AtomicU64,
+    /// 归还操作计数  
+    pub return_operations: AtomicU64,
+    /// 创建操作计数
+    pub create_operations: AtomicU64,
+    /// 移除操作计数
+    pub remove_operations: AtomicU64,
+    /// 等待时间统计 (纳秒)
+    pub total_wait_time_ns: AtomicU64,
+    /// 操作总数 (用于计算平均等待时间)
+    pub total_operations: AtomicU64,
+}
+
+impl OptimizedPoolStats {
+    /// 获取统计快照
+    pub fn snapshot(&self) -> OptimizedPoolStatsSnapshot {
+        OptimizedPoolStatsSnapshot {
+            total_connections: self.total_connections.load(Ordering::Relaxed),
+            active_connections: self.active_connections.load(Ordering::Relaxed),
+            available_connections: self.available_connections.load(Ordering::Relaxed),
+            get_operations: self.get_operations.load(Ordering::Relaxed),
+            return_operations: self.return_operations.load(Ordering::Relaxed),
+            create_operations: self.create_operations.load(Ordering::Relaxed),
+            remove_operations: self.remove_operations.load(Ordering::Relaxed),
+            total_wait_time_ns: self.total_wait_time_ns.load(Ordering::Relaxed),
+            total_operations: self.total_operations.load(Ordering::Relaxed),
+        }
+    }
+}
+
+/// 统计快照 (可Clone)
+#[derive(Debug, Clone)]
+pub struct OptimizedPoolStatsSnapshot {
+    pub total_connections: u64,
+    pub active_connections: u64,
+    pub available_connections: u64,
+    pub get_operations: u64,
+    pub return_operations: u64,
+    pub create_operations: u64,
+    pub remove_operations: u64,
+    pub total_wait_time_ns: u64,
+    pub total_operations: u64,
 }
 
 /// 扩展策略
@@ -75,140 +214,270 @@ impl Default for ExpansionStrategy {
     }
 }
 
-impl ConnectionPool {
-    /// 创建智能连接池
-    pub fn new(initial_size: usize, max_size: usize) -> Self {
+impl Clone for ConnectionPool {
+    fn clone(&self) -> Self {
         Self {
-            current_size: AtomicUsize::new(initial_size),
+            connection_id_counter: AtomicU64::new(self.connection_id_counter.load(Ordering::Relaxed)),
+            active_connections: self.active_connections.clone(),
+            available_connections: self.available_connections.clone(),
+            pool_control_tx: self.pool_control_tx.clone(),
+            pool_control_rx: self.pool_control_rx.clone(),
+            event_broadcaster: self.event_broadcaster.clone(),
+            max_size: self.max_size,
+            initial_size: self.initial_size,
+            stats: self.stats.clone(),
+            expansion_strategy: self.expansion_strategy.clone(),
+            memory_pool: self.memory_pool.clone(),
+            monitor: self.monitor.clone(),
+        }
+    }
+}
+
+impl ConnectionPool {
+    /// 🚀 Phase 3: 创建优化后的智能连接池
+    pub fn new(initial_size: usize, max_size: usize) -> Self {
+        let (pool_control_tx, pool_control_rx) = crossbeam_unbounded();
+        let (event_broadcaster, _) = tokio::sync::broadcast::channel(1024);
+        
+        Self {
+            connection_id_counter: AtomicU64::new(0),
+            active_connections: Arc::new(LockFreeHashMap::new()),
+            available_connections: Arc::new(LockFreeQueue::new()),
+            pool_control_tx,
+            pool_control_rx,
+            event_broadcaster,
             max_size,
-            stats: Arc::new(PoolStats::new()),
+            initial_size,
+            stats: Arc::new(OptimizedPoolStats::default()),
             expansion_strategy: ExpansionStrategy::default(),
             memory_pool: Arc::new(MemoryPool::new()),
             monitor: Arc::new(PerformanceMonitor::new()),
-            lockfree_enabled: false,
-            lockfree_counter: None,
         }
     }
 
-    /// 🚀 第一阶段：启用无锁优化
-    pub fn with_lockfree_optimization(mut self) -> Self {
-        self.lockfree_enabled = true;
-        self.lockfree_counter = Some(Arc::new(LockFreeCounter::new(
-            self.current_size.load(Ordering::Relaxed)
-        )));
-        self
+    /// 🚀 Phase 3: 初始化连接池 (替代 with_lockfree_optimization)
+    pub async fn initialize_pool(mut self) -> Result<Self, TransportError> {
+        // 创建初始连接
+        for i in 0..self.initial_size {
+            let connection_id = ConnectionId::new(i as u64);
+            let connection = PoolConnection {
+                id: connection_id,
+                session_id: None,
+                created_at: Instant::now(),
+                last_used: Instant::now(),
+                use_count: 0,
+                state: ConnectionState::Available,
+            };
+            
+            // LockFree 存储连接
+            if let Err(e) = self.active_connections.insert(connection_id, connection) {
+                return Err(TransportError::config_error("pool_init", format!("Failed to insert connection: {:?}", e)));
+            }
+            
+            // 添加到可用队列
+            if let Err(e) = self.available_connections.push(connection_id) {
+                return Err(TransportError::config_error("pool_init", format!("Failed to queue connection: {:?}", e)));
+            }
+            
+            // 更新计数器
+            self.connection_id_counter.store(i as u64 + 1, Ordering::Relaxed);
+            self.stats.total_connections.fetch_add(1, Ordering::Relaxed);
+            self.stats.available_connections.fetch_add(1, Ordering::Relaxed);
+            
+            // 发送创建事件
+            let _ = self.event_broadcaster.send(PoolEvent::ConnectionCreated { connection_id });
+        }
+        
+        tracing::info!("🚀 Phase 3: 连接池初始化完成，创建了 {} 个连接", self.initial_size);
+        Ok(self)
     }
 
-    /// 获取当前使用率 - 无锁优化版本
-    pub fn utilization(&self) -> f64 {
-        let current = if self.lockfree_enabled {
-            if let Some(ref counter) = self.lockfree_counter {
-                counter.get()
-            } else {
-                self.current_size.load(Ordering::Relaxed)
+    /// 🚀 Phase 3: 高性能连接获取 (LockFree)
+    pub fn get_connection(&self) -> Result<ConnectionId, TransportError> {
+        let start_time = Instant::now();
+        
+        // 尝试从可用队列获取连接
+        if let Some(connection_id) = self.available_connections.pop() {
+            // 更新连接状态为使用中
+            if let Some(mut connection) = self.active_connections.get(&connection_id) {
+                connection.state = ConnectionState::InUse;
+                connection.last_used = Instant::now();
+                connection.use_count += 1;
+                
+                // 更新连接到存储 (LockFree)
+                let _ = self.active_connections.insert(connection_id, connection);
+                
+                // 更新统计
+                self.stats.get_operations.fetch_add(1, Ordering::Relaxed);
+                self.stats.available_connections.fetch_sub(1, Ordering::Relaxed);
+                self.stats.active_connections.fetch_add(1, Ordering::Relaxed);
+                
+                let wait_time = start_time.elapsed().as_nanos() as u64;
+                self.stats.total_wait_time_ns.fetch_add(wait_time, Ordering::Relaxed);
+                self.stats.total_operations.fetch_add(1, Ordering::Relaxed);
+                
+                // 发送获取事件
+                let _ = self.event_broadcaster.send(PoolEvent::ConnectionAcquired { connection_id });
+                
+                tracing::debug!("🚀 获取连接: {:?}, 等待时间: {:?}", connection_id, start_time.elapsed());
+                return Ok(connection_id);
             }
+        }
+        
+        Err(TransportError::resource_error("connection_pool", 0, self.max_size))
+    }
+    
+    /// 🚀 Phase 3: 高性能连接归还 (LockFree)
+    pub fn return_connection(&self, connection_id: ConnectionId) -> Result<(), TransportError> {
+        // 检查连接是否存在
+        if let Some(mut connection) = self.active_connections.get(&connection_id) {
+            // 更新连接状态为可用
+            connection.state = ConnectionState::Available;
+            connection.last_used = Instant::now();
+            
+            // 更新连接到存储 (LockFree)
+            let _ = self.active_connections.insert(connection_id, connection);
+            
+            // 添加回可用队列
+            if let Err(e) = self.available_connections.push(connection_id) {
+                return Err(TransportError::config_error("return_connection", format!("Failed to return connection: {:?}", e)));
+            }
+            
+            // 更新统计
+            self.stats.return_operations.fetch_add(1, Ordering::Relaxed);
+            self.stats.available_connections.fetch_add(1, Ordering::Relaxed);
+            self.stats.active_connections.fetch_sub(1, Ordering::Relaxed);
+            
+            // 发送归还事件
+            let _ = self.event_broadcaster.send(PoolEvent::ConnectionReleased { connection_id });
+            
+            tracing::debug!("🚀 归还连接: {:?}", connection_id);
+            Ok(())
         } else {
-            self.current_size.load(Ordering::Relaxed)
+            Err(TransportError::config_error("return_connection", format!("Connection not found: {:?}", connection_id)))
+        }
+    }
+    
+    /// 🚀 Phase 3: 获取当前使用率 (LockFree)
+    pub fn utilization(&self) -> f64 {
+        let total = self.stats.total_connections.load(Ordering::Relaxed) as f64;
+        let available = self.stats.available_connections.load(Ordering::Relaxed) as f64;
+        
+        if total == 0.0 {
+            0.0
+        } else {
+            (total - available) / total
+        }
+    }
+
+    /// 🚀 Phase 3: 智能扩展 (基于LockFree统计)
+    pub async fn smart_expand(&mut self) -> Result<bool, TransportError> {
+        // 获取当前统计
+        let current_total = self.stats.total_connections.load(Ordering::Relaxed) as usize;
+        let available_count = self.stats.available_connections.load(Ordering::Relaxed) as usize;
+        
+        // 计算使用率
+        let utilization = if current_total > 0 {
+            (current_total - available_count) as f64 / current_total as f64
+        } else {
+            0.0
         };
         
-        current as f64 / self.max_size as f64
-    }
-
-    /// 🚀 无锁优化的扩展操作
-    pub async fn try_expand_lockfree(&mut self) -> Result<bool, TransportError> {
-        if !self.lockfree_enabled {
-            return self.force_expand().await;
+        // 检查是否需要扩展
+        if utilization < self.expansion_strategy.expansion_threshold {
+            return Ok(false); // 不需要扩展
         }
-
-        let counter = self.lockfree_counter.as_ref()
-            .ok_or_else(|| TransportError::config_error("lockfree", "Counter not initialized"))?;
-
+        
         // 获取当前扩展因子
         let factor = self.get_current_expansion_factor();
-        let current_size = counter.get();
-        let new_size = ((current_size as f64) * factor) as usize;
+        let new_size = ((current_total as f64) * factor) as usize;
         
         // 检查是否超过最大限制
         if new_size > self.max_size {
             return Err(TransportError::resource_error(
-                "connection_pool_lockfree", 
+                "connection_pool_expansion", 
                 new_size, 
                 self.max_size
             ));
         }
-
-        // 无锁更新大小
-        counter.set(new_size);
-        self.current_size.store(new_size, Ordering::Relaxed);
         
-        // 更新统计
-        self.stats.expansion_count.fetch_add(1, Ordering::Relaxed);
-        *self.stats.last_expansion.write().await = Some(Instant::now());
+        // 创建新连接
+        let connections_to_create = new_size - current_total;
+        for _ in 0..connections_to_create {
+            let connection_id = ConnectionId::new(self.connection_id_counter.fetch_add(1, Ordering::Relaxed));
+            let connection = PoolConnection {
+                id: connection_id,
+                session_id: None,
+                created_at: Instant::now(),
+                last_used: Instant::now(),
+                use_count: 0,
+                state: ConnectionState::Available,
+            };
+            
+            // LockFree 存储连接
+            if let Err(e) = self.active_connections.insert(connection_id, connection) {
+                tracing::error!("❌ 创建连接失败: {:?}", e);
+                continue;
+            }
+            
+            // 添加到可用队列
+            if let Err(e) = self.available_connections.push(connection_id) {
+                tracing::error!("❌ 添加可用连接失败: {:?}", e);
+                continue;
+            }
+            
+            // 更新统计
+            self.stats.total_connections.fetch_add(1, Ordering::Relaxed);
+            self.stats.available_connections.fetch_add(1, Ordering::Relaxed);
+            self.stats.create_operations.fetch_add(1, Ordering::Relaxed);
+            
+            // 发送创建事件
+            let _ = self.event_broadcaster.send(PoolEvent::ConnectionCreated { connection_id });
+        }
         
         // 更新扩展因子索引
         self.advance_expansion_factor();
         
         // 记录性能指标
-        self.monitor.record_expansion(current_size, new_size, factor).await;
+        self.monitor.record_expansion(current_total, new_size, factor).await;
+        
+        // 发送扩展事件
+        let _ = self.event_broadcaster.send(PoolEvent::PoolExpanded { 
+            from_size: current_total, 
+            to_size: new_size 
+        });
         
         tracing::info!(
-            "🚀 LockFree Pool expanded: {} -> {} (factor: {:.1}x)", 
-            current_size, 
+            "🚀 连接池扩展: {} -> {} (factor: {:.1}x), 利用率: {:.1}%", 
+            current_total, 
             new_size, 
-            factor
+            factor,
+            utilization * 100.0
         );
 
         Ok(true)
     }
 
-    /// 智能扩展决策
+    /// 🚀 Phase 3: 智能扩展决策
     pub async fn try_expand(&mut self) -> Result<bool, TransportError> {
-        if self.lockfree_enabled {
-            return self.try_expand_lockfree().await;
-        }
-        
-        self.force_expand().await
+        self.smart_expand().await
     }
 
-    /// 强制扩展（用于测试和演示）
+    /// 🚀 Phase 3: 强制扩展（用于测试和演示）
     pub async fn force_expand(&mut self) -> Result<bool, TransportError> {
-
-        // 获取当前扩展因子
-        let factor = self.get_current_expansion_factor();
-        let current_size = self.current_size.load(Ordering::Relaxed);
-        let new_size = ((current_size as f64) * factor) as usize;
+        // 临时设置扩展阈值为0，强制扩展
+        let original_threshold = self.expansion_strategy.expansion_threshold;
+        self.expansion_strategy.expansion_threshold = 0.0;
         
-        // 检查是否超过最大限制
-        if new_size > self.max_size {
-            return Err(TransportError::resource_error(
-                "connection_pool", 
-                new_size, 
-                self.max_size
-            ));
-        }
-
-        // 执行扩展
-        self.current_size.store(new_size, Ordering::Relaxed);
-        self.stats.expansion_count.fetch_add(1, Ordering::Relaxed);
-        *self.stats.last_expansion.write().await = Some(Instant::now());
+        let result = self.smart_expand().await;
         
-        // 更新扩展因子索引
-        self.advance_expansion_factor();
+        // 恢复原阈值
+        self.expansion_strategy.expansion_threshold = original_threshold;
         
-        // 记录性能指标
-        self.monitor.record_expansion(current_size, new_size, factor).await;
-        
-        tracing::info!(
-            "Pool expanded: {} -> {} (factor: {:.1}x)", 
-            current_size, 
-            new_size, 
-            factor
-        );
-
-        Ok(true)
+        result
     }
 
-    /// 智能收缩决策
+    /// 🚀 Phase 3: 智能收缩决策 (基于LockFree统计)
     pub async fn try_shrink(&mut self) -> Result<bool, TransportError> {
         let utilization = self.utilization();
         
@@ -217,37 +486,72 @@ impl ConnectionPool {
             return Ok(false);
         }
 
-        let current_size = self.current_size.load(Ordering::Relaxed);
+        // 获取当前统计
+        let current_total = self.stats.total_connections.load(Ordering::Relaxed) as usize;
+        let available_count = self.stats.available_connections.load(Ordering::Relaxed) as usize;
         
         // 保持最小大小
-        let min_size = (self.max_size as f64 * 0.1) as usize; // 10%作为最小值
-        if current_size <= min_size {
+        let min_size = self.initial_size;
+        if current_total <= min_size {
             return Ok(false);
         }
 
         // 渐进式收缩（反向因子）
         let shrink_factor = 0.8; // 收缩到80%
         let new_size = std::cmp::max(
-            ((current_size as f64) * shrink_factor) as usize,
+            ((current_total as f64) * shrink_factor) as usize,
             min_size
         );
 
-        // 执行收缩
-        self.current_size.store(new_size, Ordering::Relaxed);
-        self.stats.shrink_count.fetch_add(1, Ordering::Relaxed);
-        *self.stats.last_shrink.write().await = Some(Instant::now());
+        if new_size >= current_total {
+            return Ok(false);
+        }
+
+        // 计算需要移除的连接数
+        let connections_to_remove = current_total - new_size;
+        let mut removed_count = 0;
+        
+        // 只移除可用的连接
+        for _ in 0..std::cmp::min(connections_to_remove, available_count) {
+            if let Some(connection_id) = self.available_connections.pop() {
+                // 从存储中删除连接
+                if let Err(e) = self.active_connections.remove(&connection_id) {
+                    tracing::warn!("⚠️ 移除连接失败: {:?}", e);
+                    continue;
+                }
+                
+                // 更新统计
+                self.stats.total_connections.fetch_sub(1, Ordering::Relaxed);
+                self.stats.available_connections.fetch_sub(1, Ordering::Relaxed);
+                self.stats.remove_operations.fetch_add(1, Ordering::Relaxed);
+                
+                // 发送移除事件
+                let _ = self.event_broadcaster.send(PoolEvent::ConnectionRemoved { connection_id });
+                
+                removed_count += 1;
+            }
+        }
+        
+        let final_size = current_total - removed_count;
         
         // 记录性能指标
-        self.monitor.record_shrink(current_size, new_size, shrink_factor).await;
+        self.monitor.record_shrink(current_total, final_size, shrink_factor).await;
+
+        // 发送收缩事件
+        let _ = self.event_broadcaster.send(PoolEvent::PoolShrunk { 
+            from_size: current_total, 
+            to_size: final_size 
+        });
 
         tracing::info!(
-            "Pool shrunk: {} -> {} (utilization: {:.1}%)", 
-            current_size, 
-            new_size, 
+            "🚀 连接池收缩: {} -> {} (移除了 {} 个连接, 利用率: {:.1}%)", 
+            current_total, 
+            final_size,
+            removed_count,
             utilization * 100.0
         );
 
-        Ok(true)
+        Ok(removed_count > 0)
     }
 
     /// 获取当前扩展因子
@@ -266,24 +570,33 @@ impl ConnectionPool {
         }
     }
 
-    /// 获取详细状态
+    /// 🚀 Phase 3: 获取详细状态 (基于LockFree统计)
     pub async fn detailed_status(&self) -> PoolDetailedStatus {
-        let utilization_history = self.stats.utilization_history.read().await;
+        let stats = self.stats.snapshot();
+        let memory_status = self.memory_pool.status().await;
+        
+        // 计算平均等待时间
+        let avg_wait_time_ms = if stats.total_operations > 0 {
+            (stats.total_wait_time_ns as f64 / stats.total_operations as f64) / 1_000_000.0
+        } else {
+            0.0
+        };
         
         PoolDetailedStatus {
-            current_size: self.current_size.load(Ordering::Relaxed),
+            current_size: stats.total_connections as usize,
             max_size: self.max_size,
             utilization: self.utilization(),
-            expansion_count: self.stats.expansion_count.load(Ordering::Relaxed),
-            shrink_count: self.stats.shrink_count.load(Ordering::Relaxed),
+            expansion_count: 0, // 扩展次数现在由 monitor 跟踪
+            shrink_count: 0, // 收缩次数现在由 monitor 跟踪
             current_expansion_factor: self.get_current_expansion_factor(),
-            avg_utilization: if utilization_history.is_empty() {
-                0.0
-            } else {
-                utilization_history.iter().sum::<f64>() / utilization_history.len() as f64
-            },
-            memory_pool_status: self.memory_pool.status().await,
+            avg_utilization: self.utilization(), // 简化为当前利用率
+            memory_pool_status: memory_status,
         }
+    }
+    
+    /// 🚀 Phase 3: 获取性能统计
+    pub fn get_performance_stats(&self) -> OptimizedPoolStatsSnapshot {
+        self.stats.snapshot()
     }
 
     /// 获取内存池引用
