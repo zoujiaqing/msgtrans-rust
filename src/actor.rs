@@ -1,6 +1,8 @@
-use std::collections::HashMap;
 use tokio::sync::{mpsc, broadcast, Mutex};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use flume::{unbounded as flume_unbounded, Receiver as FlumeReceiver, Sender as FlumeSender};
+
 use crate::{
     SessionId, 
     protocol::ProtocolAdapter,
@@ -8,7 +10,18 @@ use crate::{
     event::TransportEvent,
     error::TransportError,
     packet::Packet,
+    transport::lockfree_enhanced::LockFreeHashMap,
 };
+
+/// 🚀 Phase 2: Actor管理命令 (异步高性能)
+#[derive(Debug)]
+pub enum ActorManagerCommand {
+    AddActor(SessionId, ActorHandle),
+    RemoveActor(SessionId),
+    BroadcastEvent(TransportEvent),
+    GetStats,
+    Shutdown,
+}
 
 /// Actor状态枚举
 #[derive(Debug, Clone, PartialEq)]
@@ -325,6 +338,7 @@ impl std::error::Error for CommandHandlingResult {}
 /// Actor句柄
 /// 
 /// 用于与Actor通信的轻量级句柄
+#[derive(Debug)]
 pub struct ActorHandle {
     /// 命令发送器
     command_tx: mpsc::Sender<TransportCommand>,
@@ -437,59 +451,121 @@ impl Drop for ActorHandle {
     }
 }
 
-/// Actor管理器
+/// 🚀 Phase 2 迁移：混合架构Actor管理器
 /// 
-/// 管理多个Actor的生命周期
+/// 使用 LockFree + Flume 混合架构管理多个Actor的生命周期
 pub struct ActorManager {
-    /// 活跃的Actor句柄
-    actors: Arc<Mutex<HashMap<SessionId, ActorHandle>>>,
-    /// 全局事件发送器
+    /// ✅ Phase 2: LockFree Actor句柄存储 (替代 Arc<Mutex<HashMap>>)
+    actors: Arc<LockFreeHashMap<SessionId, ActorHandle>>,
+    
+    /// 🔧 Phase 2: Flume 异步命令通道 (替代直接操作)
+    command_tx: FlumeSender<ActorManagerCommand>,
+    command_rx: Option<FlumeReceiver<ActorManagerCommand>>,
+    
+    /// 全局事件发送器 (保持 Tokio 用于生态集成)
     pub(crate) global_event_tx: broadcast::Sender<TransportEvent>,
+    
+    /// 统计信息
+    stats: Arc<ActorManagerStats>,
+}
+
+/// Actor管理器统计
+#[derive(Debug, Default)]
+pub struct ActorManagerStats {
+    pub actors_added: AtomicU64,
+    pub actors_removed: AtomicU64,
+    pub events_broadcasted: AtomicU64,
+    pub commands_processed: AtomicU64,
 }
 
 impl ActorManager {
-    /// 创建新的Actor管理器
+    /// 🚀 Phase 2: 创建新的混合架构Actor管理器
     pub fn new() -> Self {
         let (global_event_tx, _) = broadcast::channel(1024);
+        let (command_tx, command_rx) = flume_unbounded();
         
         Self {
-            actors: Arc::new(Mutex::new(HashMap::new())),
+            /// ✅ Phase 2: LockFree Actor存储
+            actors: Arc::new(LockFreeHashMap::new()),
+            
+            /// 🔧 Phase 2: Flume 异步命令通道
+            command_tx,
+            command_rx: Some(command_rx),
+            
             global_event_tx,
+            stats: Arc::new(ActorManagerStats::default()),
         }
     }
     
-    /// 添加Actor
+    /// 🚀 Phase 2: 添加Actor (LockFree + Flume)
     pub async fn add_actor(&self, session_id: SessionId, handle: ActorHandle) {
-        let mut actors = self.actors.lock().await;
-        actors.insert(session_id, handle);
+        // 直接使用 LockFree 同步插入，无需异步
+        if let Err(e) = self.actors.insert(session_id, handle) {
+            tracing::error!("❌ 添加Actor失败 {}: {:?}", session_id, e);
+        } else {
+            self.stats.actors_added.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("✅ Actor已添加: {}", session_id);
+        }
     }
     
-    /// 移除Actor
+    /// 🚀 Phase 2: 移除Actor (LockFree)
     pub async fn remove_actor(&self, session_id: &SessionId) -> Option<ActorHandle> {
-        let mut actors = self.actors.lock().await;
-        actors.remove(session_id)
+        match self.actors.remove(session_id) {
+            Ok(handle) => {
+                self.stats.actors_removed.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!("✅ Actor已移除: {}", session_id);
+                handle
+            },
+            Err(e) => {
+                tracing::warn!("⚠️ 移除Actor失败 {}: {:?}", session_id, e);
+                None
+            }
+        }
     }
     
-    /// 获取Actor句柄
+    /// 🚀 Phase 2: 获取Actor句柄 (LockFree wait-free读取)
     pub async fn get_actor(&self, session_id: &SessionId) -> Option<ActorHandle> {
-        let actors = self.actors.lock().await;
-        actors.get(session_id).cloned()
+        self.actors.get(session_id)
     }
     
-    /// 获取所有活跃会话ID
+    /// 🚀 Phase 2: 获取所有活跃会话ID (LockFree)
     pub async fn active_sessions(&self) -> Vec<SessionId> {
-        let actors = self.actors.lock().await;
-        actors.keys().copied().collect()
+        match self.actors.keys() {
+            Ok(keys) => keys,
+            Err(e) => {
+                tracing::error!("❌ 获取活跃会话失败: {:?}", e);
+                Vec::new()
+            }
+        }
     }
     
-    /// 广播事件到所有Actor
+    /// 🚀 Phase 2: 广播事件到所有Actor (保持 Tokio 生态)
     pub async fn broadcast_event(&self, event: TransportEvent) {
-        let _ = self.global_event_tx.send(event);
+        if let Err(e) = self.global_event_tx.send(event) {
+            tracing::warn!("⚠️ 广播事件失败: {:?}", e);
+        } else {
+            self.stats.events_broadcasted.fetch_add(1, Ordering::Relaxed);
+        }
     }
     
-    /// 获取全局事件接收器
+    /// 获取全局事件接收器 (保持 Tokio 生态)
     pub fn global_events(&self) -> broadcast::Receiver<TransportEvent> {
         self.global_event_tx.subscribe()
+    }
+    
+    /// 🚀 Phase 2: 获取Actor管理器统计信息
+    pub fn get_stats(&self) -> (u64, u64, u64, u64) {
+        let actors_added = self.stats.actors_added.load(Ordering::Relaxed);
+        let actors_removed = self.stats.actors_removed.load(Ordering::Relaxed);
+        let events_broadcasted = self.stats.events_broadcasted.load(Ordering::Relaxed);
+        let commands_processed = self.stats.commands_processed.load(Ordering::Relaxed);
+        
+        (actors_added, actors_removed, events_broadcasted, commands_processed)
+    }
+    
+    /// 🚀 Phase 2: 获取当前活跃Actor数量 (LockFree)
+    pub async fn actor_count(&self) -> usize {
+        self.actors.len()
     }
 }
 
