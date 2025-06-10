@@ -5,13 +5,14 @@
 use std::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use std::collections::HashMap;
+use crossbeam_channel::{unbounded as crossbeam_unbounded, Receiver as CrossbeamReceiver, Sender as CrossbeamSender};
 
 use crate::{
     SessionId,
     error::TransportError,
-    transport::{api::Transport, config::TransportConfig},
+    transport::{api::Transport, config::TransportConfig, lockfree_enhanced::LockFreeHashMap},
     protocol::{ProtocolConfig, adapter::ServerConfig, protocol::Server},
     stream::EventStream,
 };
@@ -187,23 +188,40 @@ impl Default for TransportServerBuilder {
     }
 }
 
-/// 服务端传输层
+/// 🚀 Phase 1 迁移：服务器控制命令 (同步高性能)
+#[derive(Debug)]
+enum ServerControlCommand {
+    AddSession(SessionId, Transport),
+    RemoveSession(SessionId),
+    Shutdown,
+}
+
+/// 🏗️ Phase 1 迁移：混合架构服务器传输
 /// 
-/// 管理多个客户端连接，每个连接对应一个 Transport 实例
+/// 使用 LockFree + Crossbeam 的高性能会话管理
 pub struct ServerTransport {
-    /// ✅ 核心设计：管理多个 Transport 实例 (每个客户端连接一个)
-    sessions: Arc<RwLock<HashMap<SessionId, Transport>>>,
-    /// 服务器实例管理
+    /// ✅ 第一阶段迁移：LockFree 会话管理 (替代 Arc<RwLock<HashMap>>)
+    sessions: Arc<LockFreeHashMap<SessionId, Transport>>,
+    
+    /// 🔧 第一阶段迁移：Crossbeam 同步控制通道 (替代 Tokio)
+    control_tx: CrossbeamSender<ServerControlCommand>,
+    control_rx: Option<CrossbeamReceiver<ServerControlCommand>>,
+    
+    /// 服务器实例管理 (保持 Tokio Mutex 用于低频操作)
     servers: Arc<Mutex<HashMap<String, Box<dyn Server>>>>,
+    
     /// 服务端配置
     acceptor_config: AcceptorConfig,
     rate_limiter: Option<RateLimiterConfig>,
     middleware_stack: Vec<Box<dyn ServerMiddleware>>,
     graceful_shutdown: Option<Duration>,
+    
     /// 协议配置 - 用于创建服务器监听
     protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
+    
     /// 全局Actor管理器 - 所有Transport实例共享
     global_actor_manager: Arc<crate::actor::ActorManager>,
+    
     /// 会话ID生成器
     session_id_generator: Arc<AtomicU64>,
 }
@@ -220,8 +238,17 @@ impl ServerTransport {
         use crate::actor::ActorManager;
         let global_actor_manager = Arc::new(ActorManager::new());
         
+        // 🚀 Phase 1: 创建 Crossbeam 同步控制通道 (修复)
+        let (control_tx, control_rx) = crossbeam_unbounded();
+        
         Ok(Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
+            /// ✅ Phase 1: LockFree 会话管理
+            sessions: Arc::new(LockFreeHashMap::new()),
+            
+            /// 🔧 Phase 1: Crossbeam 同步控制
+            control_tx,
+            control_rx: Some(control_rx),
+            
             servers: Arc::new(Mutex::new(HashMap::new())),
             acceptor_config,
             rate_limiter,
@@ -342,10 +369,10 @@ impl ServerTransport {
                             }
                         };
                         
-                        // 将新的 Transport 加入 sessions
-                        {
-                            let mut sessions_guard = sessions.write().await;
-                            sessions_guard.insert(session_id, transport.clone());
+                        // 🚀 Phase 1: LockFree 会话添加 (替代 RwLock)
+                        if let Err(e) = sessions.insert(session_id, transport.clone()) {
+                            tracing::error!("❌ 添加会话失败 {}: {:?}", session_id, e);
+                            continue;
                         }
                         
                         tracing::info!("🎯 会话已注册 (会话ID: {})", session_id);
@@ -362,10 +389,8 @@ impl ServerTransport {
                             // 在真实实现中，应该监听连接的事件或状态变化
                             tokio::time::sleep(std::time::Duration::from_secs(300)).await; // 5分钟超时检查
                             
-                            // 检查会话是否还存在，如果不存在则说明已经被清理
-                            let sessions_guard = sessions_for_cleanup.read().await;
-                            if sessions_guard.contains_key(&session_id) {
-                                drop(sessions_guard);
+                            // 🚀 Phase 1: LockFree 会话检查 (替代 RwLock)
+                            if sessions_for_cleanup.get(&session_id).is_some() {
                                 // 会话仍然存在，执行清理
                                 Self::cleanup_session(&sessions_for_cleanup, session_id).await;
                             }
@@ -423,10 +448,10 @@ impl ServerTransport {
                             }
                         };
                         
-                        // 将新的 Transport 加入 sessions
-                        {
-                            let mut sessions_guard = sessions.write().await;
-                            sessions_guard.insert(session_id, transport);
+                        // 🚀 Phase 1: LockFree 会话添加 (WebSocket)
+                        if let Err(e) = sessions.insert(session_id, transport) {
+                            tracing::error!("❌ 添加 WebSocket 会话失败 {}: {:?}", session_id, e);
+                            continue;
                         }
                         
                         tracing::info!("🎯 会话已注册 (会话ID: {})", session_id);
@@ -436,9 +461,9 @@ impl ServerTransport {
                         tokio::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                             
-                            let sessions_guard = sessions_for_cleanup.read().await;
-                            if sessions_guard.contains_key(&session_id) {
-                                drop(sessions_guard);
+                            // 🚀 Phase 1: LockFree 会话检查 (WebSocket)
+                            if sessions_for_cleanup.get(&session_id).is_some() {
+                                // 会话仍然存在，执行清理
                                 Self::cleanup_session(&sessions_for_cleanup, session_id).await;
                             }
                         });
@@ -495,10 +520,10 @@ impl ServerTransport {
                             }
                         };
                         
-                        // 将新的 Transport 加入 sessions
-                        {
-                            let mut sessions_guard = sessions.write().await;
-                            sessions_guard.insert(session_id, transport);
+                        // 🚀 Phase 1: LockFree 会话添加 (QUIC)
+                        if let Err(e) = sessions.insert(session_id, transport) {
+                            tracing::error!("❌ 添加 QUIC 会话失败 {}: {:?}", session_id, e);
+                            continue;
                         }
                         
                         tracing::info!("🎯 会话已注册 (会话ID: {})", session_id);
@@ -508,9 +533,9 @@ impl ServerTransport {
                         tokio::spawn(async move {
                             tokio::time::sleep(std::time::Duration::from_secs(300)).await;
                             
-                            let sessions_guard = sessions_for_cleanup.read().await;
-                            if sessions_guard.contains_key(&session_id) {
-                                drop(sessions_guard);
+                            // 🚀 Phase 1: LockFree 会话检查 (QUIC)
+                            if sessions_for_cleanup.get(&session_id).is_some() {
+                                // 会话仍然存在，执行清理
                                 Self::cleanup_session(&sessions_for_cleanup, session_id).await;
                             }
                         });
@@ -532,9 +557,8 @@ impl ServerTransport {
         session_id: SessionId,
         packet: crate::packet::Packet,
     ) -> Result<(), TransportError> {
-        let sessions = self.sessions.read().await;
-        
-        if let Some(transport) = sessions.get(&session_id) {
+        // 🚀 Phase 1: LockFree 同步查找 (替代 RwLock::read().await)
+        if let Some(transport) = self.sessions.get(&session_id) {
             // ✅ 关键修复：获取Transport的活跃会话列表，然后发送到第一个（通常只有一个）
             let active_sessions = transport.active_sessions().await;
             if let Some(&internal_session_id) = active_sessions.first() {
@@ -552,12 +576,20 @@ impl ServerTransport {
     
     /// 广播消息到所有活跃会话
     pub async fn broadcast(&self, packet: crate::packet::Packet) -> Result<(), TransportError> {
-        let sessions = self.sessions.read().await;
+        // 🚀 Phase 1: LockFree 同步遍历 (替代 RwLock::read().await)
         let mut errors = Vec::new();
         
-        for (session_id, transport) in sessions.iter() {
-            if let Err(e) = transport.send_to_session(*session_id, packet.clone()).await {
-                errors.push((*session_id, e));
+        self.sessions.for_each(|session_id, transport| {
+            // 异步操作需要在这里处理，但我们先收集所有会话
+            // 然后在外部进行异步操作
+        })?;
+        
+        // 获取所有会话的快照进行异步处理
+        let sessions_snapshot = self.sessions.snapshot()?;
+        
+        for (session_id, transport) in sessions_snapshot {
+            if let Err(e) = transport.send_to_session(session_id, packet.clone()).await {
+                errors.push((session_id, e));
             }
         }
         
@@ -636,11 +668,10 @@ impl ServerTransport {
         EventStream::new(self.global_actor_manager.global_events())
     }
     
-    /// 获取指定会话的事件流
+    /// 获取会话事件流
     pub async fn session_events(&self, session_id: SessionId) -> Result<EventStream, TransportError> {
-        let sessions = self.sessions.read().await;
-        
-        if let Some(transport) = sessions.get(&session_id) {
+        // 🚀 Phase 1: LockFree 同步查找
+        if let Some(transport) = self.sessions.get(&session_id) {
             Ok(transport.events())
         } else {
             Err(TransportError::config_error("session", "Session not found"))
@@ -651,12 +682,13 @@ impl ServerTransport {
     pub async fn add_session(&self, transport: Transport) -> SessionId {
         let session_id = self.generate_session_id();
         
-        {
-            let mut sessions = self.sessions.write().await;
-            sessions.insert(session_id, transport);
+        // 🚀 Phase 1: LockFree 同步插入 (替代 RwLock::write().await)
+        if let Err(e) = self.sessions.insert(session_id, transport) {
+            tracing::error!("❌ 添加会话失败 {}: {:?}", session_id, e);
+        } else {
+            tracing::info!("新会话已创建: {}", session_id);
         }
         
-        tracing::info!("新会话已创建: {}", session_id);
         session_id
     }
 
@@ -694,11 +726,11 @@ impl ServerTransport {
 
     /// 清理会话
     async fn cleanup_session(
-        sessions: &Arc<RwLock<HashMap<SessionId, Transport>>>,
+        sessions: &Arc<LockFreeHashMap<SessionId, Transport>>,
         session_id: SessionId,
     ) {
-        let mut sessions_guard = sessions.write().await;
-        if let Some(transport) = sessions_guard.remove(&session_id) {
+        // 🚀 Phase 1: LockFree 同步移除 (替代 RwLock::write().await)
+        if let Ok(Some(transport)) = sessions.remove(&session_id) {
             // 尝试优雅关闭 transport 中的连接
             if let Err(e) = transport.close_session(session_id).await {
                 tracing::warn!("⚠️ 关闭会话 {} 时出错: {:?}", session_id, e);
@@ -709,14 +741,16 @@ impl ServerTransport {
     
     /// 获取传输统计
     pub async fn stats(&self) -> Result<std::collections::HashMap<SessionId, crate::command::TransportStats>, TransportError> {
-        let sessions = self.sessions.read().await;
         let mut stats = std::collections::HashMap::new();
         
-        for (session_id, transport) in sessions.iter() {
+        // 🚀 Phase 1: LockFree 遍历 (替代 RwLock::read().await)
+        let sessions_snapshot = self.sessions.snapshot()?;
+        
+        for (session_id, transport) in sessions_snapshot {
             if let Ok(transport_stats) = transport.stats().await {
                 // 合并传输统计，取第一个匹配的会话统计
-                if let Some(session_stats) = transport_stats.get(session_id) {
-                    stats.insert(*session_id, session_stats.clone());
+                if let Some(session_stats) = transport_stats.get(&session_id) {
+                    stats.insert(session_id, session_stats.clone());
                 }
             }
         }
@@ -726,18 +760,14 @@ impl ServerTransport {
     
     /// 获取活跃会话
     pub async fn active_sessions(&self) -> Vec<SessionId> {
-        let sessions = self.sessions.read().await;
-        sessions.keys().cloned().collect()
+        // 🚀 Phase 1: LockFree 键遍历 (替代 RwLock::read().await)
+        self.sessions.keys().unwrap_or_default()
     }
     
     /// 关闭指定会话
     pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
-        let mut sessions = self.sessions.write().await;
-        
-        if let Some(transport) = sessions.remove(&session_id) {
-            // 释放锁后再进行可能的长时间操作
-            drop(sessions);
-            
+        // 🚀 Phase 1: LockFree 同步移除 (替代 RwLock::write().await)
+        if let Ok(Some(transport)) = self.sessions.remove(&session_id) {
             // 通过Transport关闭连接
             if let Err(e) = transport.close_session(session_id).await {
                 tracing::warn!("⚠️ 关闭会话 {} 时出现错误: {:?}", session_id, e);
@@ -764,6 +794,8 @@ impl Clone for ServerTransport {
             protocol_configs: std::collections::HashMap::new(), // 协议配置不支持克隆，使用空映射
             global_actor_manager: self.global_actor_manager.clone(),
             session_id_generator: self.session_id_generator.clone(),
+            control_tx: self.control_tx.clone(),
+            control_rx: None,
         }
     }
 }

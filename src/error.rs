@@ -197,6 +197,17 @@ impl From<std::io::Error> for TransportError {
     }
 }
 
+/// 🚀 Phase 1: 从 String 转换 - 用于 LockFree 错误处理
+impl From<String> for TransportError {
+    fn from(error: String) -> Self {
+        TransportError::Resource {
+            resource: "lockfree_operation".to_string(),
+            current: 0,
+            limit: 0,
+        }
+    }
+}
+
 impl From<TransportError> for TransportEvent {
     fn from(error: TransportError) -> Self {
         TransportEvent::TransportError {

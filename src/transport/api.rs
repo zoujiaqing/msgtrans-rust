@@ -900,4 +900,15 @@ impl Clone for Transport {
             configured_servers: Vec::new(), // Clone时不复制服务器，因为它们已经被消费了
         }
     }
+}
+
+/// 🚀 Phase 1: 手动实现 Debug trait
+impl std::fmt::Debug for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transport")
+            .field("session_count", &self.session_id_generator.load(std::sync::atomic::Ordering::Relaxed))
+            .field("config", &self.config)
+            .field("server_count", &self.configured_servers.len())
+            .finish()
+    }
 } 

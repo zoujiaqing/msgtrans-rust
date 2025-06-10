@@ -241,9 +241,9 @@ where
         }
     }
     
-    /// 获取所有键值对快照
-    pub fn snapshot(&self) -> HashMap<K, V> {
-        let mut result = HashMap::new();
+    /// 🚀 Phase 1: 获取所有键值对快照 - 用于异步操作
+    pub fn snapshot(&self) -> Result<Vec<(K, V)>, String> {
+        let mut result = Vec::new();
         
         for shard in &self.shards {
             let guard = epoch::pin();
@@ -252,12 +252,12 @@ where
             if !map_ptr.is_null() {
                 let map = unsafe { map_ptr.as_ref() }.unwrap();
                 for (k, v) in map.iter() {
-                    result.insert(k.clone(), v.clone());
+                    result.push((k.clone(), v.clone()));
                 }
             }
         }
         
-        result
+        Ok(result)
     }
     
     /// 获取条目数量
@@ -279,6 +279,45 @@ where
     /// 是否为空
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+    
+    /// 🚀 Phase 1: 获取所有键 - 用于迭代
+    pub fn keys(&self) -> Result<Vec<K>, String> {
+        let mut all_keys = Vec::new();
+        
+        for shard in &self.shards {
+            let guard = epoch::pin();
+            let map_ptr = shard.map.load(Ordering::Acquire, &guard);
+            
+            if !map_ptr.is_null() {
+                let map = unsafe { map_ptr.as_ref() }.unwrap();
+                for key in map.keys() {
+                    all_keys.push(key.clone());
+                }
+            }
+        }
+        
+        Ok(all_keys)
+    }
+    
+    /// 🚀 Phase 1: 遍历操作 - 替代 RwLock::read().await 的 iter()
+    pub fn for_each<F>(&self, mut f: F) -> Result<(), String>
+    where
+        F: FnMut(&K, &V),
+    {
+        for shard in &self.shards {
+            let guard = epoch::pin();
+            let map_ptr = shard.map.load(Ordering::Acquire, &guard);
+            
+            if !map_ptr.is_null() {
+                let map = unsafe { map_ptr.as_ref() }.unwrap();
+                for (k, v) in map.iter() {
+                    f(k, v);
+                }
+            }
+        }
+        
+        Ok(())
     }
     
     /// 获取统计信息
