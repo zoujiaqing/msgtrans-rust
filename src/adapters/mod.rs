@@ -13,6 +13,6 @@ pub use websocket::{WebSocketAdapter, WebSocketError};
 pub use quic::{QuicAdapter, QuicError};
 
 // 导出工厂和连接类型
-pub use factories::{create_standard_registry, TcpFactory, TcpConnection, TcpServerWrapper};
+pub use factories::{create_standard_registry, TcpFactory, TcpServerWrapper};
 pub use factories::{WebSocketFactory, WebSocketConnection, WebSocketServerWrapper};
 pub use factories::{QuicFactory, QuicConnection, QuicServerWrapper}; 

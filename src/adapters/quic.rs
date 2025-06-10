@@ -1,65 +1,77 @@
 use async_trait::async_trait;
-use std::{io, sync::Arc, time::Duration};
-use bytes::BytesMut;
-use quinn::{Endpoint, Connection, ClientConfig, ServerConfig, SendStream};
+use quinn::{
+    Endpoint, ServerConfig, ClientConfig, Connection, RecvStream, SendStream,
+    ConnectError, ConnectionError, ReadError, WriteError, ClosedStream, ReadToEndError,
+    Incoming,
+};
 use rustls::{
-    pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName, UnixTime},
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
+    RootCertStore,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     DigitallySignedStruct, SignatureScheme,
 };
-use tokio::io::{AsyncWriteExt};
+use std::{sync::Arc, net::SocketAddr, time::Duration, convert::TryInto};
+use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
     SessionId, 
-    protocol::{ProtocolAdapter, AdapterStats, QuicConfig},
-    command::{ConnectionInfo, ProtocolType, ConnectionState},
-    error::TransportError,
-    packet::{Packet, PacketType},
+    error::TransportError, 
+    packet::Packet, 
+    command::ConnectionInfo,
+    protocol::{ProtocolAdapter, AdapterStats, QuicClientConfig, QuicServerConfig},
 };
 
-/// QUIC适配器错误类型
 #[derive(Debug, thiserror::Error)]
 pub enum QuicError {
-    #[error("QUIC connection error: {0}")]
-    Connection(String),
+    #[error("Quinn connection error: {0}")]
+    Connect(#[from] ConnectError),
+    
+    #[error("Quinn connection error: {0}")]
+    Connection(#[from] ConnectionError),
+    
+    #[error("Quinn read error: {0}")]
+    Read(#[from] ReadError),
+    
+    #[error("Quinn write error: {0}")]
+    Write(#[from] WriteError),
+    
+    #[error("Quinn stream closed: {0}")]
+    ClosedStream(#[from] ClosedStream),
+    
+    #[error("Quinn read to end error: {0}")]
+    ReadToEnd(#[from] ReadToEndError),
     
     #[error("IO error: {0}")]
-    Io(#[from] io::Error),
+    Io(#[from] std::io::Error),
+    
+    #[error("TLS error: {0}")]
+    Tls(#[from] rustls::Error),
     
     #[error("Connection closed")]
     ConnectionClosed,
     
-    #[error("Stream error: {0}")]
-    Stream(String),
-    
-    #[error("Certificate error: {0}")]
-    Certificate(String),
+    #[error("Configuration error: {0}")]
+    Config(String),
     
     #[error("Serialization error: {0}")]
     Serialization(String),
-    
-    #[error("Quinn error: {0}")]
-    Quinn(#[from] quinn::ConnectionError),
-    
-    #[error("QUIC endpoint error")]
-    EndpointGeneric,
-    
-    #[error("QUIC connect error")]
-    ConnectGeneric,
 }
 
 impl From<QuicError> for TransportError {
     fn from(error: QuicError) -> Self {
         match error {
-            QuicError::Connection(msg) => TransportError::connection_error(msg, true),
-            QuicError::Io(io_err) => TransportError::connection_error(format!("IO error: {:?}", io_err), true),
-            QuicError::ConnectionClosed => TransportError::connection_error("Connection closed", true),
-            QuicError::Stream(msg) => TransportError::protocol_error("generic", format!("Stream error: {}", msg)),
-            QuicError::Certificate(msg) => TransportError::protocol_error("auth", msg),
-            QuicError::Serialization(msg) => TransportError::protocol_error("serialization", msg),
-            QuicError::Quinn(e) => TransportError::connection_error(format!("Quinn connection error: {}", e), true),
-            QuicError::EndpointGeneric => TransportError::connection_error("Quinn endpoint error", true),
-            QuicError::ConnectGeneric => TransportError::connection_error("Quinn connect error", true),
+            QuicError::Connect(e) => TransportError::connection_error(format!("QUIC connection failed: {}", e), true),
+            QuicError::Connection(e) => TransportError::connection_error(format!("QUIC connection error: {}", e), true),
+            QuicError::Read(e) => TransportError::connection_error(format!("QUIC read error: {}", e), false),
+            QuicError::Write(e) => TransportError::connection_error(format!("QUIC write error: {}", e), false),
+            QuicError::ClosedStream(e) => TransportError::connection_error(format!("QUIC stream closed: {}", e), false),
+            QuicError::ReadToEnd(e) => TransportError::connection_error(format!("QUIC read to end error: {}", e), false),
+            QuicError::Io(e) => TransportError::connection_error(format!("QUIC IO error: {}", e), true),
+            QuicError::Tls(e) => TransportError::config_error("quic", format!("TLS error: {}", e)),
+            QuicError::ConnectionClosed => TransportError::connection_error("QUIC connection closed", true),
+            QuicError::Config(msg) => TransportError::config_error("quic", msg),
+            QuicError::Serialization(msg) => TransportError::protocol_error("quic", msg),
         }
     }
 }
@@ -75,7 +87,7 @@ impl ServerCertVerifier for SkipServerVerification {
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp: &[u8],
-        _now: UnixTime,
+        _now: rustls::pki_types::UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         Ok(ServerCertVerified::assertion())
     }
@@ -103,71 +115,13 @@ impl ServerCertVerifier for SkipServerVerification {
             SignatureScheme::RSA_PKCS1_SHA256,
             SignatureScheme::ECDSA_NISTP256_SHA256,
             SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
             SignatureScheme::ED25519,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
         ]
     }
 }
 
-/// 配置不安全的QUIC客户端（跳过证书验证）
-pub(crate) fn configure_client_insecure() -> ClientConfig {
-    let crypto = rustls::ClientConfig::builder()
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
-        .with_no_client_auth();
-
-    let mut client_config = ClientConfig::new(Arc::new(
-        quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap()
-    ));
-    
-    let mut transport_config = quinn::TransportConfig::default();
-    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
-    client_config.transport_config(Arc::new(transport_config));
-    
-    client_config
-}
-
-// 静态变量存储证书，确保每次生成相同的证书
-static mut CERT: Option<(Vec<u8>, Vec<u8>)> = None;
-
-/// 配置QUIC服务器（自签名证书）
-pub(crate) fn configure_server(recv_window_size: u32) -> (ServerConfig, CertificateDer<'static>) {
-    
-    // 使用静态变量存储证书，确保每次生成相同的证书
-    let (our_cert, our_priv_key) = unsafe {
-        if CERT.is_none() {
-            let (cert, key) = gen_cert();
-            let cert_bytes = cert.as_ref().to_vec();
-            let key_bytes = key.secret_pkcs8_der().to_vec();
-            CERT = Some((cert_bytes, key_bytes));
-            (cert, key)
-        } else {
-            let (cert_bytes, key_bytes) = CERT.as_ref().unwrap();
-            (
-                CertificateDer::from(cert_bytes.clone()),
-                PrivatePkcs8KeyDer::from(key_bytes.clone())
-            )
-        }
-    };
-    
-    let mut our_cfg = ServerConfig::with_single_cert(
-        vec![our_cert.clone()], 
-        our_priv_key.into()
-    ).unwrap();
-
-    let transport_config = Arc::get_mut(&mut our_cfg.transport).unwrap();
-    transport_config.receive_window(recv_window_size.into());
-    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
-
-    (our_cfg, our_cert)
-}
-
-fn gen_cert() -> (CertificateDer<'static>, PrivatePkcs8KeyDer<'static>) {
+// Certificate generation function
+fn generate_self_signed_cert() -> (CertificateDer<'static>, PrivatePkcs8KeyDer<'static>) {
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
     (
         cert.cert.der().clone(),
@@ -175,111 +129,17 @@ fn gen_cert() -> (CertificateDer<'static>, PrivatePkcs8KeyDer<'static>) {
     )
 }
 
-/// 配置QUIC服务器（支持PEM内容或自动生成自签名证书）
-pub(crate) fn configure_server_with_config(config: &QuicConfig) -> Result<(ServerConfig, Option<CertificateDer<'static>>), QuicError> {
-    match (&config.cert_pem, &config.key_pem) {
-        (Some(cert_pem), Some(key_pem)) => {
-            // 使用提供的PEM证书
-            configure_server_with_pem_content(cert_pem, key_pem)
-        }
-        (None, None) => {
-            // 自动生成自签名证书
-            let (server_config, cert) = configure_server(1500 * 100);
-            Ok((server_config, Some(cert)))
-        }
-        _ => {
-            // 不匹配的配置（验证阶段应该已经捕获）
-            Err(QuicError::Certificate("证书和密钥必须同时提供或都不提供".to_string()))
-        }
-    }
-}
-
-/// 配置QUIC服务器（使用PEM内容）
-pub(crate) fn configure_server_with_pem_content(
-    cert_pem: &str,
-    key_pem: &str,
-) -> Result<(ServerConfig, Option<CertificateDer<'static>>), QuicError> {
-    // 解析私钥
-    let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_pem))
-        .map_err(|e| QuicError::Certificate(format!("解析私钥失败: {}", e)))?
-        .ok_or_else(|| QuicError::Certificate("PEM中未找到私钥".to_string()))?;
-
-    // 解析证书链
-    let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem)).collect();
-    let certs = certs.map_err(|e| QuicError::Certificate(format!("解析证书失败: {}", e)))?;
-    
-    if certs.is_empty() {
-        return Err(QuicError::Certificate("PEM中未找到证书".to_string()));
-    }
-
-    // 创建服务器TLS配置
-    let server_crypto = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs.clone(), key)
-        .map_err(|e| QuicError::Certificate(format!("TLS配置错误: {}", e)))?;
-    
-    // 创建QUIC服务器配置
-    let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
-        .map_err(|e| QuicError::Certificate(format!("QUIC配置错误: {}", e)))?;
-    
-    let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
-    
-    // 配置传输参数
-    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
-    transport_config.receive_window((1500u32 * 100).into());
-    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
-    
-    // 返回第一个证书用于客户端验证（如果需要）
-    let first_cert = if certs.is_empty() { None } else { Some(certs[0].clone()) };
-    
-    Ok((server_config, first_cert))
-}
-
-/// 配置QUIC客户端（支持安全和非安全模式）
-pub(crate) fn configure_client_with_config(config: &QuicConfig) -> ClientConfig {
-    match (&config.cert_pem, &config.key_pem) {
-        (Some(cert_pem), Some(_key_pem)) => {
-            // 使用提供的证书进行服务器验证
-            configure_client_with_pem_content(cert_pem)
-        }
-        _ => {
-            // 非安全模式（跳过证书验证）
-            configure_client_insecure()
-        }
-    }
-}
-
-/// 配置QUIC客户端（使用PEM证书进行服务器验证）
-pub(crate) fn configure_client_with_pem_content(cert_pem: &str) -> ClientConfig {
-    // 解析证书链
-    let certs: Result<Vec<_>, _> = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_pem)).collect();
-    let certs = match certs {
-        Ok(certs) if !certs.is_empty() => certs,
-        _ => return configure_client_insecure(), // 解析失败时回退到非安全模式
-    };
-    
-    // 配置信任存储
-    let mut roots = rustls::RootCertStore::empty();
-    for cert in certs {
-        if roots.add(cert).is_err() {
-            return configure_client_insecure(); // 添加失败时回退到非安全模式
-        }
-    }
-    
-    // 创建客户端TLS配置
-    let client_crypto = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
+/// Configure client without certificate verification (insecure for development)
+fn configure_client_insecure() -> ClientConfig {
+    let crypto = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
         .with_no_client_auth();
+
+    let mut client_config = ClientConfig::new(
+        Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto).unwrap())
+    );
     
-    // 创建QUIC客户端配置
-    let quic_client_config = match quinn::crypto::rustls::QuicClientConfig::try_from(client_crypto) {
-        Ok(config) => config,
-        Err(_) => return configure_client_insecure(), // 配置失败时回退到非安全模式
-    };
-    
-    let mut client_config = ClientConfig::new(Arc::new(quic_client_config));
-    
-    // 配置传输参数
     let mut transport_config = quinn::TransportConfig::default();
     transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
     client_config.transport_config(Arc::new(transport_config));
@@ -287,205 +147,146 @@ pub(crate) fn configure_client_with_pem_content(cert_pem: &str) -> ClientConfig 
     client_config
 }
 
-/// QUIC协议适配器
-/// 
-/// 使用真正的quinn库实现QUIC连接
-pub struct QuicAdapter {
-    /// 会话ID
+/// Configure server with self-signed certificate
+fn configure_server_insecure() -> (ServerConfig, CertificateDer<'static>) {
+    let (cert, key) = generate_self_signed_cert();
+    
+    let mut server_config = ServerConfig::with_single_cert(
+        vec![cert.clone()], 
+        key.into()
+    ).unwrap();
+
+    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+    transport_config.receive_window((1500u32 * 100).into());
+    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+
+    (server_config, cert)
+}
+
+/// QUIC协议适配器（泛型支持客户端和服务端配置）
+pub struct QuicAdapter<C> {
     session_id: SessionId,
-    /// 配置
-    #[allow(dead_code)]
-    config: QuicConfig,
-    /// 统计信息
+    config: C,
     stats: AdapterStats,
-    /// 连接信息
-    connection_info: ConnectionInfo,
-    /// QUIC连接
-    connection: Connection,
-    /// 发送流
-    send_stream: Option<SendStream>,
-    /// 连接状态
+    connection: Option<Connection>,
+    endpoint: Option<Endpoint>,
     is_connected: bool,
 }
 
-impl QuicAdapter {
-    /// 创建新的QUIC适配器（客户端模式）
-    pub(crate) fn new(
-        config: QuicConfig,
-        connection: Connection,
-        local_addr: std::net::SocketAddr,
-        peer_addr: std::net::SocketAddr,
-    ) -> Self {
-        let mut connection_info = ConnectionInfo::default();
-        connection_info.local_addr = local_addr;
-        connection_info.peer_addr = peer_addr;
-        connection_info.protocol = ProtocolType::Quic;
-        connection_info.state = ConnectionState::Connected;
-        connection_info.established_at = std::time::SystemTime::now();
-        
+impl<C> QuicAdapter<C> {
+    pub fn new(config: C) -> Self {
         Self {
             session_id: SessionId::new(0),
             config,
             stats: AdapterStats::new(),
-            connection_info,
-            connection,
-            send_stream: None,
-            is_connected: true,
+            connection: None,
+            endpoint: None,
+            is_connected: false,
         }
     }
     
-    /// 创建新的QUIC适配器（服务器端模式）
-    pub(crate) fn new_server(
-        config: QuicConfig,
-        connection: Connection,
-        local_addr: std::net::SocketAddr,
-        peer_addr: std::net::SocketAddr,
-    ) -> Self {
-        let mut connection_info = ConnectionInfo::default();
-        connection_info.local_addr = local_addr;
-        connection_info.peer_addr = peer_addr;
-        connection_info.protocol = ProtocolType::Quic;
-        connection_info.state = ConnectionState::Connected;
-        connection_info.established_at = std::time::SystemTime::now();
-        
+    pub fn new_with_connection(config: C, connection: Connection) -> Self {
         Self {
             session_id: SessionId::new(0),
             config,
             stats: AdapterStats::new(),
-            connection_info,
-            connection,
-            send_stream: None,
+            connection: Some(connection),
+            endpoint: None,
             is_connected: true,
         }
     }
     
-    /// 连接到QUIC服务器（内部使用）
-    pub(crate) async fn connect(
-        addr: std::net::SocketAddr,
-        config: QuicConfig,
-    ) -> Result<Self, QuicError> {
-        // 确保crypto provider已安装
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        
+    pub fn new_with_endpoint(config: C, endpoint: Endpoint) -> Self {
+        Self {
+            session_id: SessionId::new(0),
+            config,
+            stats: AdapterStats::new(),
+            connection: None,
+            endpoint: Some(endpoint),
+            is_connected: false,
+        }
+    }
+}
+
+// 客户端适配器实现
+impl QuicAdapter<QuicClientConfig> {
+    /// 连接到QUIC服务器
+    pub async fn connect(addr: SocketAddr, config: QuicClientConfig) -> Result<Self, QuicError> {
         tracing::debug!("🔌 QUIC客户端连接到: {}", addr);
         
-        // 使用新的配置函数（支持安全和非安全模式）
-        let client_config = configure_client_with_config(&config);
-        
-        // 创建endpoint
-        let local_addr = "0.0.0.0:0".parse().unwrap();
-        let mut endpoint = Endpoint::client(local_addr)?;
+        // 创建客户端端点
+        let client_config = configure_client_insecure();
+        let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 0)))?;
         endpoint.set_default_client_config(client_config);
         
         // 连接到服务器
-        let connection = endpoint.connect(addr, "localhost")
-            .map_err(|e| QuicError::Connection(format!("Connect error: {}", e)))?
-            .await?;
+        let connection = endpoint.connect(addr, "localhost")?.await?;
+        tracing::debug!("✅ QUIC客户端已连接到: {}", addr);
         
-        tracing::debug!("✅ QUIC连接建立成功");
+        let mut adapter = Self::new(config);
+        adapter.connection = Some(connection);
+        adapter.endpoint = Some(endpoint);
+        adapter.is_connected = true;
         
-        Ok(Self::new(config, connection, local_addr, addr))
+        Ok(adapter)
     }
-    
-    /// 发送原始数据（简化版本，不使用复杂的数据包格式）
-    async fn send_raw(&mut self, data: &[u8]) -> Result<(), QuicError> {
-        
-        if !self.is_connected {
-            return Err(QuicError::ConnectionClosed);
-        }
-        
-        // 创建新的双向流进行发送（遵循QUIC最佳实践）
-        let (mut send_stream, _) = self.connection.open_bi().await?;
-        
-        tracing::debug!("📤 QUIC发送原始数据: {} 字节", data.len());
-        
-                 // 发送数据
-        send_stream.write_all(data).await.map_err(|e| QuicError::Stream(format!("Write error: {}", e)))?;
-        send_stream.finish().map_err(|e| QuicError::Stream(format!("Finish error: {}", e)))?;
-        
-        // 记录统计信息
-        self.stats.record_packet_sent(data.len());
-        self.connection_info.record_packet_sent(data.len());
-        
-        Ok(())
-    }
-    
-    /// 接收原始数据（简化版本，处理多个流）
-    async fn receive_raw(&mut self) -> Result<Option<Vec<u8>>, QuicError> {
-        
-        if !self.is_connected {
-            return Ok(None);
-        }
-        
-        // 接受新的双向流
-        match self.connection.accept_bi().await {
-            Ok((_, mut recv_stream)) => {
-                // 读取所有数据直到流结束（限制大小为1MB）
-                match recv_stream.read_to_end(1024 * 1024).await {
-                    Ok(buffer) => {
-                        if buffer.is_empty() {
-                            return Ok(None);
-                        }
-                        
-                        tracing::debug!("📨 QUIC接收原始数据: {} 字节", buffer.len());
-                        
-                        // 记录统计信息
-                        self.stats.record_packet_received(buffer.len());
-                        self.connection_info.record_packet_received(buffer.len());
-                        
-                        Ok(Some(buffer))
-                    }
-                    Err(e) => Err(QuicError::Stream(format!("Read error: {}", e))),
-                }
-            }
-            Err(quinn::ConnectionError::ApplicationClosed(_)) => {
-                tracing::debug!("📡 QUIC连接已关闭");
-                self.is_connected = false;
-                Ok(None)
-            }
-            Err(e) => Err(QuicError::Stream(format!("Accept stream error: {}", e))),
-        }
-    }
-    
-
 }
 
 #[async_trait]
-impl ProtocolAdapter for QuicAdapter {
-    type Config = QuicConfig;
+impl ProtocolAdapter for QuicAdapter<QuicClientConfig> {
+    type Config = QuicClientConfig;
     type Error = QuicError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        // 使用新的简化发送方法
-        self.send_raw(&packet.payload).await
+        if let Some(ref connection) = self.connection {
+            // 每次发送都创建新的单向流
+            let mut send_stream = connection.open_uni().await?;
+            let data = packet.to_bytes();
+            send_stream.write_all(&data).await?;
+            send_stream.finish()?;
+            
+            // 更新统计信息
+            self.stats.record_packet_sent(packet.payload.len());
+            Ok(())
+        } else {
+            Err(QuicError::ConnectionClosed)
+        }
     }
     
     async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        // 使用新的简化接收方法
-        match self.receive_raw().await? {
-            Some(data) => {
-                let packet = Packet {
-                    packet_type: PacketType::Data,
-                    message_id: 0, // 简化版本不使用消息ID
-                    payload: BytesMut::from(&data[..]),
-                };
-                Ok(Some(packet))
+        if let Some(ref connection) = self.connection {
+            // 等待接收流
+            let mut recv_stream = connection.accept_uni().await?;
+            let buf = recv_stream.read_to_end(1024 * 1024).await?; // 1MB limit
+            
+            // 尝试解析数据包
+            match Packet::from_bytes(&buf) {
+                Ok(packet) => {
+                    self.stats.record_packet_received(buf.len());
+                    Ok(Some(packet))
+                }
+                Err(_) => {
+                    // 如果解析失败，创建基本数据包
+                    let packet = Packet::data(0, &buf[..]);
+                    self.stats.record_packet_received(buf.len());
+                    Ok(Some(packet))
+                }
             }
-            None => Ok(None),
+        } else {
+            Err(QuicError::ConnectionClosed)
         }
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
         if self.is_connected {
             tracing::debug!("🔌 关闭QUIC连接");
-            self.connection.close(0u32.into(), b"Normal closure");
             self.is_connected = false;
         }
         Ok(())
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        self.connection_info.clone()
+        ConnectionInfo::default()
     }
     
     fn is_connected(&self) -> bool {
@@ -505,63 +306,135 @@ impl ProtocolAdapter for QuicAdapter {
     }
     
     async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        Ok(self.is_connected)
+        Ok(false)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        if let Some(ref mut send_stream) = self.send_stream {
-            send_stream.flush().await.map_err(|e| QuicError::Stream(format!("Flush error: {}", e)))?;
-        }
         Ok(())
     }
 }
 
-/// QUIC服务器构建器（内部使用）
+// 服务端适配器实现
+#[async_trait]
+impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
+    type Config = QuicServerConfig;
+    type Error = QuicError;
+    
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
+        if let Some(ref connection) = self.connection {
+            // 每次发送都创建新的单向流
+            let mut send_stream = connection.open_uni().await?;
+            let data = packet.to_bytes();
+            send_stream.write_all(&data).await?;
+            send_stream.finish()?;
+            
+            // 更新统计信息
+            self.stats.record_packet_sent(packet.payload.len());
+            Ok(())
+        } else {
+            Err(QuicError::ConnectionClosed)
+        }
+    }
+    
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
+        if let Some(ref connection) = self.connection {
+            // 等待接收流
+            let mut recv_stream = connection.accept_uni().await?;
+            let buf = recv_stream.read_to_end(1024 * 1024).await?; // 1MB limit
+            
+            // 尝试解析数据包
+            match Packet::from_bytes(&buf) {
+                Ok(packet) => {
+                    self.stats.record_packet_received(buf.len());
+                    Ok(Some(packet))
+                }
+                Err(_) => {
+                    // 如果解析失败，创建基本数据包
+                    let packet = Packet::data(0, &buf[..]);
+                    self.stats.record_packet_received(buf.len());
+                    Ok(Some(packet))
+                }
+            }
+        } else {
+            Err(QuicError::ConnectionClosed)
+        }
+    }
+    
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        if self.is_connected {
+            tracing::debug!("🔌 关闭QUIC服务端连接");
+            self.is_connected = false;
+        }
+        Ok(())
+    }
+    
+    fn connection_info(&self) -> ConnectionInfo {
+        ConnectionInfo::default()
+    }
+    
+    fn is_connected(&self) -> bool {
+        self.is_connected
+    }
+    
+    fn stats(&self) -> AdapterStats {
+        self.stats.clone()
+    }
+    
+    fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    
+    fn set_session_id(&mut self, session_id: SessionId) {
+        self.session_id = session_id;
+    }
+    
+    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
+        Ok(false)
+    }
+    
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// QUIC服务器构建器
 pub(crate) struct QuicServerBuilder {
-    config: QuicConfig,
-    bind_address: Option<std::net::SocketAddr>,
+    config: QuicServerConfig,
+    bind_address: Option<SocketAddr>,
 }
 
 impl QuicServerBuilder {
-    /// 创建新的服务器构建器
     pub(crate) fn new() -> Self {
         Self {
-            config: QuicConfig::default(),
+            config: QuicServerConfig::default(),
             bind_address: None,
         }
     }
     
-    /// 设置绑定地址
-    pub(crate) fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
+    pub(crate) fn bind_address(mut self, addr: SocketAddr) -> Self {
         self.bind_address = Some(addr);
         self
     }
     
-    /// 设置配置
-    pub(crate) fn config(mut self, config: QuicConfig) -> Self {
+    pub(crate) fn config(mut self, config: QuicServerConfig) -> Self {
         self.config = config;
         self
     }
     
-    /// 构建服务器
     pub(crate) async fn build(self) -> Result<QuicServer, QuicError> {
-        // 确保crypto provider已安装
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        
-        // 优先使用显式设置的bind_address，其次使用config中的bind_address
         let bind_addr = self.bind_address.unwrap_or(self.config.bind_address);
         
-        // 使用新的配置函数（支持PEM内容或自动生成自签名证书）
-        let (server_config, _) = configure_server_with_config(&self.config)?;
+        tracing::debug!("🚀 QUIC服务器启动在: {}", bind_addr);
         
-        // 创建endpoint
+        // 配置服务器
+        let (server_config, _cert) = configure_server_insecure();
         let endpoint = Endpoint::server(server_config, bind_addr)?;
         
-        tracing::info!("🚀 QUIC服务器启动在: {}", endpoint.local_addr()?);
+        tracing::debug!("✅ QUIC服务器已启动在: {}", bind_addr);
         
-        Ok(QuicServer {
-            endpoint,
+        Ok(QuicServer { 
             config: self.config,
+            endpoint,
         })
     }
 }
@@ -572,69 +445,81 @@ impl Default for QuicServerBuilder {
     }
 }
 
-/// QUIC服务器（内部使用）
+/// QUIC服务器
 pub(crate) struct QuicServer {
+    config: QuicServerConfig,
     endpoint: Endpoint,
-    config: QuicConfig,
 }
 
 impl QuicServer {
-
-    
-    /// 接受新连接
-    pub(crate) async fn accept(&mut self) -> Result<QuicAdapter, QuicError> {
-        if let Some(incoming) = self.endpoint.accept().await {
-            let connection = incoming.await?;
-            let local_addr = self.endpoint.local_addr()?;
-            let peer_addr = connection.remote_address();
-            
-            tracing::debug!("🔗 QUIC新连接来自: {}", peer_addr);
-            
-            Ok(QuicAdapter::new_server(self.config.clone(), connection, local_addr, peer_addr))
-        } else {
-            Err(QuicError::ConnectionClosed)
-        }
+    pub(crate) fn builder() -> QuicServerBuilder {
+        QuicServerBuilder::new()
     }
     
-    /// 获取本地地址
-    pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, QuicError> {
+    pub(crate) async fn accept(&mut self) -> Result<QuicAdapter<QuicServerConfig>, QuicError> {
+        tracing::debug!("🔗 QUIC等待连接...");
+        
+        // 等待新连接
+        let incoming = self.endpoint.accept().await
+            .ok_or_else(|| QuicError::Config("No incoming connections".to_string()))?;
+        
+        let connection = incoming.await?;
+        tracing::debug!("✅ QUIC新连接来自: {}", connection.remote_address());
+        
+        let adapter = QuicAdapter::new_with_connection(self.config.clone(), connection);
+        Ok(adapter)
+    }
+    
+    pub(crate) fn local_addr(&self) -> Result<SocketAddr, QuicError> {
         Ok(self.endpoint.local_addr()?)
     }
 }
 
-/// QUIC客户端构建器（内部使用）
+// 为示例提供的公共接口
+#[cfg(any(test, feature = "examples"))]
+impl QuicServer {
+    /// 为示例创建服务器构建器
+    pub fn example_builder() -> QuicServerBuilder {
+        QuicServerBuilder::new()
+    }
+    
+    /// 为示例接受连接
+    pub async fn example_accept(&mut self) -> Result<QuicAdapter<QuicServerConfig>, QuicError> {
+        self.accept().await
+    }
+    
+    /// 为示例获取本地地址
+    pub fn example_local_addr(&self) -> Result<SocketAddr, QuicError> {
+        self.local_addr()
+    }
+}
+
+/// QUIC客户端构建器
 pub(crate) struct QuicClientBuilder {
-    config: QuicConfig,
+    config: QuicClientConfig,
     target_address: Option<std::net::SocketAddr>,
 }
 
 impl QuicClientBuilder {
-    /// 创建新的客户端构建器
     pub(crate) fn new() -> Self {
         Self {
-            config: QuicConfig::default(),
+            config: QuicClientConfig::default(),
             target_address: None,
         }
     }
     
-    /// 设置目标地址
     pub(crate) fn target_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.target_address = Some(addr);
         self
     }
     
-    /// 设置配置
-    pub(crate) fn config(mut self, config: QuicConfig) -> Self {
+    pub(crate) fn config(mut self, config: QuicClientConfig) -> Self {
         self.config = config;
         self
     }
     
-    /// 连接到服务器
-    pub(crate) async fn connect(self) -> Result<QuicAdapter, QuicError> {
-        let target_addr = self.target_address.ok_or_else(|| {
-            QuicError::Connection("No target address specified".to_string())
-        })?;
-        
+    pub(crate) async fn connect(self) -> Result<QuicAdapter<QuicClientConfig>, QuicError> {
+        let target_addr = self.target_address.unwrap_or(self.config.target_address);
         QuicAdapter::connect(target_addr, self.config).await
     }
 }
@@ -643,4 +528,4 @@ impl Default for QuicClientBuilder {
     fn default() -> Self {
         Self::new()
     }
-} 
+}

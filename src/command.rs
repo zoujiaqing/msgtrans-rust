@@ -175,6 +175,8 @@ pub struct ConnectionInfo {
     pub state: ConnectionState,
     /// 建立时间
     pub established_at: std::time::SystemTime,
+    /// 关闭时间
+    pub closed_at: Option<std::time::SystemTime>,
     /// 最后活动时间
     pub last_activity: std::time::SystemTime,
     /// 发送的数据包数量
@@ -197,6 +199,7 @@ impl Default for ConnectionInfo {
             protocol: ProtocolType::Tcp,
             state: ConnectionState::Connecting,
             established_at: now,
+            closed_at: None,
             last_activity: now,
             packets_sent: 0,
             packets_received: 0,

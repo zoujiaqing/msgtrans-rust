@@ -52,12 +52,12 @@ pub trait ConnectionFactory: Send + Sync {
 
 /// TCP连接包装器
 pub struct TcpConnection {
-    adapter: crate::adapters::tcp::TcpAdapter,
+    adapter: crate::adapters::tcp::TcpAdapter<crate::protocol::TcpClientConfig>,
     cached_info: ConnectionInfo,
 }
 
 impl TcpConnection {
-    pub fn new(adapter: crate::adapters::tcp::TcpAdapter) -> Self {
+    pub fn new(adapter: crate::adapters::tcp::TcpAdapter<crate::protocol::TcpClientConfig>) -> Self {
         use crate::protocol::ProtocolAdapter;
         let cached_info = adapter.connection_info();
         Self { adapter, cached_info }
@@ -101,6 +101,39 @@ impl Connection for TcpConnection {
     }
 }
 
+// 为 protocol::protocol::Connection trait 添加实现
+#[async_trait]
+impl crate::protocol::Connection for TcpConnection {
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
+        <Self as Connection>::send(self, packet).await
+    }
+    
+    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
+        <Self as Connection>::receive(self).await
+    }
+    
+    async fn close(&mut self) -> Result<(), TransportError> {
+        <Self as Connection>::close(self).await
+    }
+    
+    fn is_connected(&self) -> bool {
+        self.is_active()
+    }
+    
+    fn session_id(&self) -> SessionId {
+        <Self as Connection>::session_id(self)
+    }
+    
+    fn set_session_id(&mut self, session_id: SessionId) {
+        use crate::protocol::ProtocolAdapter;
+        self.adapter.set_session_id(session_id);
+    }
+    
+    fn connection_info(&self) -> crate::command::ConnectionInfo {
+        self.info().clone()
+    }
+}
+
 /// TCP服务器包装器
 pub struct TcpServer {
     inner: crate::adapters::tcp::TcpServer,
@@ -121,7 +154,9 @@ impl Server for TcpServer {
             TransportError::protocol_error("generic", format!("TCP accept failed: {:?}", e))
         })?;
         
-        Ok(TcpConnection::new(adapter))
+        // 注意：这里需要将服务器端的adapter转换为客户端连接
+        // TODO: 需要实现适当的转换逻辑
+        Err(TransportError::config_error("tcp", "TCP server accept not fully implemented yet"))
     }
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
@@ -139,11 +174,11 @@ impl Server for TcpServer {
 /// TCP连接工厂
 pub struct TcpConnectionFactory {
     target_addr: std::net::SocketAddr,
-    config: crate::protocol::adapter::TcpConfig,
+    config: crate::protocol::TcpClientConfig,
 }
 
 impl TcpConnectionFactory {
-    pub fn new(target_addr: std::net::SocketAddr, config: crate::protocol::adapter::TcpConfig) -> Self {
+    pub fn new(target_addr: std::net::SocketAddr, config: crate::protocol::TcpClientConfig) -> Self {
         Self { target_addr, config }
     }
 }

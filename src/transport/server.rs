@@ -93,6 +93,8 @@ pub struct TransportServerBuilder {
     middleware_stack: Vec<Box<dyn ServerMiddleware>>,
     graceful_shutdown: Option<Duration>,
     transport_config: TransportConfig,
+    /// 协议配置存储 - 服务端支持多协议监听
+    protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
 }
 
 impl TransportServerBuilder {
@@ -105,6 +107,7 @@ impl TransportServerBuilder {
             middleware_stack: Vec::new(),
             graceful_shutdown: Some(Duration::from_secs(30)),
             transport_config: TransportConfig::default(),
+            protocol_configs: std::collections::HashMap::new(),
         }
     }
     
@@ -156,31 +159,33 @@ impl TransportServerBuilder {
         self
     }
     
+    /// 🌟 统一协议配置接口 - 服务端支持多协议
+    pub fn with_protocol<T: crate::protocol::adapter::DynProtocolConfig>(mut self, config: T) -> Self {
+        let protocol_name = config.protocol_name().to_string();
+        self.protocol_configs.insert(protocol_name, Box::new(config));
+        self
+    }
+    
     /// 构建服务端传输层
     pub async fn build(mut self) -> Result<ServerTransport, TransportError> {
-        // 保存需要的字段
-        let acceptor_config = self.acceptor_config.clone();
-        let rate_limiter = self.rate_limiter.clone();
-        let middleware_stack = std::mem::take(&mut self.middleware_stack);
-        let graceful_shutdown = self.graceful_shutdown;
-        
         let core_transport = self.build_core_transport().await?;
         
         Ok(ServerTransport::new(
             core_transport,
-            acceptor_config,
-            rate_limiter,
-            middleware_stack,
-            graceful_shutdown,
+            self.acceptor_config,
+            self.rate_limiter,
+            std::mem::take(&mut self.middleware_stack),
+            self.graceful_shutdown,
+            self.protocol_configs,
         ))
     }
     
-    async fn build_core_transport(self) -> Result<Transport, TransportError> {
+    async fn build_core_transport(&self) -> Result<Transport, TransportError> {
         // 重用现有的Transport构建逻辑
         use crate::transport::api::TransportBuilder;
         
         TransportBuilder::new()
-            .config(self.transport_config)
+            .config(self.transport_config.clone())
             .build()
             .await
     }
@@ -202,6 +207,8 @@ pub struct ServerTransport {
     rate_limiter: Option<RateLimiterConfig>,
     middleware_stack: Vec<Box<dyn ServerMiddleware>>,
     graceful_shutdown: Option<Duration>,
+    /// 协议配置存储 - 服务端支持多协议监听
+    protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
 }
 
 impl ServerTransport {
@@ -211,6 +218,7 @@ impl ServerTransport {
         rate_limiter: Option<RateLimiterConfig>,
         middleware_stack: Vec<Box<dyn ServerMiddleware>>,
         graceful_shutdown: Option<Duration>,
+        protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
     ) -> Self {
         Self {
             inner: transport,
@@ -219,6 +227,7 @@ impl ServerTransport {
             rate_limiter,
             middleware_stack,
             graceful_shutdown,
+            protocol_configs,
         }
     }
     
@@ -228,6 +237,24 @@ impl ServerTransport {
         C: ProtocolConfig + ServerConfig,
     {
         ProtocolServerBuilder::new(self, config)
+    }
+    
+    /// 🚀 快速启动服务 - 使用构建时的所有协议配置
+    pub async fn serve_all(&self) -> Result<Vec<String>, TransportError> {
+        let mut server_ids: Vec<String> = Vec::new();
+        
+        for (protocol_name, _protocol_config) in &self.protocol_configs {
+            // 这里需要动态分发到具体的协议
+            // 暂时返回一个错误，提示需要具体实现
+            tracing::info!("准备启动 {} 协议服务器", protocol_name);
+            // TODO: 实现动态协议服务器创建
+        }
+        
+        if self.protocol_configs.is_empty() {
+            Err(TransportError::config_error("protocol", "No protocols configured - use with_protocol() to add protocols"))
+        } else {
+            Err(TransportError::config_error("protocol", "Quick serve not yet implemented - use with_protocol() instead"))
+        }
     }
     
     /// 启动多协议服务器

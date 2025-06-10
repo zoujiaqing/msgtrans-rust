@@ -139,6 +139,7 @@ async fn demo_fluent_api_concept() -> Result<(), TransportError> {
     // 构建传输层
     let client = TransportClientBuilder::new()
         .connect_timeout(Duration::from_secs(10))
+        .with_protocol(QuicClientConfig::default())
         .retry_strategy(RetryConfig::exponential_backoff(3, Duration::from_millis(100)))
         .build()
         .await?;
@@ -146,6 +147,9 @@ async fn demo_fluent_api_concept() -> Result<(), TransportError> {
     let server = TransportServerBuilder::new()
         .max_connections(1000)
         .with_middleware(LoggingMiddleware::new())
+        .with_protocol(QuicServerConfig::default())
+        .with_protocol(TcpServerConfig::default())
+        .with_protocol(WebSocketServerConfig::default())
         .build()
         .await?;
     

@@ -1,11 +1,11 @@
 use async_trait::async_trait;
-use tokio::net::TcpStream;
+use tokio::net::{TcpStream, TcpListener};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::io;
 use crate::{
     SessionId, 
     packet::{Packet, PacketError},
-    protocol::{ProtocolAdapter, AdapterStats, TcpConfig},
+    protocol::{ProtocolAdapter, AdapterStats, TcpClientConfig, TcpServerConfig},
     command::{ConnectionInfo, ProtocolType, ConnectionState},
     error::TransportError,
 };
@@ -16,6 +16,9 @@ pub enum TcpError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
     
+    #[error("Connection timeout")]
+    Timeout,
+    
     #[error("Connection closed")]
     ConnectionClosed,
     
@@ -24,29 +27,32 @@ pub enum TcpError {
     
     #[error("Buffer overflow")]
     BufferOverflow,
+    
+    #[error("Configuration error: {0}")]
+    Config(String),
 }
 
 impl From<TcpError> for TransportError {
     fn from(error: TcpError) -> Self {
         match error {
-            TcpError::Io(io_err) => TransportError::connection_error(format!("IO error: {:?}", io_err), true),
-            TcpError::ConnectionClosed => TransportError::connection_error("Connection closed", true),
-            TcpError::Packet(p_err) => TransportError::protocol_error("generic", format!("Packet error: {}", p_err)),
-            TcpError::BufferOverflow => TransportError::protocol_error("generic", "Buffer overflow".to_string()),
+            TcpError::Io(io_err) => TransportError::connection_error(format!("TCP IO error: {:?}", io_err), true),
+            TcpError::Timeout => TransportError::connection_error("TCP connection timeout", true),
+            TcpError::ConnectionClosed => TransportError::connection_error("TCP connection closed", true),
+            TcpError::Packet(packet_err) => TransportError::protocol_error("packet", format!("TCP packet error: {}", packet_err)),
+            TcpError::BufferOverflow => TransportError::protocol_error("generic", "TCP buffer overflow".to_string()),
+            TcpError::Config(msg) => TransportError::config_error("tcp", msg),
         }
     }
 }
 
-/// TCP协议适配器
-/// 
-/// 实现了TCP连接的发送和接收功能
-pub struct TcpAdapter {
+/// TCP协议适配器（泛型支持客户端和服务端配置）
+pub struct TcpAdapter<C> {
     /// TCP流
     stream: TcpStream,
     /// 会话ID
     session_id: SessionId,
     /// 配置
-    config: TcpConfig,
+    config: C,
     /// 统计信息
     stats: AdapterStats,
     /// 连接信息
@@ -55,11 +61,11 @@ pub struct TcpAdapter {
     is_connected: bool,
 }
 
-impl TcpAdapter {
+impl<C> TcpAdapter<C> {
     /// 创建新的TCP适配器
-    pub async fn new(stream: TcpStream, config: TcpConfig) -> Result<Self, TcpError> {
-        // 设置TCP选项
-        stream.set_nodelay(config.nodelay)?;
+    pub async fn new(stream: TcpStream, config: C) -> Result<Self, TcpError> {
+        // 设置基本TCP选项
+        stream.set_nodelay(true)?;
         
         let local_addr = stream.local_addr()?;
         let peer_addr = stream.peer_addr()?;
@@ -73,7 +79,7 @@ impl TcpAdapter {
         
         Ok(Self {
             stream,
-            session_id: SessionId::new(0), // 将由调用者设置
+            session_id: SessionId::new(0),
             config,
             stats: AdapterStats::new(),
             connection_info,
@@ -81,87 +87,68 @@ impl TcpAdapter {
         })
     }
     
-    /// 从地址创建TCP连接
-    pub async fn connect(addr: std::net::SocketAddr, config: TcpConfig) -> Result<Self, TcpError> {
-        let stream = tokio::time::timeout(
-            config.connect_timeout,
-            TcpStream::connect(addr)
-        ).await
-        .map_err(|_| TcpError::Io(io::Error::new(io::ErrorKind::TimedOut, "Connection timeout")))?
-        .map_err(TcpError::Io)?;
-        
-        Self::new(stream, config).await
-    }
-    
     /// 读取完整的数据包
     async fn read_packet(&mut self) -> Result<Option<Packet>, TcpError> {
-        tracing::debug!("TCP 适配器开始读取数据包 (session {})", self.session_id);
-        
         // 首先读取包头（9字节）
         let mut header_buf = [0u8; 9];
         match self.stream.read_exact(&mut header_buf).await {
-            Ok(_) => {
-                tracing::debug!("TCP 成功读取包头: {:?}", header_buf);
-            },
+            Ok(_) => {},
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
-                tracing::debug!("TCP 连接被对端关闭 (session {})", self.session_id);
                 self.is_connected = false;
+                self.connection_info.state = ConnectionState::Closed;
+                self.connection_info.closed_at = Some(std::time::SystemTime::now());
                 return Ok(None);
             }
-            Err(e) => {
-                tracing::error!("TCP 读取包头失败 (session {}): {:?}", self.session_id, e);
-                return Err(TcpError::Io(e));
-            }
+            Err(e) => return Err(TcpError::Io(e)),
         }
         
         // 解析包头获取负载长度
         let payload_len = u32::from_be_bytes([header_buf[5], header_buf[6], header_buf[7], header_buf[8]]) as usize;
-        tracing::debug!("TCP 解析负载长度: {} bytes (session {})", payload_len, self.session_id);
         
         // 防止恶意的大数据包
-        if payload_len > self.config.read_buffer_size {
-            tracing::error!("TCP 负载过大: {} > {} (session {})", payload_len, self.config.read_buffer_size, self.session_id);
+        if payload_len > 1024 * 1024 { // 1MB 限制
             return Err(TcpError::BufferOverflow);
         }
         
         // 读取负载
         let mut payload = vec![0u8; payload_len];
-        match self.stream.read_exact(&mut payload).await {
-            Ok(_) => {
-                tracing::debug!("TCP 成功读取负载: {} bytes (session {})", payload_len, self.session_id);
-            }
-            Err(e) => {
-                tracing::error!("TCP 读取负载失败 (session {}): {:?}", self.session_id, e);
-                return Err(TcpError::Io(e));
-            }
-        }
+        self.stream.read_exact(&mut payload).await?;
         
         // 重构完整的数据包
         let mut packet_data = Vec::with_capacity(9 + payload_len);
         packet_data.extend_from_slice(&header_buf);
         packet_data.extend_from_slice(&payload);
         
-        tracing::debug!("TCP 重构完整数据包: {} bytes (session {})", packet_data.len(), self.session_id);
-        
         // 解析数据包
-        match Packet::from_bytes(&packet_data) {
-            Ok(packet) => {
-                tracing::debug!("TCP 数据包解析成功: 类型{:?}, ID{} (session {})", 
-                              packet.packet_type, packet.message_id, self.session_id);
-                Ok(Some(packet))
-            },
-            Err(e) => {
-                tracing::error!("TCP 数据包解析失败 (session {}): {:?}", self.session_id, e);
-                tracing::error!("原始数据: {:?}", packet_data);
-                Err(TcpError::Packet(e))
-            }
-        }
+        let packet = Packet::from_bytes(&packet_data)?;
+        Ok(Some(packet))
+    }
+}
+
+// 客户端适配器实现
+impl TcpAdapter<TcpClientConfig> {
+    /// 连接到TCP服务器
+    pub async fn connect(addr: std::net::SocketAddr, config: TcpClientConfig) -> Result<Self, TcpError> {
+        tracing::debug!("🔌 TCP客户端连接到: {}", addr);
+        
+        let stream = if config.connect_timeout != std::time::Duration::from_secs(0) {
+            tokio::time::timeout(config.connect_timeout, TcpStream::connect(addr))
+                .await
+                .map_err(|_| TcpError::Timeout)?
+                .map_err(TcpError::Io)?
+        } else {
+            TcpStream::connect(addr).await.map_err(TcpError::Io)?
+        };
+        
+        tracing::debug!("✅ TCP连接建立成功");
+        
+        Self::new(stream, config).await
     }
 }
 
 #[async_trait]
-impl ProtocolAdapter for TcpAdapter {
-    type Config = TcpConfig;
+impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
+    type Config = TcpClientConfig;
     type Error = TcpError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
@@ -176,7 +163,7 @@ impl ProtocolAdapter for TcpAdapter {
         
         if let Some(timeout) = self.config.write_timeout {
             tokio::time::timeout(timeout, write_future).await
-                .map_err(|_| TcpError::Io(io::Error::new(io::ErrorKind::TimedOut, "Write timeout")))?
+                .map_err(|_| TcpError::Timeout)?
                 .map_err(TcpError::Io)?;
         } else {
             write_future.await.map_err(TcpError::Io)?;
@@ -189,43 +176,27 @@ impl ProtocolAdapter for TcpAdapter {
         Ok(())
     }
     
-        async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
         if !self.is_connected {
             return Ok(None);
         }
 
-        // 提前获取超时配置以避免借用冲突
-        let read_timeout = self.config.read_timeout;
-        
         // 应用读超时
-        let result = if let Some(timeout) = read_timeout {
-            tokio::time::timeout(timeout, self.read_packet()).await
-                .map_err(|_| TcpError::Io(io::Error::new(io::ErrorKind::TimedOut, "Read timeout")))?
+        if let Some(timeout) = self.config.read_timeout {
+            let read_future = self.read_packet();
+            tokio::time::timeout(timeout, read_future).await
+                .map_err(|_| TcpError::Timeout)?
         } else {
             self.read_packet().await
-        };
-        
-        match result {
-            Ok(Some(packet)) => {
-                // 记录统计信息
-                let packet_size = packet.to_bytes().len();
-                self.stats.record_packet_received(packet_size);
-                self.connection_info.record_packet_received(packet_size);
-                Ok(Some(packet))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => {
-                self.stats.record_error();
-                Err(e)
-            }
         }
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
         if self.is_connected {
-            self.stream.shutdown().await.map_err(TcpError::Io)?;
+            let _ = self.stream.shutdown().await;
             self.is_connected = false;
             self.connection_info.state = ConnectionState::Closed;
+            self.connection_info.closed_at = Some(std::time::SystemTime::now());
         }
         Ok(())
     }
@@ -252,52 +223,126 @@ impl ProtocolAdapter for TcpAdapter {
     }
     
     async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 使用stream的ready API检查是否可读
-        match self.stream.ready(tokio::io::Interest::READABLE).await {
+        // 尝试读取但不消费数据
+        let mut buf = [0u8; 1];
+        match self.stream.try_read(&mut buf) {
             Ok(_) => Ok(true),
-            Err(e) => Err(TcpError::Io(e)),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
+            Err(_) => Ok(false),
         }
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        self.stream.flush().await.map_err(TcpError::Io)
+        self.stream.flush().await?;
+        Ok(())
     }
 }
 
-/// TCP服务器构建器（内部使用）
+// 服务端适配器实现
+#[async_trait]
+impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
+    type Config = TcpServerConfig;
+    type Error = TcpError;
+    
+    async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
+        if !self.is_connected {
+            return Err(TcpError::ConnectionClosed);
+        }
+        
+        let data = packet.to_bytes();
+        self.stream.write_all(&data).await?;
+        
+        // 记录统计信息
+        self.stats.record_packet_sent(data.len());
+        self.connection_info.record_packet_sent(data.len());
+        
+        Ok(())
+    }
+    
+    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
+        if !self.is_connected {
+            return Ok(None);
+        }
+
+        self.read_packet().await
+    }
+    
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        if self.is_connected {
+            let _ = self.stream.shutdown().await;
+            self.is_connected = false;
+            self.connection_info.state = ConnectionState::Closed;
+            self.connection_info.closed_at = Some(std::time::SystemTime::now());
+        }
+        Ok(())
+    }
+    
+    fn connection_info(&self) -> ConnectionInfo {
+        self.connection_info.clone()
+    }
+    
+    fn is_connected(&self) -> bool {
+        self.is_connected
+    }
+    
+    fn stats(&self) -> AdapterStats {
+        self.stats.clone()
+    }
+    
+    fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+    
+    fn set_session_id(&mut self, session_id: SessionId) {
+        self.session_id = session_id;
+        self.connection_info.session_id = session_id;
+    }
+    
+    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
+        let mut buf = [0u8; 1];
+        match self.stream.try_read(&mut buf) {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
+            Err(_) => Ok(false),
+        }
+    }
+    
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        self.stream.flush().await?;
+        Ok(())
+    }
+}
+
+/// TCP服务器构建器
 pub(crate) struct TcpServerBuilder {
-    config: TcpConfig,
+    config: TcpServerConfig,
     bind_address: Option<std::net::SocketAddr>,
 }
 
 impl TcpServerBuilder {
-    /// 创建新的服务器构建器
     pub(crate) fn new() -> Self {
         Self {
-            config: TcpConfig::default(),
+            config: TcpServerConfig::default(),
             bind_address: None,
         }
     }
     
-    /// 设置绑定地址
     pub(crate) fn bind_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.bind_address = Some(addr);
         self
     }
     
-    /// 设置配置
-    pub(crate) fn config(mut self, config: TcpConfig) -> Self {
+    pub(crate) fn config(mut self, config: TcpServerConfig) -> Self {
         self.config = config;
         self
     }
     
-    /// 构建服务器
     pub(crate) async fn build(self) -> Result<TcpServer, TcpError> {
         let bind_addr = self.bind_address.unwrap_or(self.config.bind_address);
         
         tracing::debug!("🚀 TCP服务器启动在: {}", bind_addr);
         
-        let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+        let listener = TcpListener::bind(bind_addr).await?;
         
         tracing::info!("✅ TCP服务器成功启动在: {}", listener.local_addr()?);
         
@@ -314,72 +359,56 @@ impl Default for TcpServerBuilder {
     }
 }
 
-/// TCP服务器（内部使用）
+/// TCP服务器
 pub(crate) struct TcpServer {
-    listener: tokio::net::TcpListener,
-    config: TcpConfig,
+    listener: TcpListener,
+    config: TcpServerConfig,
 }
 
 impl TcpServer {
-    /// 创建服务器构建器
     pub(crate) fn builder() -> TcpServerBuilder {
         TcpServerBuilder::new()
     }
     
-    /// 接受新连接
-    pub(crate) async fn accept(&mut self) -> Result<TcpAdapter, TcpError> {
+    pub(crate) async fn accept(&mut self) -> Result<TcpAdapter<TcpServerConfig>, TcpError> {
         let (stream, peer_addr) = self.listener.accept().await?;
-        let local_addr = self.listener.local_addr()?;
-        
-        // 应用TCP配置
-        if let Err(e) = stream.set_nodelay(self.config.nodelay) {
-            tracing::warn!("无法设置TCP_NODELAY: {}", e);
-        }
         
         tracing::debug!("🔗 TCP新连接来自: {}", peer_addr);
         
         TcpAdapter::new(stream, self.config.clone()).await
     }
     
-    /// 获取本地地址
     pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, TcpError> {
         Ok(self.listener.local_addr()?)
     }
 }
 
-/// TCP客户端构建器（内部使用）
+/// TCP客户端构建器
 pub(crate) struct TcpClientBuilder {
-    config: TcpConfig,
+    config: TcpClientConfig,
     target_address: Option<std::net::SocketAddr>,
 }
 
 impl TcpClientBuilder {
-    /// 创建新的客户端构建器
     pub(crate) fn new() -> Self {
         Self {
-            config: TcpConfig::default(),
+            config: TcpClientConfig::default(),
             target_address: None,
         }
     }
     
-    /// 设置目标地址
     pub(crate) fn target_address(mut self, addr: std::net::SocketAddr) -> Self {
         self.target_address = Some(addr);
         self
     }
     
-    /// 设置配置
-    pub(crate) fn config(mut self, config: TcpConfig) -> Self {
+    pub(crate) fn config(mut self, config: TcpClientConfig) -> Self {
         self.config = config;
         self
     }
     
-    /// 连接到服务器
-    pub(crate) async fn connect(self) -> Result<TcpAdapter, TcpError> {
-        let target_addr = self.target_address.ok_or_else(|| {
-            TcpError::Io(io::Error::new(io::ErrorKind::InvalidInput, "No target address specified"))
-        })?;
-        
+    pub(crate) async fn connect(self) -> Result<TcpAdapter<TcpClientConfig>, TcpError> {
+        let target_addr = self.target_address.unwrap_or(self.config.target_address);
         TcpAdapter::connect(target_addr, self.config).await
     }
 }

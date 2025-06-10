@@ -507,7 +507,7 @@ impl TransportBuilder {
             // 根据协议类型创建服务器
             match protocol_name.as_str() {
                 "tcp" => {
-                    if let Some(tcp_config) = config.as_any().downcast_ref::<crate::protocol::TcpConfig>() {
+                    if let Some(tcp_config) = config.as_any().downcast_ref::<crate::protocol::TcpServerConfig>() {
                         let server = tcp_config.build_server().await
                             .map_err(|e| TransportError::protocol_error("tcp", format!("Failed to create TCP server: {:?}", e)))?;
                         configured_servers.push(Box::new(server));
@@ -516,7 +516,7 @@ impl TransportBuilder {
                 }
                 #[cfg(feature = "websocket")]
                 "websocket" => {
-                    if let Some(ws_config) = config.as_any().downcast_ref::<crate::protocol::WebSocketConfig>() {
+                    if let Some(ws_config) = config.as_any().downcast_ref::<crate::protocol::WebSocketServerConfig>() {
                         let server = ws_config.build_server().await
                             .map_err(|e| TransportError::protocol_error("websocket", format!("Failed to create WebSocket server: {:?}", e)))?;
                         configured_servers.push(Box::new(server));
@@ -525,7 +525,7 @@ impl TransportBuilder {
                 }
                 #[cfg(feature = "quic")]
                 "quic" => {
-                    if let Some(quic_config) = config.as_any().downcast_ref::<crate::protocol::QuicConfig>() {
+                    if let Some(quic_config) = config.as_any().downcast_ref::<crate::protocol::QuicServerConfig>() {
                         let server = quic_config.build_server().await
                             .map_err(|e| TransportError::protocol_error("quic", format!("Failed to create QUIC server: {:?}", e)))?;
                         configured_servers.push(Box::new(server));
@@ -618,9 +618,9 @@ impl ConnectionManager {
         addr: std::net::SocketAddr,
     ) -> Result<SessionId, TransportError> {
         use crate::adapters::tcp::TcpClientBuilder;
-        use crate::protocol::TcpConfig;
+        use crate::protocol::TcpClientConfig;
         
-        let config = TcpConfig::default();
+        let config = TcpClientConfig::default();
         let adapter = TcpClientBuilder::new()
             .target_address(addr)
             .config(config)
@@ -638,9 +638,9 @@ impl ConnectionManager {
         url: &str,
     ) -> Result<SessionId, TransportError> {
         use crate::adapters::websocket::{WebSocketClientBuilder};
-        use crate::protocol::WebSocketConfig;
+        use crate::protocol::WebSocketClientConfig;
         
-        let config = WebSocketConfig::default();
+        let config = WebSocketClientConfig::default();
         let adapter = WebSocketClientBuilder::new()
             .target_url(url)
             .config(config)
@@ -658,9 +658,9 @@ impl ConnectionManager {
         addr: std::net::SocketAddr,
     ) -> Result<SessionId, TransportError> {
         use crate::adapters::quic::{QuicClientBuilder};
-        use crate::protocol::QuicConfig;
+        use crate::protocol::QuicClientConfig;
         
-        let config = QuicConfig::default();
+        let config = QuicClientConfig::default();
         let adapter = QuicClientBuilder::new()
             .target_address(addr)
             .config(config)
@@ -687,10 +687,8 @@ pub struct ServerManager {
 
 /// 服务器句柄
 pub enum ServerHandle {
-    Tcp(crate::adapters::tcp::TcpServer),
-    #[cfg(feature = "websocket")]
-    WebSocket(crate::adapters::websocket::WebSocketServer),
-    #[cfg(feature = "quic")]
+    WebSocket(crate::adapters::websocket::WebSocketServer<crate::protocol::WebSocketServerConfig>),
+    Tcp(crate::adapters::factories::TcpServerWrapper),
     Quic(crate::adapters::quic::QuicServer),
 }
 
@@ -710,9 +708,9 @@ impl ServerManager {
         addr: std::net::SocketAddr,
     ) -> Result<(), TransportError> {
         use crate::adapters::tcp::TcpServerBuilder;
-        use crate::protocol::TcpConfig;
+        use crate::protocol::TcpServerConfig;
         
-        let config = TcpConfig::default();
+        let config = TcpServerConfig::default();
         let server = TcpServerBuilder::new()
             .bind_address(addr)
             .config(config.clone())
@@ -728,7 +726,7 @@ impl ServerManager {
         // 先存储一个占位符，等spawn完成后再更新
         {
             let mut servers = self.servers.lock().await;
-            servers.insert(name.clone(), ServerHandle::Tcp(server));
+            servers.insert(name.clone(), ServerHandle::Tcp(crate::adapters::factories::TcpServerWrapper::new(server)));
         }
         
         // 重新创建server用于spawn（临时解决方案）
@@ -770,9 +768,9 @@ impl ServerManager {
         addr: std::net::SocketAddr,
     ) -> Result<(), TransportError> {
         use crate::adapters::websocket::WebSocketServerBuilder;
-        use crate::protocol::WebSocketConfig;
+        use crate::protocol::WebSocketServerConfig;
         
-        let config = WebSocketConfig::default();
+        let config = WebSocketServerConfig::default();
         let server = WebSocketServerBuilder::new()
             .bind_address(addr)
             .config(config.clone())

@@ -81,12 +81,8 @@ pub use stream::EventStream;
 pub use error::{TransportError, CloseReason};
 pub use command::{ConnectionInfo, TransportStats};
 
-// 重新导出协议配置和新的traits
-pub use protocol::{
-    TcpConfig, WebSocketConfig, QuicConfig,
-    ServerConfig, ClientConfig,  // 添加新的类型安全traits
-};
 
+pub use protocol::{TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebSocketServerConfig, QuicClientConfig, QuicServerConfig, ServerConfig, ClientConfig};
 // 重新导出新的抽象
 pub use connection::{Connection, Server, ConnectionFactory};
 pub use discovery::{ServiceDiscovery, ServiceInstance, LoadBalancer, LoadBalanceStrategy};

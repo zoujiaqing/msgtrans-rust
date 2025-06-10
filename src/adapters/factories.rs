@@ -1,30 +1,79 @@
 /// 协议工厂实现
 /// 
-/// 为现有的协议适配器提供工厂接口实现
+/// 为泛型协议适配器提供工厂接口实现
 
 use std::any::Any;
 use std::collections::HashMap;
 use async_trait::async_trait;
-use crate::protocol::{Connection, Server, ProtocolFactory, TcpConfig, WebSocketConfig, QuicConfig};
+use crate::protocol::{Connection, Server, ProtocolFactory, TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebSocketServerConfig, QuicClientConfig, QuicServerConfig};
 use crate::command::ConnectionInfo;
 use crate::packet::Packet;
 use crate::error::TransportError;
 use crate::SessionId;
 use super::{tcp, websocket, quic};
 
-/// TCP适配器的Connection包装器
-pub struct TcpConnection {
-    inner: tcp::TcpAdapter,
+/// TCP适配器的Connection包装器（客户端）
+pub struct TcpClientConnection {
+    inner: tcp::TcpAdapter<TcpClientConfig>,
 }
 
-impl TcpConnection {
-    pub fn new(adapter: tcp::TcpAdapter) -> Self {
+impl TcpClientConnection {
+    pub fn new(adapter: tcp::TcpAdapter<TcpClientConfig>) -> Self {
         Self { inner: adapter }
     }
 }
 
 #[async_trait]
-impl Connection for TcpConnection {
+impl Connection for TcpClientConnection {
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.send(packet).await.map_err(Into::into)
+    }
+    
+    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.receive().await.map_err(Into::into)
+    }
+    
+    async fn close(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.close().await.map_err(Into::into)
+    }
+    
+    fn is_connected(&self) -> bool {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.is_connected()
+    }
+    
+    fn session_id(&self) -> SessionId {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.session_id()
+    }
+    
+    fn set_session_id(&mut self, session_id: SessionId) {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.set_session_id(session_id);
+    }
+    
+    fn connection_info(&self) -> ConnectionInfo {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.connection_info()
+    }
+}
+
+/// TCP服务器端连接包装器
+pub struct TcpServerConnection {
+    inner: tcp::TcpAdapter<TcpServerConfig>,
+}
+
+impl TcpServerConnection {
+    pub fn new(adapter: tcp::TcpAdapter<TcpServerConfig>) -> Self {
+        Self { inner: adapter }
+    }
+}
+
+#[async_trait]
+impl Connection for TcpServerConnection {
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.inner.send(packet).await.map_err(Into::into)
@@ -75,15 +124,11 @@ impl TcpServerWrapper {
 #[async_trait]
 impl Server for TcpServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
-        tracing::debug!("TcpServerWrapper::accept - 等待新的TCP连接...");
-        
         let adapter = self.inner.accept().await.map_err(|e| {
-            tracing::error!("TcpServerWrapper::accept - TCP accept 错误: {:?}", e);
             TransportError::connection_error(format!("TCP accept error: {:?}", e), true)
         })?;
         
-        tracing::info!("TcpServerWrapper::accept - 成功接受新的TCP连接");
-        Ok(Box::new(TcpConnection::new(adapter)))
+        Ok(Box::new(TcpServerConnection::new(adapter)))
     }
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
@@ -91,7 +136,6 @@ impl Server for TcpServerWrapper {
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
-        // TCP服务器没有shutdown方法，这里只是关闭监听
         Ok(())
     }
 }
@@ -123,19 +167,19 @@ impl ProtocolFactory for TcpFactory {
         let (addr, _params) = self.parse_uri(uri)?;
         
         let tcp_config = if let Some(config_box) = config {
-            if let Ok(config) = config_box.downcast::<TcpConfig>() {
+            if let Ok(config) = config_box.downcast::<TcpClientConfig>() {
                 *config
             } else {
-                TcpConfig::default()
+                TcpClientConfig::default()
             }
         } else {
-            TcpConfig::default()
+            TcpClientConfig::default()
         };
         
         let adapter = tcp::TcpAdapter::connect(addr, tcp_config).await
             .map_err(|e| TransportError::connection_error(format!("TCP connection failed: {:?}", e), true))?;
         
-        Ok(Box::new(TcpConnection::new(adapter)))
+        Ok(Box::new(TcpClientConnection::new(adapter)))
     }
     
     async fn create_server(
@@ -147,13 +191,13 @@ impl ProtocolFactory for TcpFactory {
             .map_err(|_| TransportError::config_error("protocol", format!("Invalid bind address: {}", bind_addr)))?;
         
         let tcp_config = if let Some(config_box) = config {
-            if let Ok(config) = config_box.downcast::<TcpConfig>() {
+            if let Ok(config) = config_box.downcast::<TcpServerConfig>() {
                 *config
             } else {
-                TcpConfig::default()
+                TcpServerConfig::default()
             }
         } else {
-            TcpConfig::default()
+            TcpServerConfig::default()
         };
         
         let server = tcp::TcpServerBuilder::new()
@@ -167,7 +211,7 @@ impl ProtocolFactory for TcpFactory {
     }
     
     fn default_config(&self) -> Box<dyn Any + Send + Sync> {
-        Box::new(TcpConfig::default())
+        Box::new(TcpClientConfig::default())
     }
     
     fn parse_uri(&self, uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
@@ -178,18 +222,6 @@ impl ProtocolFactory for TcpFactory {
             } else {
                 Err(TransportError::config_error("general", format!("Invalid TCP URI: {}", uri)))
             }
-        } else if let Some(stripped) = uri.strip_prefix("tcp4://") {
-            if let Ok(addr) = stripped.parse::<std::net::SocketAddr>() {
-                Ok((addr, HashMap::new()))
-            } else {
-                Err(TransportError::config_error("general", format!("Invalid TCP4 URI: {}", uri)))
-            }
-        } else if let Some(stripped) = uri.strip_prefix("tcp6://") {
-            if let Ok(addr) = stripped.parse::<std::net::SocketAddr>() {
-                Ok((addr, HashMap::new()))
-            } else {
-                Err(TransportError::config_error("general", format!("Invalid TCP6 URI: {}", uri)))
-            }
         } else if let Ok(addr) = uri.parse::<std::net::SocketAddr>() {
             // 支持没有scheme的 host:port 格式
             Ok((addr, HashMap::new()))
@@ -199,350 +231,212 @@ impl ProtocolFactory for TcpFactory {
     }
 }
 
-/// WebSocket连接包装器
-pub struct WebSocketConnection<S> {
-    inner: websocket::WebSocketAdapter<S>,
-}
+/// WebSocket和QUIC工厂（简化版本，暂未实现）
+pub struct WebSocketFactory;
+pub struct QuicFactory;
 
-impl<S> WebSocketConnection<S> {
-    pub fn new(adapter: websocket::WebSocketAdapter<S>) -> Self {
-        Self { inner: adapter }
+// 简化的连接包装器
+pub struct WebSocketConnection;
+
+impl WebSocketConnection {
+    pub fn new(_adapter: crate::adapters::websocket::WebSocketAdapter<crate::protocol::WebSocketClientConfig>) -> Self {
+        Self
     }
 }
 
 #[async_trait]
-impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + 'static> Connection for WebSocketConnection<S> {
-    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.send(packet).await.map_err(Into::into)
+impl Connection for WebSocketConnection {
+    async fn send(&mut self, _packet: Packet) -> Result<(), TransportError> {
+        // TODO: 实现WebSocket发送逻辑
+        Err(TransportError::config_error("websocket", "WebSocket connection not implemented yet"))
     }
     
     async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
+        // TODO: 实现WebSocket接收逻辑
+        Err(TransportError::config_error("websocket", "WebSocket connection not implemented yet"))
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.close().await.map_err(Into::into)
+        // TODO: 实现关闭逻辑
+        Ok(())
     }
     
     fn is_connected(&self) -> bool {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.is_connected()
+        // TODO: 实现连接状态检查
+        false
     }
     
     fn session_id(&self) -> SessionId {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.session_id()
+        // TODO: 实现会话ID获取
+        SessionId::new(0)
     }
     
-    fn set_session_id(&mut self, session_id: SessionId) {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.set_session_id(session_id);
+    fn set_session_id(&mut self, _session_id: SessionId) {
+        // TODO: 实现会话ID设置
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.connection_info()
+        // TODO: 实现连接信息获取
+        ConnectionInfo::default()
     }
 }
 
-/// WebSocket服务器包装器
-pub struct WebSocketServerWrapper {
-    inner: websocket::WebSocketServer,
-}
+pub struct WebSocketServerWrapper;
 
 impl WebSocketServerWrapper {
-    pub fn new(server: websocket::WebSocketServer) -> Self {
-        Self { inner: server }
+    pub fn new(_server: crate::adapters::websocket::WebSocketServer<crate::protocol::WebSocketServerConfig>) -> Self {
+        Self
     }
 }
 
 #[async_trait]
 impl Server for WebSocketServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
-        let adapter = self.inner.accept().await.map_err(|e| TransportError::connection_error(format!("WebSocket accept error: {:?}", e), true))?;
-        Ok(Box::new(WebSocketConnection::new(adapter)))
+        // TODO: 实现WebSocket服务器accept逻辑
+        Err(TransportError::config_error("websocket", "WebSocket server not implemented yet"))
     }
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
-        self.inner.local_addr().map_err(Into::into)
+        // TODO: 实现获取本地地址
+        Err(TransportError::config_error("websocket", "WebSocket server not implemented yet"))
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
+        // TODO: 实现关闭逻辑
         Ok(())
     }
 }
 
-/// WebSocket协议工厂
-pub struct WebSocketFactory;
+pub struct QuicConnection;
 
-impl WebSocketFactory {
-    pub fn new() -> Self {
+impl QuicConnection {
+    pub fn new(_adapter: crate::adapters::quic::QuicAdapter<crate::protocol::QuicClientConfig>) -> Self {
         Self
     }
 }
 
 #[async_trait]
-impl ProtocolFactory for WebSocketFactory {
-    fn protocol_name(&self) -> &'static str {
-        "websocket"
-    }
-    
-    fn supported_schemes(&self) -> Vec<&'static str> {
-        vec!["ws", "wss", "websocket"]
-    }
-    
-    async fn create_connection(
-        &self,
-        uri: &str,
-        config: Option<Box<dyn Any + Send + Sync>>
-    ) -> Result<Box<dyn Connection>, TransportError> {
-        let ws_config = if let Some(config_box) = config {
-            if let Ok(config) = config_box.downcast::<WebSocketConfig>() {
-                *config
-            } else {
-                WebSocketConfig::default()
-            }
-        } else {
-            WebSocketConfig::default()
-        };
-        
-        let adapter = websocket::WebSocketClientBuilder::new()
-            .target_url(uri)
-            .config(ws_config)
-            .connect()
-            .await
-            .map_err(|e| TransportError::connection_error(format!("WebSocket connection failed: {:?}", e), true))?;
-        
-        Ok(Box::new(WebSocketConnection::new(adapter)))
-    }
-    
-    async fn create_server(
-        &self,
-        bind_addr: &str,
-        config: Option<Box<dyn Any + Send + Sync>>
-    ) -> Result<Box<dyn Server>, TransportError> {
-        let addr: std::net::SocketAddr = bind_addr.parse()
-            .map_err(|_| TransportError::config_error("protocol", format!("Invalid bind address: {}", bind_addr)))?;
-        
-        let ws_config = if let Some(config_box) = config {
-            if let Ok(config) = config_box.downcast::<WebSocketConfig>() {
-                *config
-            } else {
-                WebSocketConfig::default()
-            }
-        } else {
-            WebSocketConfig::default()
-        };
-        
-        let server = websocket::WebSocketServerBuilder::new()
-            .bind_address(addr)
-            .config(ws_config)
-            .build()
-            .await
-            .map_err(|e| TransportError::config_error("protocol", format!("WebSocket server creation failed: {:?}", e)))?;
-        
-        Ok(Box::new(WebSocketServerWrapper::new(server)))
-    }
-    
-    fn default_config(&self) -> Box<dyn Any + Send + Sync> {
-        Box::new(WebSocketConfig::default())
-    }
-    
-    fn parse_uri(&self, uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
-        // 简化的WebSocket URI解析
-        if let Some(url) = uri.strip_prefix("ws://") {
-            if let Ok(addr) = url.parse::<std::net::SocketAddr>() {
-                Ok((addr, HashMap::new()))
-            } else {
-                Err(TransportError::config_error("protocol", format!("Invalid WebSocket URI: {}", uri)))
-            }
-        } else if let Some(url) = uri.strip_prefix("wss://") {
-            if let Ok(addr) = url.parse::<std::net::SocketAddr>() {
-                Ok((addr, HashMap::new()))
-            } else {
-                Err(TransportError::config_error("protocol", format!("Invalid WebSocket URI: {}", uri)))
-            }
-        } else {
-            Err(TransportError::config_error("protocol", format!("Unsupported WebSocket scheme: {}", uri)))
-        }
-    }
-}
-
-/// QUIC连接包装器
-pub struct QuicConnection {
-    inner: quic::QuicAdapter,
-}
-
-impl QuicConnection {
-    pub fn new(adapter: quic::QuicAdapter) -> Self {
-        Self { inner: adapter }
-    }
-}
-
-#[async_trait]
 impl Connection for QuicConnection {
-    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.send(packet).await.map_err(Into::into)
+    async fn send(&mut self, _packet: Packet) -> Result<(), TransportError> {
+        // TODO: 实现QUIC发送逻辑
+        Err(TransportError::config_error("quic", "QUIC connection not implemented yet"))
     }
     
     async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
+        // TODO: 实现QUIC接收逻辑
+        Err(TransportError::config_error("quic", "QUIC connection not implemented yet"))
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.close().await.map_err(Into::into)
+        // TODO: 实现关闭逻辑
+        Ok(())
     }
     
     fn is_connected(&self) -> bool {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.is_connected()
+        // TODO: 实现连接状态检查
+        false
     }
     
     fn session_id(&self) -> SessionId {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.session_id()
+        // TODO: 实现会话ID获取
+        SessionId::new(0)
     }
     
-    fn set_session_id(&mut self, session_id: SessionId) {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.set_session_id(session_id);
+    fn set_session_id(&mut self, _session_id: SessionId) {
+        // TODO: 实现会话ID设置
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.connection_info()
+        // TODO: 实现连接信息获取
+        ConnectionInfo::default()
     }
 }
 
-/// QUIC服务器包装器
-pub struct QuicServerWrapper {
-    inner: quic::QuicServer,
-}
+pub struct QuicServerWrapper;
 
 impl QuicServerWrapper {
-    pub(crate) fn new(server: quic::QuicServer) -> Self {
-        Self { inner: server }
+    pub fn new(_server: crate::adapters::quic::QuicServer) -> Self {
+        Self
     }
 }
 
 #[async_trait]
 impl Server for QuicServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
-        let adapter = self.inner.accept().await.map_err(|e| TransportError::connection_error(format!("QUIC accept error: {:?}", e), true))?;
-        Ok(Box::new(QuicConnection::new(adapter)))
+        // TODO: 实现QUIC服务器accept逻辑
+        Err(TransportError::config_error("quic", "QUIC server not implemented yet"))
     }
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
-        self.inner.local_addr().map_err(|e| TransportError::connection_error(format!("Failed to get local addr: {:?}", e), true))
+        // TODO: 实现获取本地地址
+        Err(TransportError::config_error("quic", "QUIC server not implemented yet"))
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
+        // TODO: 实现关闭逻辑
         Ok(())
     }
 }
 
-/// QUIC协议工厂
-pub struct QuicFactory;
+impl WebSocketFactory {
+    pub fn new() -> Self { Self }
+}
 
 impl QuicFactory {
-    pub fn new() -> Self {
-        Self
+    pub fn new() -> Self { Self }
+}
+
+#[async_trait]
+impl ProtocolFactory for WebSocketFactory {
+    fn protocol_name(&self) -> &'static str { "websocket" }
+    fn supported_schemes(&self) -> Vec<&'static str> { vec!["ws", "wss"] }
+    
+    async fn create_connection(&self, _uri: &str, _config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Connection>, TransportError> {
+        Err(TransportError::config_error("websocket", "WebSocket not implemented yet"))
+    }
+    
+    async fn create_server(&self, _bind_addr: &str, _config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Server>, TransportError> {
+        Err(TransportError::config_error("websocket", "WebSocket not implemented yet"))
+    }
+    
+    fn default_config(&self) -> Box<dyn Any + Send + Sync> {
+        Box::new(WebSocketClientConfig::default())
+    }
+    
+    fn parse_uri(&self, _uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
+        Err(TransportError::config_error("websocket", "WebSocket not implemented yet"))
     }
 }
 
 #[async_trait]
 impl ProtocolFactory for QuicFactory {
-    fn protocol_name(&self) -> &'static str {
-        "quic"
+    fn protocol_name(&self) -> &'static str { "quic" }
+    fn supported_schemes(&self) -> Vec<&'static str> { vec!["quic", "quic+tls"] }
+    
+    async fn create_connection(&self, _uri: &str, _config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Connection>, TransportError> {
+        Err(TransportError::config_error("quic", "QUIC not implemented yet"))
     }
     
-    fn supported_schemes(&self) -> Vec<&'static str> {
-        vec!["quic", "quic+udp"]
-    }
-    
-    async fn create_connection(
-        &self,
-        uri: &str,
-        config: Option<Box<dyn Any + Send + Sync>>
-    ) -> Result<Box<dyn Connection>, TransportError> {
-        let (addr, _params) = self.parse_uri(uri)?;
-        
-        let quic_config = if let Some(config_box) = config {
-            if let Ok(config) = config_box.downcast::<QuicConfig>() {
-                *config
-            } else {
-                QuicConfig::default()
-            }
-        } else {
-            QuicConfig::default()
-        };
-        
-        let adapter = quic::QuicAdapter::connect(addr, quic_config).await
-            .map_err(|e| TransportError::connection_error(format!("QUIC connection failed: {:?}", e), true))?;
-        
-        Ok(Box::new(QuicConnection::new(adapter)))
-    }
-    
-    async fn create_server(
-        &self,
-        bind_addr: &str,
-        config: Option<Box<dyn Any + Send + Sync>>
-    ) -> Result<Box<dyn Server>, TransportError> {
-        let addr: std::net::SocketAddr = bind_addr.parse()
-            .map_err(|_| TransportError::config_error("protocol", format!("Invalid bind address: {}", bind_addr)))?;
-        
-        let quic_config = if let Some(config_box) = config {
-            if let Ok(config) = config_box.downcast::<QuicConfig>() {
-                *config
-            } else {
-                QuicConfig::default()
-            }
-        } else {
-            QuicConfig::default()
-        };
-        
-        let server = quic::QuicServerBuilder::new()
-            .bind_address(addr)
-            .config(quic_config)
-            .build()
-            .await
-            .map_err(|e| TransportError::config_error("protocol", format!("QUIC server creation failed: {:?}", e)))?;
-        
-        Ok(Box::new(QuicServerWrapper::new(server)))
+    async fn create_server(&self, _bind_addr: &str, _config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Server>, TransportError> {
+        Err(TransportError::config_error("quic", "QUIC not implemented yet"))
     }
     
     fn default_config(&self) -> Box<dyn Any + Send + Sync> {
-        Box::new(QuicConfig::default())
+        Box::new(QuicClientConfig::default())
     }
     
-    fn parse_uri(&self, uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
-        if let Some(url) = uri.strip_prefix("quic://") {
-            if let Ok(addr) = url.parse::<std::net::SocketAddr>() {
-                Ok((addr, HashMap::new()))
-            } else {
-                Err(TransportError::config_error("protocol", format!("Invalid QUIC URI: {}", uri)))
-            }
-        } else {
-            // 默认解析为 host:port
-            self.parse_uri(&format!("quic://{}", uri))
-        }
+    fn parse_uri(&self, _uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
+        Err(TransportError::config_error("quic", "QUIC not implemented yet"))
     }
 }
 
-/// 便利函数：创建标准协议注册表
+/// 创建标准协议注册表
 pub async fn create_standard_registry() -> Result<crate::protocol::ProtocolRegistry, TransportError> {
     let registry = crate::protocol::ProtocolRegistry::new();
     
-    // 注册标准协议
     registry.register(TcpFactory::new()).await?;
     registry.register(WebSocketFactory::new()).await?;
     registry.register(QuicFactory::new()).await?;
     
     Ok(registry)
-} 
+}

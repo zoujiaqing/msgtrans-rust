@@ -130,6 +130,8 @@ pub struct TransportClientBuilder {
     circuit_breaker: Option<CircuitBreakerConfig>,
     connection_monitoring: bool,
     transport_config: TransportConfig,
+    /// 协议配置存储 - 客户端只支持一个协议连接
+    protocol_config: Option<Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
 }
 
 impl TransportClientBuilder {
@@ -142,7 +144,14 @@ impl TransportClientBuilder {
             circuit_breaker: None,
             connection_monitoring: true,
             transport_config: TransportConfig::default(),
+            protocol_config: None,
         }
+    }
+    
+    /// 🌟 统一协议配置接口 - 客户端只支持一个协议
+    pub fn with_protocol<T: crate::protocol::adapter::DynProtocolConfig>(mut self, config: T) -> Self {
+        self.protocol_config = Some(Box::new(config));
+        self
     }
     
     /// 客户端专用：连接超时
@@ -187,31 +196,26 @@ impl TransportClientBuilder {
         self
     }
     
-    /// 构建客户端传输层
-    pub async fn build(self) -> Result<ClientTransport, TransportError> {
-        // 保存需要的字段
-        let pool_config = self.pool_config.clone();
-        let retry_config = self.retry_config.clone();
-        let load_balancer = self.load_balancer.clone();
-        let circuit_breaker = self.circuit_breaker.clone();
-        
+        /// 构建客户端传输层
+    pub async fn build(mut self) -> Result<ClientTransport, TransportError> {
         let core_transport = self.build_core_transport().await?;
         
         Ok(ClientTransport::new(
             core_transport,
-            pool_config,
-            retry_config,
-            load_balancer,
-            circuit_breaker,
+            self.pool_config,
+            self.retry_config,
+            self.load_balancer,
+            self.circuit_breaker,
+            self.protocol_config.take(),
         ))
     }
-    
-    async fn build_core_transport(self) -> Result<Transport, TransportError> {
+
+    async fn build_core_transport(&self) -> Result<Transport, TransportError> {
         // 重用现有的Transport构建逻辑
         use crate::transport::api::TransportBuilder;
         
         TransportBuilder::new()
-            .config(self.transport_config)
+            .config(self.transport_config.clone())
             .build()
             .await
     }
@@ -232,6 +236,8 @@ pub struct ClientTransport {
     retry_config: RetryConfig,
     load_balancer: Option<LoadBalancerConfig>,
     circuit_breaker: Option<CircuitBreakerConfig>,
+    // 客户端协议配置
+    protocol_config: Option<Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
     // 客户端专用状态
     connection_pools: Arc<RwLock<HashMap<String, ClientConnectionPool>>>,
 }
@@ -243,6 +249,7 @@ impl ClientTransport {
         retry_config: RetryConfig,
         load_balancer: Option<LoadBalancerConfig>,
         circuit_breaker: Option<CircuitBreakerConfig>,
+        protocol_config: Option<Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
     ) -> Self {
         Self {
             inner: transport,
@@ -250,6 +257,7 @@ impl ClientTransport {
             retry_config,
             load_balancer,
             circuit_breaker,
+            protocol_config,
             connection_pools: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -260,6 +268,17 @@ impl ClientTransport {
         C: ProtocolConfig + ConnectableConfig,
     {
         ProtocolConnectionBuilder::new(self, config)
+    }
+    
+    /// 🚀 快速连接 - 使用构建时的协议配置
+    pub async fn connect(&self) -> Result<SessionId, TransportError> {
+        if let Some(protocol_config) = &self.protocol_config {
+            // 这里需要动态分发到具体的协议
+            // 暂时返回一个错误，提示需要具体实现
+            Err(TransportError::config_error("protocol", "Quick connect not yet implemented - use with_protocol() instead"))
+        } else {
+            Err(TransportError::config_error("protocol", "No protocol configured - use with_protocol() to specify protocol"))
+        }
     }
     
     /// 批量连接

@@ -1,6 +1,5 @@
 pub mod api;
 pub mod config;
-pub mod core;
 pub mod pool;
 pub mod expert_config;
 pub mod client;
@@ -13,12 +12,9 @@ pub use api::{
 
 // 重新导出配置和其他核心类型
 pub use config::TransportConfig;
-pub use core::{
-    Session, Protocol,
-    ConnectionConfig, TcpConfig, WebSocketConfig, QuicConfig,
-    PoolConfig, PoolStatus,
-    ProtocolAdapter, SessionInfo
-};
+
+// 重新导出协议适配器
+pub use crate::protocol::adapter::ProtocolAdapter;
 
 // 重新导出智能池管理
 pub use pool::{
