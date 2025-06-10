@@ -422,6 +422,40 @@ impl Transport {
         Ok(session_id)
     }
     
+    /// 创建客户端连接 - 公共方法
+    pub async fn create_client_connection(&self, protocol_config: &dyn crate::protocol::adapter::DynProtocolConfig) -> Result<SessionId, TransportError> {
+        // 使用配置的ConnectableConfig trait来建立连接
+        let protocol_name = protocol_config.protocol_name();
+        tracing::debug!("🔌 创建客户端连接，协议: {}", protocol_name);
+        
+        match protocol_name {
+            "tcp" => {
+                if let Some(tcp_config) = protocol_config.as_any().downcast_ref::<crate::protocol::TcpClientConfig>() {
+                    tcp_config.connect(self).await
+                } else {
+                    Err(TransportError::config_error("protocol", "Invalid TCP client config"))
+                }
+            }
+            "websocket" => {
+                if let Some(ws_config) = protocol_config.as_any().downcast_ref::<crate::protocol::WebSocketClientConfig>() {
+                    ws_config.connect(self).await
+                } else {
+                    Err(TransportError::config_error("protocol", "Invalid WebSocket client config"))
+                }
+            }
+            "quic" => {
+                if let Some(quic_config) = protocol_config.as_any().downcast_ref::<crate::protocol::QuicClientConfig>() {
+                    quic_config.connect(self).await
+                } else {
+                    Err(TransportError::config_error("protocol", "Invalid QUIC client config"))
+                }
+            }
+            _ => {
+                Err(TransportError::config_error("protocol", format!("Unsupported protocol: {}", protocol_name)))
+            }
+        }
+    }
+
     /// 获取支持的协议列表
     pub fn supported_protocols() -> Vec<&'static str> {
         vec!["tcp", "websocket", "quic"]

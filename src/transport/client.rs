@@ -275,15 +275,9 @@ impl ClientTransport {
     
     /// 🚀 客户端连接 - 简化API，无需session_id
     pub async fn connect(&mut self) -> Result<(), TransportError> {
-        if let Some(_protocol_config) = &self.protocol_config {
-            // TODO: 需要实现协议特定的连接逻辑
-            // 这里暂时创建一个占位符会话ID
-            use crate::SessionId;
-            use std::sync::atomic::{AtomicU64, Ordering};
-            
-            static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
-            let session_id = SessionId::new(SESSION_COUNTER.fetch_add(1, Ordering::SeqCst));
-            
+        if let Some(protocol_config) = &self.protocol_config {
+            // 使用工厂模式创建连接
+            let session_id = self.inner.create_client_connection(protocol_config.as_ref()).await?;
             self.current_session_id = Some(session_id);
             tracing::info!("✅ 客户端连接成功，会话ID: {}", session_id);
             Ok(())

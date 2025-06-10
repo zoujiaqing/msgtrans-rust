@@ -236,73 +236,125 @@ pub struct WebSocketFactory;
 pub struct QuicFactory;
 
 // 简化的连接包装器
-pub struct WebSocketConnection;
+pub struct WebSocketConnection {
+    inner: crate::adapters::websocket::WebSocketAdapter<crate::protocol::WebSocketClientConfig>,
+}
 
 impl WebSocketConnection {
-    pub fn new(_adapter: crate::adapters::websocket::WebSocketAdapter<crate::protocol::WebSocketClientConfig>) -> Self {
-        Self
+    pub fn new(adapter: crate::adapters::websocket::WebSocketAdapter<crate::protocol::WebSocketClientConfig>) -> Self {
+        Self { inner: adapter }
     }
 }
 
 #[async_trait]
 impl Connection for WebSocketConnection {
-    async fn send(&mut self, _packet: Packet) -> Result<(), TransportError> {
-        // TODO: 实现WebSocket发送逻辑
-        Err(TransportError::config_error("websocket", "WebSocket connection not implemented yet"))
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.send(packet).await.map_err(Into::into)
     }
     
     async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        // TODO: 实现WebSocket接收逻辑
-        Err(TransportError::config_error("websocket", "WebSocket connection not implemented yet"))
+        use crate::protocol::ProtocolAdapter;
+        self.inner.receive().await.map_err(Into::into)
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {
-        // TODO: 实现关闭逻辑
-        Ok(())
+        use crate::protocol::ProtocolAdapter;
+        self.inner.close().await.map_err(Into::into)
     }
     
     fn is_connected(&self) -> bool {
-        // TODO: 实现连接状态检查
-        false
+        use crate::protocol::ProtocolAdapter;
+        self.inner.is_connected()
     }
     
     fn session_id(&self) -> SessionId {
-        // TODO: 实现会话ID获取
-        SessionId::new(0)
+        use crate::protocol::ProtocolAdapter;
+        self.inner.session_id()
     }
     
-    fn set_session_id(&mut self, _session_id: SessionId) {
-        // TODO: 实现会话ID设置
+    fn set_session_id(&mut self, session_id: SessionId) {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.set_session_id(session_id)
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        // TODO: 实现连接信息获取
-        ConnectionInfo::default()
+        use crate::protocol::ProtocolAdapter;
+        self.inner.connection_info()
     }
 }
 
-pub struct WebSocketServerWrapper;
+pub struct WebSocketServerWrapper {
+    inner: crate::adapters::websocket::WebSocketServer<crate::protocol::WebSocketServerConfig>,
+}
 
 impl WebSocketServerWrapper {
-    pub fn new(_server: crate::adapters::websocket::WebSocketServer<crate::protocol::WebSocketServerConfig>) -> Self {
-        Self
+    pub fn new(server: crate::adapters::websocket::WebSocketServer<crate::protocol::WebSocketServerConfig>) -> Self {
+        Self { inner: server }
+    }
+}
+
+pub struct WebSocketServerConnection {
+    inner: crate::adapters::websocket::WebSocketAdapter<crate::protocol::WebSocketServerConfig>,
+}
+
+impl WebSocketServerConnection {
+    pub fn new(adapter: crate::adapters::websocket::WebSocketAdapter<crate::protocol::WebSocketServerConfig>) -> Self {
+        Self { inner: adapter }
+    }
+}
+
+#[async_trait]
+impl Connection for WebSocketServerConnection {
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.send(packet).await.map_err(Into::into)
+    }
+    
+    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.receive().await.map_err(Into::into)
+    }
+    
+    async fn close(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.close().await.map_err(Into::into)
+    }
+    
+    fn is_connected(&self) -> bool {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.is_connected()
+    }
+    
+    fn session_id(&self) -> SessionId {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.session_id()
+    }
+    
+    fn set_session_id(&mut self, session_id: SessionId) {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.set_session_id(session_id)
+    }
+    
+    fn connection_info(&self) -> ConnectionInfo {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.connection_info()
     }
 }
 
 #[async_trait]
 impl Server for WebSocketServerWrapper {
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
-        // TODO: 实现WebSocket服务器accept逻辑
-        Err(TransportError::config_error("websocket", "WebSocket server not implemented yet"))
+        let adapter = self.inner.accept().await.map_err(|e| TransportError::config_error("websocket", &e.to_string()))?;
+        Ok(Box::new(WebSocketServerConnection::new(adapter)))
     }
     
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError> {
-        // TODO: 实现获取本地地址
-        Err(TransportError::config_error("websocket", "WebSocket server not implemented yet"))
+        self.inner.local_addr().map_err(|e| TransportError::config_error("websocket", &e.to_string()))
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
-        // TODO: 实现关闭逻辑
+        // WebSocket服务器优雅关闭逻辑
         Ok(())
     }
 }
@@ -443,20 +495,76 @@ impl ProtocolFactory for WebSocketFactory {
     fn protocol_name(&self) -> &'static str { "websocket" }
     fn supported_schemes(&self) -> Vec<&'static str> { vec!["ws", "wss"] }
     
-    async fn create_connection(&self, _uri: &str, _config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Connection>, TransportError> {
-        Err(TransportError::config_error("websocket", "WebSocket not implemented yet"))
+    async fn create_connection(&self, uri: &str, config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Connection>, TransportError> {
+        let ws_config = if let Some(config_box) = config {
+            if let Ok(config) = config_box.downcast::<WebSocketClientConfig>() {
+                *config
+            } else {
+                WebSocketClientConfig::default()
+            }
+        } else {
+            WebSocketClientConfig::default()
+        };
+        
+        let adapter = crate::adapters::websocket::WebSocketClientBuilder::new()
+            .target_url(uri)
+            .config(ws_config)
+            .connect()
+            .await
+            .map_err(|e| TransportError::connection_error(format!("WebSocket connection failed: {:?}", e), true))?;
+        
+        Ok(Box::new(WebSocketConnection::new(adapter)))
     }
     
-    async fn create_server(&self, _bind_addr: &str, _config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Server>, TransportError> {
-        Err(TransportError::config_error("websocket", "WebSocket not implemented yet"))
+    async fn create_server(&self, bind_addr: &str, config: Option<Box<dyn Any + Send + Sync>>) -> Result<Box<dyn Server>, TransportError> {
+        let addr: std::net::SocketAddr = bind_addr.parse()
+            .map_err(|_| TransportError::config_error("websocket", format!("Invalid bind address: {}", bind_addr)))?;
+        
+        let ws_config = if let Some(config_box) = config {
+            if let Ok(config) = config_box.downcast::<WebSocketServerConfig>() {
+                *config
+            } else {
+                WebSocketServerConfig::default()
+            }
+        } else {
+            WebSocketServerConfig::default()
+        };
+        
+        let server = crate::adapters::websocket::WebSocketServerBuilder::new()
+            .bind_address(addr)
+            .config(ws_config)
+            .build()
+            .await
+            .map_err(|e| TransportError::config_error("websocket", &e.to_string()))?;
+        
+        Ok(Box::new(WebSocketServerWrapper::new(server)))
     }
     
     fn default_config(&self) -> Box<dyn Any + Send + Sync> {
         Box::new(WebSocketClientConfig::default())
     }
     
-    fn parse_uri(&self, _uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
-        Err(TransportError::config_error("websocket", "WebSocket not implemented yet"))
+    fn parse_uri(&self, uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
+        // 解析 ws://host:port/path 或 wss://host:port/path 格式
+        if let Ok(url) = uri.parse::<url::Url>() {
+            if let Some(host) = url.host_str() {
+                let port = url.port().unwrap_or(if url.scheme() == "wss" { 443 } else { 80 });
+                let addr = format!("{}:{}", host, port).parse::<std::net::SocketAddr>()
+                    .map_err(|_| TransportError::config_error("websocket", format!("Invalid WebSocket address: {}:{}", host, port)))?;
+                
+                let mut params = HashMap::new();
+                params.insert("path".to_string(), url.path().to_string());
+                if url.scheme() == "wss" {
+                    params.insert("tls".to_string(), "true".to_string());
+                }
+                
+                Ok((addr, params))
+            } else {
+                Err(TransportError::config_error("websocket", format!("Invalid WebSocket URI: {}", uri)))
+            }
+        } else {
+            Err(TransportError::config_error("websocket", format!("Invalid WebSocket URI: {}", uri)))
+        }
     }
 }
 

@@ -25,12 +25,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let web_socket_server_config = WebSocketServerConfig::new()
         .with_bind_address("127.0.0.1:8002".parse::<std::net::SocketAddr>()?);
     let quic_server_config = QuicServerConfig::new()
-        .with_bind_address("127.0.0.1:8004".parse::<std::net::SocketAddr>()?);
+        .with_bind_address("127.0.0.1:8003".parse::<std::net::SocketAddr>()?);
     
     let transport = TransportServerBuilder::new()
         .max_connections(100)
         .with_protocol(tcp_server_config)
-        // .with_protocol(web_socket_server_config)
+        .with_protocol(web_socket_server_config)
         .with_protocol(quic_server_config)
         .build()
         .await?;

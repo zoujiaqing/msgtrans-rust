@@ -220,12 +220,13 @@ impl<C> WebSocketServerBuilder<C> {
     
     pub(crate) async fn build(self) -> Result<WebSocketServer<C>, WebSocketError> {
         let config = self.config.ok_or_else(|| WebSocketError::Config("Missing WebSocket server config".to_string()))?;
-        Ok(WebSocketServer { config })
+        Ok(WebSocketServer { config, listener: None })
     }
 }
 
 pub(crate) struct WebSocketServer<C> {
     config: C,
+    listener: Option<TcpListener>,
 }
 
 impl<C: 'static> WebSocketServer<C> {
@@ -233,8 +234,54 @@ impl<C: 'static> WebSocketServer<C> {
     where
         C: Clone + crate::protocol::ProtocolConfig,
     {
-        // 简化实现，暂时返回错误，等待后续完善
-        Err(WebSocketError::Config("WebSocket server accept not fully implemented yet".to_string()))
+        // 如果还没有监听器，先创建一个
+        if self.listener.is_none() {
+            let bind_addr = if let Some(ws_config) = (&self.config as &dyn std::any::Any).downcast_ref::<crate::protocol::WebSocketServerConfig>() {
+                ws_config.bind_address
+            } else {
+                return Err(WebSocketError::Config("Invalid WebSocket server config type".to_string()));
+            };
+            
+            let listener = TcpListener::bind(bind_addr).await?;
+            tracing::info!("🌐 WebSocket 服务器监听: {}", bind_addr);
+            self.listener = Some(listener);
+        }
+        
+        // 接受新的TCP连接
+        let listener = self.listener.as_ref().unwrap();
+        let (tcp_stream, peer_addr) = listener.accept().await?;
+        
+        // 将TcpStream包装为MaybeTlsStream（非TLS）
+        let maybe_tls_stream = MaybeTlsStream::Plain(tcp_stream);
+        
+        // 执行WebSocket握手
+        let ws_stream = accept_async(maybe_tls_stream).await?;
+        tracing::info!("✅ WebSocket 连接已建立，来自: {}", peer_addr);
+        
+        // 创建连接信息
+        let local_addr = self.local_addr()?;
+        let now = std::time::SystemTime::now();
+        let connection_info = crate::command::ConnectionInfo {
+            session_id: crate::SessionId::new(0), // 临时ID，稍后会被设置
+            local_addr,
+            peer_addr,
+            protocol: crate::command::ProtocolType::WebSocket,
+            state: crate::command::ConnectionState::Connected,
+            established_at: now,
+            closed_at: None,
+            last_activity: now,
+            packets_sent: 0,
+            packets_received: 0,
+            bytes_sent: 0,
+            bytes_received: 0,
+        };
+        
+        // 创建适配器
+        let mut adapter = WebSocketAdapter::new_with_stream(self.config.clone(), ws_stream);
+        adapter.connection_info = connection_info;
+        adapter.is_connected = true;
+        
+        Ok(adapter)
     }
     
     pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, WebSocketError> {
