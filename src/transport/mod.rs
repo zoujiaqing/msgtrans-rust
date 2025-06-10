@@ -108,9 +108,11 @@ pub use lockfree_enhanced::{
 
 // 📦 Legacy 组件导出 (保持向后兼容)
 pub mod legacy {
-    pub use super::pool::{
-        MemoryPool as LegacyMemoryPool, 
-        MemoryPoolStatus as LegacyMemoryPoolStatus
+    // 注意：原始 MemoryPool 已经删除，legacy 用户应该直接使用 OptimizedMemoryPool
+    // 这里提供一个兼容别名
+    pub use super::memory_pool_v2::{
+        OptimizedMemoryPool as LegacyMemoryPool, 
+        OptimizedMemoryStats as LegacyMemoryPoolStatus
     };
     
     // 旧的actor实现
