@@ -25,7 +25,7 @@ use super::transport::Transport;
 
 /// 连接配置 trait - 本地定义
 pub trait ConnectableConfig {
-    async fn connect(&self, transport: &Transport) -> Result<SessionId, TransportError>;
+    async fn connect(&self, transport: &mut Transport) -> Result<SessionId, TransportError>;
     fn validate(&self) -> Result<(), TransportError>;
     fn protocol_name(&self) -> &'static str;
     fn as_any(&self) -> &dyn std::any::Any;

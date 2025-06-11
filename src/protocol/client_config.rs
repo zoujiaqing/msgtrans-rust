@@ -775,7 +775,7 @@ impl DynProtocolConfig for QuicClientConfig {
 }
 
 impl crate::transport::client::ConnectableConfig for TcpClientConfig {
-    async fn connect(&self, _transport: &crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
+    async fn connect(&self, transport: &mut crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
         tracing::info!("🔌 TCP 客户端开始连接到 {}:{}", self.target_address.ip(), self.target_address.port());
         
         // 使用 ClientConfig::build_connection() 构建连接
@@ -783,6 +783,9 @@ impl crate::transport::client::ConnectableConfig for TcpClientConfig {
         
         // 获取会话ID
         let session_id = connection.session_id();
+        
+        // 🔧 将连接设置到 Transport 中
+        transport.set_connection(connection, session_id);
         
         tracing::info!("✅ TCP 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
         Ok(session_id)
@@ -805,7 +808,7 @@ impl crate::transport::client::ConnectableConfig for TcpClientConfig {
 }
 
 impl crate::transport::client::ConnectableConfig for WebSocketClientConfig {
-    async fn connect(&self, transport: &crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
+    async fn connect(&self, transport: &mut crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
         // 暂时返回简化实现
         let session_id = crate::SessionId::new(2);
         tracing::info!("WebSocket 客户端连接到 {}", self.target_url);
@@ -829,7 +832,7 @@ impl crate::transport::client::ConnectableConfig for WebSocketClientConfig {
 }
 
 impl crate::transport::client::ConnectableConfig for QuicClientConfig {
-    async fn connect(&self, transport: &crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
+    async fn connect(&self, transport: &mut crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
         // 暂时返回简化实现
         let session_id = crate::SessionId::new(3);
         tracing::info!("QUIC 客户端连接到 {}:{}", self.target_address.ip(), self.target_address.port());
