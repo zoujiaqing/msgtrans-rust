@@ -50,7 +50,12 @@ pub mod actor_v2;
 // 重新导出核心API - 使用新的架构
 pub use transport::Transport;
 pub use transport_server::TransportServer;
-pub use client::TransportClientBuilder;
+pub use client::{
+    TransportClientBuilder, 
+    TransportClient,
+    ConnectionPoolConfig, RetryConfig, LoadBalancerConfig, CircuitBreakerConfig,
+    ConnectionOptions, ConnectionPriority
+};
 pub use server::TransportServerBuilder;
 
 // 重新导出配置
@@ -94,11 +99,6 @@ pub use expert_config::{
 };
 
 // 客户端和服务端Builder导出
-pub use client::{
-    TransportClient, ProtocolConnectionBuilder,
-    ConnectionPoolConfig, RetryConfig, LoadBalancerConfig, CircuitBreakerConfig,
-    ConnectionOptions, ConnectionPriority
-};
 pub use server::{
     AcceptorConfig, BackpressureStrategy, RateLimiterConfig, ServerMiddleware,
     ServerOptions, LoggingMiddleware, AuthMiddleware
