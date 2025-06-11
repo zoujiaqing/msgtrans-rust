@@ -10,11 +10,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::{
-    SessionId, 
-    protocol::{ProtocolAdapter, AdapterStats, ProtocolConfig},
-    command::{ConnectionInfo, ProtocolType, ConnectionState},
+    SessionId,
     error::TransportError,
-    packet::{Packet, PacketType},
+    packet::Packet,
+    protocol::{ProtocolAdapter, AdapterStats, ProtocolConfig, WebSocketClientConfig, WebSocketServerConfig},
+    command::{ConnectionInfo, ConnectionState},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -265,7 +265,7 @@ impl<C: 'static> WebSocketServer<C> {
             session_id: crate::SessionId::new(0), // 临时ID，稍后会被设置
             local_addr,
             peer_addr,
-            protocol: crate::command::ProtocolType::WebSocket,
+            protocol: "websocket".to_string(),
             state: crate::command::ConnectionState::Connected,
             established_at: now,
             closed_at: None,
@@ -347,7 +347,7 @@ impl<C> WebSocketClientBuilder<C> {
             session_id: crate::SessionId::new(0), // 临时ID，稍后会被设置
             local_addr: "0.0.0.0:0".parse().unwrap(), // 客户端本地地址通常不确定
             peer_addr: remote_addr,
-            protocol: crate::command::ProtocolType::WebSocket,
+            protocol: "websocket".to_string(),
             state: crate::command::ConnectionState::Connected,
             established_at: now,
             closed_at: None,

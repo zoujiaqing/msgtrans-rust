@@ -73,16 +73,53 @@ impl TransportServer {
 
     /// 向指定会话发送数据包
     pub async fn send_to_session(&self, session_id: SessionId, packet: Packet) -> Result<(), TransportError> {
-        tracing::debug!("📤 TransportServer 向会话 {} 发送数据包", session_id);
+        tracing::debug!("📤 TransportServer 向会话 {} 发送数据包 (ID: {}, 大小: {} bytes)", 
+            session_id, packet.message_id, packet.payload.len());
         
         if let Some(connection) = self.connections.get(&session_id) {
             let mut conn = connection.lock().await;
-            conn.send(packet).await.map_err(|e| {
-                tracing::error!("❌ 会话 {} 发送失败: {:?}", session_id, e);
-                e
-            })
+            
+            // 🔧 关键修复：在发送前检查连接状态
+            if !conn.is_connected() {
+                tracing::warn!("⚠️ 会话 {} 连接已断开，跳过发送", session_id);
+                // 清理已断开的连接
+                drop(conn); // 释放锁
+                let _ = self.remove_session(session_id).await;
+                return Err(TransportError::connection_error("Connection closed", false));
+            }
+            
+            tracing::debug!("🔍 会话 {} 连接状态正常，开始发送数据包", session_id);
+            
+            // 尝试发送数据包
+            match conn.send(packet).await {
+                Ok(()) => {
+                    tracing::debug!("✅ 会话 {} TCP层发送成功 (TransportServer层确认)", session_id);
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::error!("❌ 会话 {} TCP层发送失败: {:?}", session_id, e);
+                    
+                    // 🔧 关键修复：检查是否是连接相关错误
+                    let error_msg = format!("{:?}", e);
+                    if error_msg.contains("Broken pipe") || 
+                       error_msg.contains("Connection reset") || 
+                       error_msg.contains("Connection closed") ||
+                       error_msg.contains("ECONNRESET") ||
+                       error_msg.contains("EPIPE") {
+                        tracing::warn!("⚠️ 会话 {} 连接已断开: {}", session_id, error_msg);
+                        // 清理已断开的连接
+                        drop(conn); // 释放锁
+                        let _ = self.remove_session(session_id).await;
+                        return Err(TransportError::connection_error("Connection closed during send", false));
+                    } else {
+                        tracing::error!("❌ 会话 {} 发送失败 (非连接错误): {:?}", session_id, e);
+                        return Err(e);
+                    }
+                }
+            }
         } else {
-            Err(TransportError::connection_error("Not connected", false))
+            tracing::warn!("⚠️ 会话 {} 不存在于连接映射中", session_id);
+            Err(TransportError::connection_error("Session not found", false))
         }
     }
 
@@ -260,6 +297,7 @@ impl TransportServer {
                         // 启动消息接收循环
                         let event_sender = server_clone.event_sender.clone();
                         let connections = server_clone.connections.clone();
+                        let server_for_cleanup = server_clone.clone();
                         
                         tokio::spawn(async move {
                             tracing::info!("📥 消息接收循环开始: {}", actual_session_id);
@@ -288,7 +326,17 @@ impl TransportServer {
                                             break;
                                         }
                                         Err(e) => {
-                                            tracing::error!("❌ 接收消息错误: {:?} (会话: {})", e, actual_session_id);
+                                            // 🔧 修复：区分正常连接关闭和真正的错误
+                                            let error_msg = format!("{:?}", e);
+                                            if error_msg.contains("Connection reset") || 
+                                               error_msg.contains("Connection closed") ||
+                                               error_msg.contains("ConnectionReset") ||
+                                               error_msg.contains("UnexpectedEof") ||
+                                               error_msg.contains("Broken pipe") {
+                                                tracing::info!("🔗 会话 {} 连接已被对端关闭: {}", actual_session_id, e);
+                                            } else {
+                                                tracing::error!("❌ 接收消息错误: {:?} (会话: {})", e, actual_session_id);
+                                            }
                                             break;
                                         }
                                     }
@@ -298,7 +346,16 @@ impl TransportServer {
                                 }
                             }
                             
-                            tracing::info!("📥 消息接收循环结束: {}", actual_session_id);
+                            // 🔧 关键修复：消息接收循环结束时清理连接
+                            tracing::info!("📥 消息接收循环结束，清理会话: {}", actual_session_id);
+                            let _ = server_for_cleanup.remove_session(actual_session_id).await;
+                            
+                            // 发送连接关闭事件
+                            let close_event = TransportEvent::ConnectionClosed { 
+                                session_id: actual_session_id,
+                                reason: crate::error::CloseReason::Error("Connection closed".to_string()),
+                            };
+                            let _ = event_sender.send(close_event);
                         });
                     }
                     Err(e) => {

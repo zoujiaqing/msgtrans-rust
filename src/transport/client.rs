@@ -14,7 +14,7 @@ use crate::{
         config::TransportConfig,
         expert_config::ExpertConfig,
     },
-    protocol::{ProtocolConfig, adapter::DynProtocolConfig},
+    protocol::{ProtocolConfig, adapter::{DynProtocolConfig, DynClientConfig}},
     stream::EventStream,
     packet::Packet,
     command::TransportStats,
@@ -146,7 +146,7 @@ pub struct TransportClientBuilder {
     connection_monitoring: bool,
     transport_config: TransportConfig,
     /// 协议配置存储 - 客户端只支持一个协议连接
-    protocol_config: Option<Box<dyn DynProtocolConfig>>,
+    protocol_config: Option<Box<dyn DynClientConfig>>,
 }
 
 impl TransportClientBuilder {
@@ -164,7 +164,7 @@ impl TransportClientBuilder {
     }
     
     /// 设置协议配置 - 客户端特定
-    pub fn with_protocol<T: DynProtocolConfig>(mut self, config: T) -> Self {
+    pub fn with_protocol<T: DynClientConfig>(mut self, config: T) -> Self {
         self.protocol_config = Some(Box::new(config));
         self
     }
@@ -235,7 +235,7 @@ pub struct TransportClient {
     inner: Transport,
     retry_config: RetryConfig,
     // 客户端协议配置
-    protocol_config: Option<Box<dyn DynProtocolConfig>>,
+    protocol_config: Option<Box<dyn DynClientConfig>>,
     // 🎯 当前连接的会话ID - 使用 Arc<RwLock> 以便修改
     current_session_id: Arc<RwLock<Option<SessionId>>>,
 }
@@ -244,7 +244,7 @@ impl TransportClient {
     pub(crate) fn new(
         transport: Transport,
         retry_config: RetryConfig,
-        protocol_config: Option<Box<dyn DynProtocolConfig>>,
+        protocol_config: Option<Box<dyn DynClientConfig>>,
     ) -> Self {
         Self {
             inner: transport,
@@ -260,7 +260,7 @@ impl TransportClient {
         let protocol_config = self.protocol_config.as_ref()
             .ok_or_else(|| TransportError::config_error("protocol", 
                 "No protocol config specified. Use TransportClientBuilder::with_protocol() when building."))?
-            .clone_dyn();
+            .clone_client_dyn();
 
         // 验证协议配置
         protocol_config.validate_dyn().map_err(|e| TransportError::config_error("protocol", format!("Config validation failed: {:?}", e)))?;
@@ -277,7 +277,7 @@ impl TransportClient {
     }
 
     /// 🔧 内部方法：使用存储的协议配置连接
-    async fn connect_with_stored_config(&mut self, protocol_config: &Box<dyn DynProtocolConfig>) -> Result<SessionId, TransportError> {
+    async fn connect_with_stored_config(&mut self, protocol_config: &Box<dyn DynClientConfig>) -> Result<SessionId, TransportError> {
         let mut last_error = None;
         let max_retries = self.retry_config.max_retries;
         
@@ -390,56 +390,28 @@ impl TransportClient {
         // 创建客户端专用的事件流
         let (sender, receiver) = broadcast::channel(64); // 增大缓冲区
         
-        // 如果已连接，发送连接已建立的事件
+        // 如果已连接，发送连接已建立的事件并启动消息接收循环
         if let Some(session_id) = self.current_session().await {
             let now = std::time::SystemTime::now();
             
             // 🔧 从协议配置获取真实的协议类型和地址信息
-            let (protocol_type, target_address) = if let Some(protocol_config) = &self.protocol_config {
-                match protocol_config.protocol_name() {
-                    "tcp" => {
-                        if let Some(tcp_config) = protocol_config.as_any().downcast_ref::<crate::protocol::TcpClientConfig>() {
-                            (crate::command::ProtocolType::Tcp, tcp_config.target_address)
-                        } else {
-                            (crate::command::ProtocolType::Tcp, "127.0.0.1:8001".parse().unwrap())
-                        }
-                    }
-                    "websocket" => {
-                        if let Some(ws_config) = protocol_config.as_any().downcast_ref::<crate::protocol::WebSocketClientConfig>() {
-                            // 从 WebSocket URL 中解析地址
-                            let target_address = if let Ok(url) = url::Url::parse(&ws_config.target_url) {
-                                if let Some(host) = url.host_str() {
-                                    let port = url.port().unwrap_or(if url.scheme() == "wss" { 443 } else { 80 });
-                                    format!("{}:{}", host, port).parse().unwrap_or_else(|_| "127.0.0.1:8001".parse().unwrap())
-                                } else {
-                                    "127.0.0.1:8001".parse().unwrap()
-                                }
-                            } else {
-                                "127.0.0.1:8001".parse().unwrap()
-                            };
-                            (crate::command::ProtocolType::WebSocket, target_address)
-                        } else {
-                            (crate::command::ProtocolType::WebSocket, "127.0.0.1:8001".parse().unwrap())
-                        }
-                    }
-                    "quic" => {
-                        if let Some(quic_config) = protocol_config.as_any().downcast_ref::<crate::protocol::QuicClientConfig>() {
-                            (crate::command::ProtocolType::Quic, quic_config.target_address)
-                        } else {
-                            (crate::command::ProtocolType::Quic, "127.0.0.1:8001".parse().unwrap())
-                        }
-                    }
-                    _ => (crate::command::ProtocolType::Tcp, "127.0.0.1:8001".parse().unwrap())
-                }
+            let (protocol_name, target_address) = if let Some(protocol_config) = &self.protocol_config {
+                // 直接使用客户端配置获取目标信息
+                let target_info = protocol_config.get_target_info();
+                let target_address = target_info.parse::<std::net::SocketAddr>()
+                    .unwrap_or_else(|_| "127.0.0.1:8001".parse().unwrap());
+                
+                let protocol_name = protocol_config.protocol_name().to_string();
+                (protocol_name, target_address)
             } else {
-                (crate::command::ProtocolType::Tcp, "127.0.0.1:8001".parse().unwrap())
+                ("tcp".to_string(), "127.0.0.1:8001".parse().unwrap())
             };
             
             let connection_info = crate::command::ConnectionInfo {
                 session_id,
                 local_addr: "0.0.0.0:0".parse().unwrap(),        // TODO: 从实际连接获取本地地址
                 peer_addr: target_address,                       // 使用目标地址作为对端地址
-                protocol: protocol_type,
+                protocol: protocol_name,
                 state: crate::command::ConnectionState::Connected,
                 established_at: now,
                 closed_at: None,
@@ -457,12 +429,58 @@ impl TransportClient {
             let _ = sender.send(event);
             
             tracing::debug!("✅ TransportClient 事件流初始化完成，已发送连接建立事件");
+            
+            // 🔧 修复：启动消息接收循环
+            if let Some(connection_adapter) = self.inner.connection_adapter() {
+                let connection_adapter = connection_adapter.clone();
+                let sender_clone = sender.clone();
+                
+                tokio::spawn(async move {
+                    tracing::debug!("🎧 客户端消息接收循环开始");
+                    
+                    loop {
+                        let mut conn = connection_adapter.lock().await;
+                        match conn.receive().await {
+                            Ok(Some(packet)) => {
+                                tracing::debug!("📥 客户端收到消息: {} bytes", packet.payload.len());
+                                
+                                let event = TransportEvent::MessageReceived {
+                                    session_id,
+                                    packet,
+                                };
+                                
+                                if let Err(_) = sender_clone.send(event) {
+                                    tracing::debug!("📡 客户端事件发送失败，可能没有接收者");
+                                    break;
+                                }
+                            }
+                            Ok(None) => {
+                                tracing::info!("🔚 客户端连接已关闭");
+                                let close_event = TransportEvent::ConnectionClosed {
+                                    session_id,
+                                    reason: crate::error::CloseReason::Normal,
+                                };
+                                let _ = sender_clone.send(close_event);
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::error!("❌ 客户端接收消息错误: {:?}", e);
+                                let close_event = TransportEvent::ConnectionClosed {
+                                    session_id,
+                                    reason: crate::error::CloseReason::Error(format!("{:?}", e)),
+                                };
+                                let _ = sender_clone.send(close_event);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    tracing::debug!("📡 客户端消息接收循环结束");
+                });
+            }
         }
         
-        // TODO: 实现真实的消息接收事件流
-        // 这里需要与底层 Transport 集成，监听实际的消息接收
-        // 当前版本只提供连接状态事件，消息接收事件需要在后续版本中实现
-        tracing::debug!("📡 TransportClient 事件流创建完成 (基础版本)");
+        tracing::debug!("📡 TransportClient 事件流创建完成 (完整版本)");
         
         Ok(StreamFactory::event_stream(receiver))
     }

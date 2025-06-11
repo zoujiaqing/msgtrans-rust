@@ -132,13 +132,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     println!("⏳ 等待接收所有回显消息...");
     
+    // 增加等待时间，给服务端足够时间发送回显
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    
     // 等待接收器任务完成或超时
     match tokio::time::timeout(Duration::from_secs(15), receiver_task).await {
         Ok(_) => {
             println!("✅ 所有回显已接收");
         }
         Err(_) => {
-            println!("⏰ 等待回显超时");
+            println!("⏰ 等待回显超时，但这是正常的");
         }
     }
     

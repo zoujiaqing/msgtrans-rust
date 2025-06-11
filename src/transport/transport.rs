@@ -167,6 +167,11 @@ impl Transport {
     pub fn memory_pool_stats(&self) -> crate::transport::memory_pool_v2::OptimizedMemoryStatsSnapshot {
         self.memory_pool.get_stats()
     }
+    
+    /// 获取连接适配器（用于消息接收）
+    pub fn connection_adapter(&self) -> Option<Arc<Mutex<dyn Connection>>> {
+        self.connection_adapter.clone()
+    }
 }
 
 impl Clone for Transport {

@@ -170,7 +170,7 @@ pub struct ConnectionInfo {
     /// 远程地址
     pub peer_addr: std::net::SocketAddr,
     /// 协议类型
-    pub protocol: ProtocolType,
+    pub protocol: String,
     /// 连接状态
     pub state: ConnectionState,
     /// 建立时间
@@ -196,7 +196,7 @@ impl Default for ConnectionInfo {
             session_id: SessionId::new(0),
             local_addr: "0.0.0.0:0".parse().unwrap(),
             peer_addr: "0.0.0.0:0".parse().unwrap(),
-            protocol: ProtocolType::Tcp,
+            protocol: "tcp".to_string(),
             state: ConnectionState::Connecting,
             established_at: now,
             closed_at: None,
@@ -232,24 +232,6 @@ impl ConnectionInfo {
     
     pub fn idle_duration(&self) -> std::time::Duration {
         self.last_activity.elapsed().unwrap_or_default()
-    }
-}
-
-/// 协议类型
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolType {
-    Tcp,
-    WebSocket,
-    Quic,
-}
-
-impl std::fmt::Display for ProtocolType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ProtocolType::Tcp => write!(f, "TCP"),
-            ProtocolType::WebSocket => write!(f, "WebSocket"),
-            ProtocolType::Quic => write!(f, "QUIC"),
-        }
     }
 }
 

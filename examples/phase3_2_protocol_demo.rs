@@ -12,7 +12,7 @@ use msgtrans::transport::{
     FlumePoweredProtocolAdapter, OptimizedActor, ActorManager,
     ActorCommand, ActorEvent, create_test_packet
 };
-use msgtrans::command::{ConnectionInfo, ProtocolType, ConnectionState};
+use msgtrans::command::{ConnectionInfo, ConnectionState};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -57,7 +57,7 @@ async fn test_flume_protocol_adapter() -> Result<(), Box<dyn std::error::Error>>
         session_id: msgtrans::SessionId::new(1),
         local_addr: "127.0.0.1:8080".parse().unwrap(),
         peer_addr: "127.0.0.1:8081".parse().unwrap(),
-        protocol: ProtocolType::Tcp,
+        protocol: "tcp".to_string(),
         state: ConnectionState::Connected,
         established_at: std::time::SystemTime::now(),
         closed_at: None,
@@ -125,7 +125,7 @@ async fn test_dual_pipeline_actor() -> Result<(), Box<dyn std::error::Error>> {
         session_id: msgtrans::SessionId::new(2),
         local_addr: "127.0.0.1:8082".parse().unwrap(),
         peer_addr: "127.0.0.1:8083".parse().unwrap(),
-        protocol: ProtocolType::Tcp,
+        protocol: "tcp".to_string(),
         state: ConnectionState::Connected,
         established_at: std::time::SystemTime::now(),
         closed_at: None,
