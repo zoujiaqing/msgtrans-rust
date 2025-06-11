@@ -7,6 +7,7 @@
 /// - 由 TransportClient(单连接) 和 TransportServer(多连接管理) 使用
 
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use crate::{
     SessionId, TransportError, Packet,
     transport::{
@@ -15,7 +16,7 @@ use crate::{
         memory_pool_v2::OptimizedMemoryPool,
         expert_config::ExpertConfig,
     },
-    protocol::ProtocolRegistry,
+    protocol::{ProtocolRegistry, ProtocolAdapter, Connection},
     adapters::create_standard_registry,
 };
 
@@ -30,7 +31,7 @@ pub struct Transport {
     /// 🚀 Phase 3: 优化后的内存池
     memory_pool: Arc<OptimizedMemoryPool>,
     /// 🎯 单个连接适配器 - 代表这个socket连接
-    connection_adapter: Option<Arc<dyn std::any::Any + Send + Sync>>,
+    connection_adapter: Option<Arc<Mutex<dyn Connection>>>,
     /// 当前连接的会话ID
     session_id: Option<SessionId>,
 }
@@ -92,20 +93,22 @@ impl Transport {
             if let Some(connection_adapter) = &self.connection_adapter {
                 tracing::debug!("📤 Transport 发送数据包 (会话: {})", session_id);
                 
-                // 尝试将连接适配器转换为具体的类型并发送
-                // 这是一个简化的实现，真正的实现需要根据协议类型来处理
-                if let Some(_tcp_adapter) = connection_adapter.downcast_ref::<crate::connection::TcpConnection>() {
-                    tracing::debug!("📤 使用 TCP 适配器发送数据包");
-                    // TODO: 调用 TCP 适配器的发送方法
-                    // tcp_adapter.send(packet).await?;
-                    
-                    // 暂时只记录日志，实际发送需要适配器支持
-                    tracing::debug!("📤 TCP 数据包发送完成 (占位符实现)");
-                } else {
-                    tracing::warn!("⚠️ 不支持的连接适配器类型，使用占位符发送");
-                }
+                // 获取锁并直接调用通用的 send 方法
+                let mut connection = connection_adapter.lock().await;
                 
-                Ok(())
+                tracing::debug!("📤 使用通用连接发送数据包");
+                
+                // 调用通用的 Connection::send 方法
+                match connection.send(packet).await {
+                    Ok(_) => {
+                        tracing::debug!("📤 数据包发送成功");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("📤 数据包发送失败: {:?}", e);
+                        Err(e)
+                    }
+                }
             } else {
                 tracing::error!("❌ 没有可用的连接适配器");
                 Err(TransportError::connection_error("No connection adapter available", false))
@@ -136,11 +139,11 @@ impl Transport {
     }
     
     /// 设置连接适配器和会话ID (内部使用)
-    pub fn set_connection<A>(&mut self, adapter: A, session_id: SessionId) 
+    pub fn set_connection<C>(&mut self, connection: C, session_id: SessionId) 
     where
-        A: Send + Sync + 'static,
+        C: Connection + 'static,
     {
-        self.connection_adapter = Some(Arc::new(adapter));
+        self.connection_adapter = Some(Arc::new(Mutex::new(connection)));
         self.session_id = Some(session_id);
         tracing::debug!("✅ Transport 连接设置完成: {}", session_id);
     }

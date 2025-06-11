@@ -97,31 +97,7 @@ impl<C> TcpAdapter<C> {
             return Ok(None);
         }
         
-        // 尝试非阻塞读取来检查是否有数据可用
-        let mut test_buf = [0u8; 1];
-        match self.stream.try_read(&mut test_buf) {
-            Ok(0) => {
-                tracing::debug!("🔍 TCP连接已关闭 (try_read返回0)");
-                self.is_connected = false;
-                self.connection_info.state = ConnectionState::Closed;
-                self.connection_info.closed_at = Some(std::time::SystemTime::now());
-                return Ok(None);
-            }
-            Ok(_) => {
-                tracing::debug!("🔍 检测到有数据可读，继续读取包头");
-                // 需要把这个字节放回去，所以我们需要重新读取整个包头
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                tracing::debug!("🔍 当前无数据可读，进入阻塞读取模式");
-                // 继续正常的阻塞读取
-            }
-            Err(e) => {
-                tracing::debug!("🔍 TCP try_read失败: {:?}", e);
-                return Err(TcpError::Io(e));
-            }
-        }
-        
-        // 首先读取包头（9字节）
+        // 直接读取包头（9字节）
         tracing::debug!("🔍 开始读取9字节包头...");
         let mut header_buf = [0u8; 9];
         match self.stream.read_exact(&mut header_buf).await {
