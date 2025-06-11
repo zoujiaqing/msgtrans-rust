@@ -1,13 +1,17 @@
 /// 现代化传输层性能基准测试
 /// 
 /// 测试内容：
-/// 1. 新的 TransportBuilder API 性能
-/// 2. 连接池和内存池的实际应用性能
-/// 3. 高并发场景测试
+/// 1. 新的 TransportClientBuilder 和 TransportServerBuilder API 性能
+/// 2. 重构的连接池性能
+/// 3. 内存池性能提升
+/// 4. LockFree队列性能
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
 use msgtrans::{
-    transport::{TransportBuilder, ConnectionPool, MemoryPool, BufferSize},
+    transport::{TransportClientBuilder, ConnectionPool, MemoryPool, BufferSize},
+    protocol::TcpClientConfig,
+    packet::Packet,
+    SessionId
 };
 use std::time::Duration;
 use std::sync::Arc;
@@ -21,12 +25,12 @@ fn bench_modern_api_creation(c: &mut Criterion) {
     group.sample_size(50);
     group.measurement_time(Duration::from_secs(20));
     
-    group.bench_function("transport_builder", |b| {
+    group.bench_function("transport_client_builder", |b| {
         b.to_async(&rt).iter(|| async {
-            let transport = TransportBuilder::new()
+            let transport = TransportClientBuilder::new()
                 .build()
                 .await
-                .expect("Failed to create transport");
+                .expect("Failed to create transport client");
             black_box(transport)
         });
     });
@@ -220,10 +224,10 @@ async fn high_concurrency_test(concurrency: usize) -> Duration {
         let tx_clone = tx.clone();
         let handle = tokio::spawn(async move {
             // 模拟传输层创建和使用
-            let _transport = TransportBuilder::new()
+            let _transport = TransportClientBuilder::new()
                 .build()
                 .await
-                .expect("Failed to create transport");
+                .expect("Failed to create transport client");
             
             // 模拟一些工作
             tokio::time::sleep(Duration::from_millis(10)).await;

@@ -10,11 +10,24 @@ use std::collections::HashMap;
 use crate::{
     SessionId,
     error::TransportError,
-    transport::{api::Transport, config::TransportConfig, api::ConnectableConfig},
-    protocol::ProtocolConfig,
+    transport::{
+        config::TransportConfig,
+        expert_config::ExpertConfig,
+    },
+    protocol::{ProtocolConfig, adapter::DynProtocolConfig},
     stream::EventStream,
     packet::Packet,
+    command::TransportStats,
 };
+
+// 内部使用新的 Transport 结构体
+use super::transport::Transport;
+
+/// 连接配置 trait - 本地定义
+pub trait ConnectableConfig {
+    async fn connect(&self, transport: &Transport) -> Result<SessionId, TransportError>;
+    fn validate(&self) -> Result<(), TransportError>;
+}
 
 /// 连接池配置
 #[derive(Debug, Clone)]
@@ -30,7 +43,7 @@ impl Default for ConnectionPoolConfig {
         Self {
             max_size: 100,
             idle_timeout: Duration::from_secs(300),
-            health_check_interval: Duration::from_secs(60),
+            health_check_interval: Duration::from_secs(30),
             min_idle: 5,
         }
     }
@@ -50,7 +63,7 @@ impl RetryConfig {
         Self {
             max_retries,
             initial_delay,
-            max_delay: Duration::from_secs(60),
+            max_delay: Duration::from_secs(30),
             backoff_multiplier: 2.0,
         }
     }
@@ -61,7 +74,7 @@ impl Default for RetryConfig {
         Self {
             max_retries: 3,
             initial_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(30),
+            max_delay: Duration::from_secs(10),
             backoff_multiplier: 2.0,
         }
     }
@@ -76,7 +89,7 @@ pub enum LoadBalancerConfig {
     WeightedRoundRobin(Vec<u32>),
 }
 
-/// 熔断器配置
+/// 断路器配置
 #[derive(Debug, Clone)]
 pub struct CircuitBreakerConfig {
     pub failure_threshold: usize,
@@ -113,7 +126,7 @@ impl Default for ConnectionOptions {
 }
 
 /// 连接优先级
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ConnectionPriority {
     Low,
     Normal,
@@ -121,7 +134,7 @@ pub enum ConnectionPriority {
     Critical,
 }
 
-/// 客户端传输构建器 - 专注于连接相关配置
+/// 客户端传输层构建器
 pub struct TransportClientBuilder {
     connect_timeout: Duration,
     pool_config: ConnectionPoolConfig,
@@ -131,7 +144,7 @@ pub struct TransportClientBuilder {
     connection_monitoring: bool,
     transport_config: TransportConfig,
     /// 协议配置存储 - 客户端只支持一个协议连接
-    protocol_config: Option<Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
+    protocol_config: Option<Box<dyn DynProtocolConfig>>,
 }
 
 impl TransportClientBuilder {
@@ -142,82 +155,73 @@ impl TransportClientBuilder {
             retry_config: RetryConfig::default(),
             load_balancer: None,
             circuit_breaker: None,
-            connection_monitoring: true,
+            connection_monitoring: false,
             transport_config: TransportConfig::default(),
             protocol_config: None,
         }
     }
     
-    /// 🌟 统一协议配置接口 - 客户端只支持一个协议
-    pub fn with_protocol<T: crate::protocol::adapter::DynProtocolConfig>(mut self, config: T) -> Self {
+    /// 设置协议配置 - 客户端特定
+    pub fn with_protocol<T: DynProtocolConfig>(mut self, config: T) -> Self {
         self.protocol_config = Some(Box::new(config));
         self
     }
-    
+
     /// 客户端专用：连接超时
     pub fn connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = timeout;
         self
     }
-    
+
     /// 客户端专用：连接池配置
     pub fn connection_pool(mut self, config: ConnectionPoolConfig) -> Self {
         self.pool_config = config;
         self
     }
-    
+
     /// 客户端专用：重试策略
     pub fn retry_strategy(mut self, config: RetryConfig) -> Self {
         self.retry_config = config;
         self
     }
-    
+
     /// 客户端专用：负载均衡
     pub fn load_balancer(mut self, config: LoadBalancerConfig) -> Self {
         self.load_balancer = Some(config);
         self
     }
-    
-    /// 客户端专用：熔断器
+
+    /// 客户端专用：断路器
     pub fn circuit_breaker(mut self, config: CircuitBreakerConfig) -> Self {
         self.circuit_breaker = Some(config);
         self
     }
-    
+
     /// 客户端专用：连接监控
     pub fn enable_connection_monitoring(mut self, enabled: bool) -> Self {
         self.connection_monitoring = enabled;
         self
     }
-    
+
     /// 设置传输层基础配置
     pub fn transport_config(mut self, config: TransportConfig) -> Self {
         self.transport_config = config;
         self
     }
-    
-        /// 构建客户端传输层
-    pub async fn build(mut self) -> Result<ClientTransport, TransportError> {
-        let core_transport = self.build_core_transport().await?;
+
+    /// 构建客户端传输层 - 返回 TransportClient
+    pub async fn build(mut self) -> Result<TransportClient, TransportError> {
+        // 创建底层 Transport
+        let transport = Transport::new(self.transport_config).await?;
         
-        Ok(ClientTransport::new(
-            core_transport,
+        Ok(TransportClient::new(
+            transport,
             self.pool_config,
             self.retry_config,
             self.load_balancer,
             self.circuit_breaker,
-            self.protocol_config.take(),
+            self.protocol_config,
         ))
-    }
-
-    async fn build_core_transport(&self) -> Result<Transport, TransportError> {
-        // 重用现有的Transport构建逻辑
-        use crate::transport::api::TransportBuilder;
-        
-        TransportBuilder::new()
-            .config(self.transport_config.clone())
-            .build()
-            .await
     }
 }
 
@@ -227,31 +231,29 @@ impl Default for TransportClientBuilder {
     }
 }
 
-/// 客户端传输层
-/// 
-/// 专注于建立和管理客户端连接
-pub struct ClientTransport {
+/// 🎯 传输层客户端 - 使用 Transport 进行单连接管理
+pub struct TransportClient {
     inner: Transport,
     pool_config: ConnectionPoolConfig,
     retry_config: RetryConfig,
     load_balancer: Option<LoadBalancerConfig>,
     circuit_breaker: Option<CircuitBreakerConfig>,
     // 客户端协议配置
-    protocol_config: Option<Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
+    protocol_config: Option<Box<dyn DynProtocolConfig>>,
     // 客户端专用状态
     connection_pools: Arc<RwLock<HashMap<String, ClientConnectionPool>>>,
-    // 🎯 当前连接的会话ID - 对外隐藏
-    current_session_id: Option<SessionId>,
+    // 🎯 当前连接的会话ID - 使用 Arc<RwLock> 以便修改
+    current_session_id: Arc<RwLock<Option<SessionId>>>,
 }
 
-impl ClientTransport {
+impl TransportClient {
     pub(crate) fn new(
         transport: Transport,
         pool_config: ConnectionPoolConfig,
         retry_config: RetryConfig,
         load_balancer: Option<LoadBalancerConfig>,
         circuit_breaker: Option<CircuitBreakerConfig>,
-        protocol_config: Option<Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
+        protocol_config: Option<Box<dyn DynProtocolConfig>>,
     ) -> Self {
         Self {
             inner: transport,
@@ -261,11 +263,11 @@ impl ClientTransport {
             circuit_breaker,
             protocol_config,
             connection_pools: Arc::new(RwLock::new(HashMap::new())),
-            current_session_id: None,
+            current_session_id: Arc::new(RwLock::new(None)),
         }
     }
     
-    /// 🔌 流式API入口 - 核心功能
+    /// 🔌 使用指定协议配置进行连接
     pub fn with_protocol<C>(&self, config: C) -> ProtocolConnectionBuilder<'_, C>
     where
         C: ProtocolConfig + ConnectableConfig,
@@ -273,51 +275,66 @@ impl ClientTransport {
         ProtocolConnectionBuilder::new(self, config)
     }
     
-    /// 🚀 客户端连接 - 简化API，无需session_id
-    pub async fn connect(&mut self) -> Result<(), TransportError> {
-        if let Some(protocol_config) = &self.protocol_config {
-            // 使用工厂模式创建连接
-            let session_id = self.inner.create_client_connection(protocol_config.as_ref()).await?;
-            self.current_session_id = Some(session_id);
-            tracing::info!("✅ 客户端连接成功，会话ID: {}", session_id);
-            Ok(())
-        } else {
-            Err(TransportError::config_error("protocol", "No protocol configured - use with_protocol() to specify protocol"))
-        }
+    /// 🔌 使用默认协议连接 (必须在构建时指定)
+    pub async fn connect(&self) -> Result<(), TransportError> {
+        // 注意：这里的实现需要协议配置实现ConnectableConfig trait
+        // 对于Builder模式，我们建议使用 with_protocol().connect() 方式
+        Err(TransportError::config_error("protocol", 
+            "Default protocol connection not supported yet. Use with_protocol(config).connect() instead."))
     }
     
-    /// 🔌 客户端断开连接 - 简化API
+    /// 📡 断开连接
     pub async fn disconnect(&mut self) -> Result<(), TransportError> {
-        if let Some(session_id) = self.current_session_id.take() {
-            self.inner.close_session(session_id).await?;
-            tracing::info!("✅ 客户端连接已断开，会话ID: {}", session_id);
+        // 清除当前会话ID
+        let mut current_session = self.current_session_id.write().await;
+        if let Some(session_id) = current_session.take() {
+            drop(current_session);
+            
+            tracing::info!("TransportClient 断开连接 (会话: {})", session_id);
+            self.inner.disconnect().await?;
             Ok(())
         } else {
-            tracing::warn!("客户端未连接，无需断开");
-            Ok(())
+            Err(TransportError::connection_error("Not connected", false))
         }
     }
     
-    /// 📨 客户端发送消息 - 简化API，无需session_id
+    /// 🚀 发送数据包 - 客户端核心方法
     pub async fn send(&self, packet: crate::packet::Packet) -> Result<(), TransportError> {
-        if let Some(session_id) = self.current_session_id {
-            self.inner.send_to_session(session_id, packet).await
+        if self.is_connected().await {
+            tracing::debug!("TransportClient 发送数据包到当前连接");
+            self.inner.send(packet).await
         } else {
             Err(TransportError::connection_error("Not connected - call connect() first", false))
         }
     }
     
     /// 📊 检查连接状态
-    pub fn is_connected(&self) -> bool {
-        self.current_session_id.is_some()
+    pub async fn is_connected(&self) -> bool {
+        self.inner.is_connected()
     }
     
     /// 🔍 获取当前会话ID (仅用于调试)
-    pub fn current_session(&self) -> Option<SessionId> {
-        self.current_session_id
+    pub async fn current_session(&self) -> Option<SessionId> {
+        self.inner.current_session_id()
     }
     
-    /// 批量连接
+    /// 获取客户端事件流 - 只返回当前连接的事件 
+    /// TODO: Transport 需要实现事件流
+    pub async fn events(&self) -> Result<EventStream, TransportError> {
+        // 暂时返回错误，等待 Transport 实现事件流
+        Err(TransportError::connection_error("Events not implemented for Transport yet", false))
+    }
+    
+    /// 获取客户端连接统计
+    /// TODO: Transport 需要实现统计功能
+    pub async fn stats(&self) -> Result<crate::command::TransportStats, TransportError> {
+        // 暂时返回错误，等待 Transport 实现统计
+        Err(TransportError::connection_error("Stats not implemented for Transport yet", false))
+    }
+
+    // 高级功能保留
+    
+    /// 批量连接 - 高级功能
     pub async fn connect_multiple<C>(&self, configs: Vec<C>) -> Result<Vec<SessionId>, TransportError>
     where
         C: ProtocolConfig + ConnectableConfig + Clone,
@@ -330,7 +347,7 @@ impl ClientTransport {
         Ok(sessions)
     }
     
-    /// 创建连接池
+    /// 创建连接池 - 高级功能
     pub async fn create_connection_pool<C>(
         &self, 
         protocol_name: String,
@@ -346,7 +363,7 @@ impl ClientTransport {
         Ok(())
     }
     
-    /// 从连接池获取连接
+    /// 从连接池获取连接 - 高级功能
     pub async fn get_pooled_connection(&self, protocol_name: &str) -> Result<SessionId, TransportError> {
         let pools = self.connection_pools.read().await;
         if let Some(pool) = pools.get(protocol_name) {
@@ -355,38 +372,11 @@ impl ClientTransport {
             Err(TransportError::config_error("pool", format!("Connection pool not found: {}", protocol_name)))
         }
     }
-    
-    // 委托给内部transport的通用方法 - 高级API
-    pub async fn send_to_session(&self, session_id: SessionId, packet: Packet) -> Result<(), TransportError> {
-        self.inner.send_to_session(session_id, packet).await
-    }
-    
-    pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
-        self.inner.close_session(session_id).await
-    }
-    
-    pub fn events(&self) -> EventStream {
-        self.inner.events()
-    }
-    
-    pub fn session_events(&self, session_id: SessionId) -> EventStream {
-        self.inner.session_events(session_id)
-    }
-    
-    /// 获取连接统计
-    pub async fn stats(&self) -> Result<std::collections::HashMap<SessionId, crate::command::TransportStats>, TransportError> {
-        self.inner.stats().await
-    }
-    
-    /// 获取活跃会话
-    pub async fn active_sessions(&self) -> Result<Vec<SessionId>, TransportError> {
-        Ok(self.inner.active_sessions().await)
-    }
 }
 
 /// 客户端连接构建器 - 流式API实现
 pub struct ProtocolConnectionBuilder<'t, C> {
-    transport: &'t ClientTransport,
+    transport: &'t TransportClient,
     config: C,
     connection_options: ConnectionOptions,
 }
@@ -395,7 +385,7 @@ impl<'t, C> ProtocolConnectionBuilder<'t, C>
 where
     C: ProtocolConfig + ConnectableConfig,
 {
-    pub(crate) fn new(transport: &'t ClientTransport, config: C) -> Self {
+    pub(crate) fn new(transport: &'t TransportClient, config: C) -> Self {
         Self { 
             transport, 
             config,
@@ -424,7 +414,7 @@ where
     /// 🎯 执行连接 - 核心方法
     pub async fn connect(self) -> Result<SessionId, TransportError> {
         // 配置验证
-        self.config.validate()
+        ConnectableConfig::validate(&self.config)
             .map_err(|e| TransportError::config_error("protocol", format!("Config validation failed: {:?}", e)))?;
         
         // 应用超时选项
@@ -451,9 +441,16 @@ where
                 tokio::time::sleep(delay).await;
             }
             
+            // 🎯 使用新的连接逻辑，通过 trait 对象调用
             match self.config.connect(&self.transport.inner).await {
                 Ok(session_id) => {
                     tracing::info!("连接建立成功: {:?}", session_id);
+                    
+                    // 🎯 更新客户端的当前会话ID
+                    let mut current_session = self.transport.current_session_id.write().await;
+                    *current_session = Some(session_id);  
+                    drop(current_session);
+                    
                     return Ok(session_id);
                 },
                 Err(e) => {
@@ -490,7 +487,7 @@ pub struct ClientConnectionPool {
 
 impl ClientConnectionPool {
     async fn new<C>(
-        transport: &ClientTransport, 
+        transport: &TransportClient, 
         config: C, 
         pool_size: usize
     ) -> Result<Self, TransportError>

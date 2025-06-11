@@ -69,15 +69,23 @@ impl From<SessionId> for u64 {
 // 重新导出核心类型
 pub use packet::{Packet, PacketType, PacketError};
 pub use transport::{
-    Transport, 
-    TransportBuilder, 
-    TransportConfig,
-    ConnectionPool,
-    MemoryPool,
-    BufferSize,
-    PerformanceMetrics,
+    TransportConfig, ExpertConfig, SmartPoolConfig, PerformanceConfig,
+    // 核心传输类型
+    Transport, TransportServer,
+    // 构建器
+    TransportClientBuilder, TransportServerBuilder, 
+    // 客户端和服务端
+    TransportClient,
+    // 高级配置
+    ConnectionPoolConfig, RetryConfig, LoadBalancerConfig, CircuitBreakerConfig,
+    AcceptorConfig, BackpressureStrategy, RateLimiterConfig,
+    // 连接池和内存管理
+    ConnectionPool, MemoryPool, MemoryStats, MemoryStatsSnapshot,
+    // 高性能组件
+    Actor, ActorManager, ProtocolAdapter, ProtocolStats,
+    // LockFree 基础组件
+    LockFreeHashMap, LockFreeQueue, LockFreeCounter,
 };
-pub use transport::Actor;  // OptimizedActor导出为Actor
 pub use event::TransportEvent;  // 🔧 移除别名，直接导出TransportEvent
 pub use stream::EventStream;
 pub use error::{TransportError, CloseReason};

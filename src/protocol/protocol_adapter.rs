@@ -52,6 +52,7 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
     
     async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
         tracing::debug!("🔍 ProtocolConnectionAdapter::receive - 开始接收数据...");
+        tracing::debug!("🔍 连接状态检查: is_connected = {}", self.connection.is_connected());
         
         let result = self.connection.receive().await;
         

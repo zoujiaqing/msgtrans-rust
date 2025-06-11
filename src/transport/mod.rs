@@ -21,7 +21,7 @@
 /// ```
 /// 
 /// ### 用户体验
-/// - **零配置高性能**：`TransportBuilder::new().build()` 自动享受后端优化
+/// - **零配置高性能**：`TransportClientBuilder::new().build()` 和 `TransportServerBuilder::new().build()` 自动享受后端优化
 /// - **完整向后兼容**：现有代码无需修改即可运行
 /// - **透明性能提升**：内存分配和连接管理自动使用高性能实现
 /// 
@@ -30,12 +30,13 @@
 /// 2. **Phase 3.4**: 协议层集成FlumePoweredProtocolAdapter
 /// 3. **Phase 4.0**: 端到端零拷贝数据路径
 
-pub mod api;
 pub mod config;
 pub mod pool;
 pub mod expert_config;
 pub mod client;
 pub mod server;
+pub mod transport;
+pub mod transport_server;
 
 // 🚀 Phase 3: 核心高性能组件 (默认启用)
 pub mod lockfree_enhanced;
@@ -46,10 +47,11 @@ pub mod actor_v2;
 // 🚀 Phase 4: 架构清理完成 - 传统组件已完全移除
 // OptimizedActor 已成为唯一的Actor实现
 
-// 重新导出核心API
-pub use api::{
-    Transport, TransportBuilder, ConnectionManager, ServerManager
-};
+// 重新导出核心API - 使用新的架构
+pub use transport::Transport;
+pub use transport_server::TransportServer;
+pub use client::TransportClientBuilder;
+pub use server::TransportServerBuilder;
 
 // 重新导出配置
 pub use config::TransportConfig;
@@ -93,12 +95,11 @@ pub use expert_config::{
 
 // 客户端和服务端Builder导出
 pub use client::{
-    TransportClientBuilder, ClientTransport, ProtocolConnectionBuilder,
+    TransportClient, ProtocolConnectionBuilder,
     ConnectionPoolConfig, RetryConfig, LoadBalancerConfig, CircuitBreakerConfig,
     ConnectionOptions, ConnectionPriority
 };
 pub use server::{
-    TransportServerBuilder, ServerTransport,
     AcceptorConfig, BackpressureStrategy, RateLimiterConfig, ServerMiddleware,
     ServerOptions, LoggingMiddleware, AuthMiddleware
 };

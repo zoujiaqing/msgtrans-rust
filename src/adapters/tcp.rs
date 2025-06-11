@@ -89,39 +89,102 @@ impl<C> TcpAdapter<C> {
     
     /// 读取完整的数据包
     async fn read_packet(&mut self) -> Result<Option<Packet>, TcpError> {
-        // 首先读取包头（9字节）
-        let mut header_buf = [0u8; 9];
-        match self.stream.read_exact(&mut header_buf).await {
-            Ok(_) => {},
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+        tracing::debug!("🔍 TCP read_packet - 开始尝试读取数据包");
+        
+        // 检查连接状态
+        if !self.is_connected {
+            tracing::debug!("🔍 TCP连接已关闭，返回None");
+            return Ok(None);
+        }
+        
+        // 尝试非阻塞读取来检查是否有数据可用
+        let mut test_buf = [0u8; 1];
+        match self.stream.try_read(&mut test_buf) {
+            Ok(0) => {
+                tracing::debug!("🔍 TCP连接已关闭 (try_read返回0)");
                 self.is_connected = false;
                 self.connection_info.state = ConnectionState::Closed;
                 self.connection_info.closed_at = Some(std::time::SystemTime::now());
                 return Ok(None);
             }
-            Err(e) => return Err(TcpError::Io(e)),
+            Ok(_) => {
+                tracing::debug!("🔍 检测到有数据可读，继续读取包头");
+                // 需要把这个字节放回去，所以我们需要重新读取整个包头
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                tracing::debug!("🔍 当前无数据可读，进入阻塞读取模式");
+                // 继续正常的阻塞读取
+            }
+            Err(e) => {
+                tracing::debug!("🔍 TCP try_read失败: {:?}", e);
+                return Err(TcpError::Io(e));
+            }
         }
+        
+        // 首先读取包头（9字节）
+        tracing::debug!("🔍 开始读取9字节包头...");
+        let mut header_buf = [0u8; 9];
+        match self.stream.read_exact(&mut header_buf).await {
+            Ok(_) => {
+                tracing::debug!("🔍 成功读取包头9字节");
+            },
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                self.is_connected = false;
+                self.connection_info.state = ConnectionState::Closed;
+                self.connection_info.closed_at = Some(std::time::SystemTime::now());
+                tracing::debug!("🔍 TCP连接正常关闭 (EOF)");
+                return Ok(None);
+            }
+            Err(e) => {
+                tracing::error!("🔍 TCP读取包头失败: {:?}", e);
+                return Err(TcpError::Io(e));
+            }
+        }
+        
+        tracing::debug!("🔍 TCP读取到包头: {:?}", header_buf);
         
         // 解析包头获取负载长度
         let payload_len = u32::from_be_bytes([header_buf[5], header_buf[6], header_buf[7], header_buf[8]]) as usize;
         
+        tracing::debug!("🔍 解析出负载长度: {} bytes", payload_len);
+        
         // 防止恶意的大数据包
         if payload_len > 1024 * 1024 { // 1MB 限制
+            tracing::error!("🔍 负载过大，拒绝接收: {} bytes", payload_len);
             return Err(TcpError::BufferOverflow);
         }
         
         // 读取负载
         let mut payload = vec![0u8; payload_len];
-        self.stream.read_exact(&mut payload).await?;
+        match self.stream.read_exact(&mut payload).await {
+            Ok(_) => {
+                tracing::debug!("🔍 成功读取负载: {} bytes", payload_len);
+            }
+            Err(e) => {
+                tracing::error!("🔍 TCP读取负载失败: {:?}", e);
+                return Err(TcpError::Io(e));
+            }
+        }
         
         // 重构完整的数据包
         let mut packet_data = Vec::with_capacity(9 + payload_len);
         packet_data.extend_from_slice(&header_buf);
         packet_data.extend_from_slice(&payload);
         
+        tracing::debug!("🔍 重构数据包，总长度: {} bytes", packet_data.len());
+        
         // 解析数据包
-        let packet = Packet::from_bytes(&packet_data)?;
-        Ok(Some(packet))
+        match Packet::from_bytes(&packet_data) {
+            Ok(packet) => {
+                tracing::debug!("🔍 成功解析数据包: 类型={:?}, ID={}, 负载={}bytes", 
+                    packet.packet_type, packet.message_id, packet.payload.len());
+                Ok(Some(packet))
+            }
+            Err(e) => {
+                tracing::error!("🔍 数据包解析失败: {:?}", e);
+                Err(TcpError::Packet(e))
+            }
+        }
     }
 }
 
@@ -152,28 +215,39 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     type Error = TcpError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
+        tracing::debug!("🔍 TCP适配器开始发送数据包: ID={}, 大小={}bytes", packet.message_id, packet.payload.len());
+        
         if !self.is_connected {
+            tracing::error!("🔍 TCP连接已关闭，拒绝发送");
             return Err(TcpError::ConnectionClosed);
         }
         
         let data = packet.to_bytes();
+        tracing::debug!("🔍 数据包序列化后大小: {}bytes", data.len());
         
-        // 应用写超时
-        let write_future = self.stream.write_all(&data);
-        
-        if let Some(timeout) = self.config.write_timeout {
-            tokio::time::timeout(timeout, write_future).await
-                .map_err(|_| TcpError::Timeout)?
-                .map_err(TcpError::Io)?;
-        } else {
-            write_future.await.map_err(TcpError::Io)?;
+        tracing::debug!("🔍 开始写入TCP socket...");
+        match self.stream.write_all(&data).await {
+            Ok(_) => {
+                tracing::debug!("🔍 TCP write_all 成功，开始flush...");
+                match self.stream.flush().await {
+                    Ok(_) => {
+                        tracing::debug!("🔍 TCP flush 成功，数据包发送完成");
+                        // 记录统计信息
+                        self.stats.record_packet_sent(data.len());
+                        self.connection_info.record_packet_sent(data.len());
+                        Ok(())
+                    }
+                    Err(e) => {
+                        tracing::error!("🔍 TCP flush 失败: {:?}", e);
+                        Err(TcpError::Io(e))
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("🔍 TCP write_all 失败: {:?}", e);
+                Err(TcpError::Io(e))
+            }
         }
-        
-        // 记录统计信息
-        self.stats.record_packet_sent(data.len());
-        self.connection_info.record_packet_sent(data.len());
-        
-        Ok(())
     }
     
     async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
