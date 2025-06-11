@@ -10,9 +10,10 @@ use crate::{
     command::TransportStats,
     event::TransportEvent,
     stream::StreamFactory,
-    protocol::adapter::DynProtocolConfig,
+    protocol::adapter::DynServerConfig,
 };
 use tokio::sync::broadcast;
+use futures;
 
 /// 🎯 多连接服务端传输层 - 使用 lockfree 数据结构管理多个 Transport 会话
 pub struct TransportServer {
@@ -28,8 +29,8 @@ pub struct TransportServer {
     event_sender: broadcast::Sender<TransportEvent>,
     /// 是否正在运行
     is_running: Arc<std::sync::atomic::AtomicBool>,
-    /// 协议配置 - 从 TransportServerBuilder 传入
-    protocol_configs: std::collections::HashMap<String, Box<dyn DynProtocolConfig>>,
+    /// 🔧 协议配置 - 改为服务端专用配置
+    protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynServerConfig>>,
 }
 
 impl TransportServer {
@@ -54,7 +55,7 @@ impl TransportServer {
     /// 🔧 内部方法：创建带协议配置的服务端（由 TransportServerBuilder 调用）
     pub async fn new_with_protocols(
         config: TransportConfig,
-        protocol_configs: std::collections::HashMap<String, Box<dyn DynProtocolConfig>>
+        protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynServerConfig>>
     ) -> Result<Self, TransportError> {
         tracing::info!("🚀 创建 TransportServer (带协议配置)");
         
@@ -154,7 +155,7 @@ impl TransportServer {
         sessions
     }
     
-    /// 🎯 获取会话数量 (lockfree)
+    /// �� 获取会话数量 (lockfree)
     pub async fn session_count(&self) -> usize {
         self.sessions.len()
     }
@@ -194,34 +195,86 @@ impl TransportServer {
         // 设置运行状态
         self.is_running.store(true, std::sync::atomic::Ordering::SeqCst);
         
-        // 为每个协议配置发送启动事件
+        // 检查是否有协议配置
+        if self.protocol_configs.is_empty() {
+            tracing::warn!("⚠️ 没有配置协议，服务端无法启动监听");
+            return Err(TransportError::config_error("protocols", "No protocols configured"));
+        }
+        
+        tracing::info!("🌟 启动 {} 个协议服务器", self.protocol_configs.len());
+        
+        // 创建监听任务的向量
+        let mut listen_tasks = Vec::new();
+        
+        // 为每个协议配置启动服务器
+        tracing::info!("🔍 开始遍历协议配置...");
         for (protocol_name, protocol_config) in &self.protocol_configs {
-            let address = self.get_protocol_bind_address(protocol_config);
+            tracing::info!("🔧 处理协议: {}", protocol_name);
             
-            let start_event = TransportEvent::ServerStarted { 
-                address
-            };
+            let address = self.get_protocol_bind_address(protocol_config);
+            tracing::info!("📍 协议 {} 的绑定地址: {}", protocol_name, address);
+            
+            // 发送启动事件
+            let start_event = TransportEvent::ServerStarted { address };
             let _ = self.event_sender.send(start_event);
+            tracing::info!("📨 已发送 {} 协议启动事件", protocol_name);
             
             tracing::info!("🌐 {} 协议监听启动: {}", protocol_name, address);
-        }
-        
-        // 如果没有配置协议，发送一个默认的启动事件
-        if self.protocol_configs.is_empty() {
-            let start_event = TransportEvent::ServerStarted { 
-                address: "127.0.0.1:0".parse().unwrap() // 默认地址
-            };
-            let _ = self.event_sender.send(start_event);
-            tracing::warn!("⚠️ 没有配置协议，服务端以空配置启动");
-        }
-        
-        // 模拟服务端运行逻辑
-        // TODO: 在实际实现中，这里应该是真正的网络监听循环
-        while self.is_running.load(std::sync::atomic::Ordering::SeqCst) {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             
-            // 检查是否有新连接 (模拟)
-            // 这里可以添加实际的网络监听逻辑
+            // 🔧 使用 DynServerConfig 的动态构建方法，实现真正的协议无关
+            tracing::info!("🔧 使用 DynServerConfig 动态方法构建服务器");
+            
+            match protocol_config.build_server_dyn().await {
+                Ok(server) => {
+                    tracing::info!("✅ {} 服务器构建成功", protocol_name);
+                    tracing::info!("🚀 开始创建 {} 监听任务...", protocol_name);
+                    
+                    match self.start_protocol_listener(server, protocol_name.clone()).await {
+                        Ok(listener_task) => {
+                            tracing::info!("✅ {} 监听任务创建成功", protocol_name);
+                            listen_tasks.push(listener_task);
+                            tracing::info!("✅ {} 服务器启动成功: {}", protocol_name, address);
+                        }
+                        Err(e) => {
+                            tracing::error!("❌ {} 监听任务创建失败: {:?}", protocol_name, e);
+                            return Err(e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("❌ {} 服务器构建失败: {:?}", protocol_name, e);
+                    return Err(e);
+                }
+            }
+            
+            tracing::info!("✅ 协议 {} 处理完成", protocol_name);
+        }
+        
+        tracing::info!("🎯 所有协议服务器启动完成，等待连接...");
+        tracing::info!("📊 总共创建了 {} 个监听任务", listen_tasks.len());
+        
+        if listen_tasks.is_empty() {
+            tracing::error!("❌ 没有成功创建任何监听任务");
+            return Err(TransportError::config_error("server", "No listening tasks created"));
+        }
+        
+        // 🔧 关键修复：参考旧版本，逐个等待任务完成而不是 join_all
+        // 这确保服务器一直运行，除非出现错误
+        tracing::info!("🔄 开始等待监听任务...");
+        for (index, task) in listen_tasks.into_iter().enumerate() {
+            tracing::info!("⏳ 等待第 {} 个监听任务完成...", index + 1);
+            match task.await {
+                Ok(()) => {
+                    tracing::info!("✅ 第 {} 个监听任务正常完成", index + 1);
+                }
+                Err(e) => {
+                    tracing::error!("❌ 第 {} 个监听任务被取消: {:?}", index + 1, e);
+                    // 发送服务端停止事件
+                    let stop_event = TransportEvent::ServerStopped;
+                    let _ = self.event_sender.send(stop_event);
+                    return Err(TransportError::config_error("server", "Listener task cancelled"));
+                }
+            }
         }
         
         // 发送服务端停止事件
@@ -232,50 +285,193 @@ impl TransportServer {
         Ok(())
     }
 
+    /// 🎯 启动协议监听器 - 通用方法
+    async fn start_protocol_listener<S>(&self, mut server: S, protocol_name: String) -> Result<tokio::task::JoinHandle<()>, TransportError>
+    where
+        S: crate::protocol::Server + 'static,
+    {
+        tracing::info!("🔧 即将创建 {} 协议监听任务", protocol_name);
+        
+        let server_clone = self.clone();
+        let transport_config = self.config.clone();
+        let protocol_name_for_log = protocol_name.clone();
+        
+        tracing::info!("📋 准备监听任务参数:");
+        tracing::info!("   - 协议: {}", protocol_name);
+        tracing::info!("   - 配置: {:?}", transport_config);
+        
+        let task = tokio::spawn(async move {
+            tracing::info!("🚀 {} 监听任务已启动，开始执行", protocol_name);
+            
+            // 首先检查服务器的本地地址
+            tracing::info!("🔍 {} 正在获取服务器本地地址...", protocol_name);
+            match server.local_addr() {
+                Ok(addr) => {
+                    tracing::info!("✅ {} 服务器监听地址确认: {}", protocol_name, addr);
+                }
+                Err(e) => {
+                    tracing::error!("❌ {} 服务器地址获取失败: {:?}", protocol_name, e);
+                    tracing::error!("💥 {} 监听任务因地址获取失败而退出", protocol_name);
+                    return;
+                }
+            }
+            
+            let mut accept_count = 0u64;
+            tracing::info!("🔄 {} 进入连接接受循环", protocol_name);
+            
+            // 🔧 关键修复：参考旧版本，使用无限循环而不是条件循环
+            // 真正的服务器监听应该一直运行，除非出现致命错误
+            loop {
+                tracing::debug!("🔄 {} 等待连接... (接受计数: {})", protocol_name, accept_count);
+                
+                // 在每次 accept 前添加日志
+                tracing::debug!("🎣 {} 调用 server.accept()...", protocol_name);
+                match server.accept().await {
+                    Ok(connection) => {
+                        accept_count += 1;
+                        tracing::info!("🎉 {} accept 成功! 连接 #{}", protocol_name, accept_count);
+                        
+                        // 获取连接信息
+                        let mut connection_info = connection.connection_info();
+                        let peer_addr = connection_info.peer_addr;
+                        
+                        tracing::info!("🔗 新的 {} 连接 #{}: {}", protocol_name, accept_count, peer_addr);
+                        
+                        // 生成新的会话ID
+                        let session_id = server_clone.generate_session_id();
+                        tracing::info!("🆔 为 {} 连接生成会话ID: {}", protocol_name, session_id);
+                        
+                        // 创建 Transport 并添加到会话管理
+                        tracing::info!("🚧 为 {} 连接创建 Transport...", protocol_name);
+                        match Transport::new(transport_config.clone()).await {
+                            Ok(transport) => {
+                                tracing::info!("✅ {} Transport 创建成功", protocol_name);
+                                let actual_session_id = server_clone.add_session(transport).await;
+                                tracing::info!("✅ {} 会话创建成功: {} (来自 {})", protocol_name, actual_session_id, peer_addr);
+                                
+                                // 🔧 修复：更新 connection_info 中的 session_id 为实际分配的会话ID
+                                connection_info.session_id = actual_session_id;
+                                
+                                // 🚀 启动简单的消息接收循环
+                                tracing::info!("🚀 为会话 {} 启动消息接收循环", actual_session_id);
+                                
+                                let event_sender = server_clone.event_sender.clone();
+                                let session_id = actual_session_id;
+                                
+                                // 启动消息接收任务
+                                let _recv_task = tokio::spawn(async move {
+                                    tracing::info!("📥 消息接收循环开始: {}", session_id);
+                                    
+                                    // 将 connection 转换为 mutable 以便调用 receive
+                                    let mut connection = connection;
+                                    
+                                    loop {
+                                        match connection.receive().await {
+                                            Ok(Some(packet)) => {
+                                                tracing::info!("📥 收到消息: {} bytes (会话: {})", packet.payload.len(), session_id);
+                                                
+                                                // 发送 MessageReceived 事件
+                                                let event = TransportEvent::MessageReceived {
+                                                    session_id,
+                                                    packet: packet.clone(),
+                                                };
+                                                
+                                                if let Err(e) = event_sender.send(event) {
+                                                    tracing::error!("❌ 发送 MessageReceived 事件失败: {:?}", e);
+                                                    break;
+                                                } else {
+                                                    tracing::debug!("✅ MessageReceived 事件已发送: {}", session_id);
+                                                }
+                                            }
+                                            Ok(None) => {
+                                                tracing::info!("🔚 连接已关闭: {}", session_id);
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                tracing::error!("❌ 接收消息错误: {:?} (会话: {})", e, session_id);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    tracing::info!("📥 消息接收循环结束: {}", session_id);
+                                });
+                                
+                                tracing::info!("✅ 消息接收循环已启动: {}", actual_session_id);
+                                
+                                // 发送连接事件
+                                let connect_event = TransportEvent::ConnectionEstablished { 
+                                    session_id: actual_session_id,
+                                    info: connection_info,
+                                };
+                                let _ = server_clone.event_sender.send(connect_event);
+                                tracing::info!("📨 {} 连接事件已发送", protocol_name);
+                            }
+                            Err(e) => {
+                                tracing::error!("❌ 创建 {} Transport 失败: {:?}", protocol_name, e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("❌ {} 接受连接失败 (接受计数: {}): {:?}", protocol_name, accept_count, e);
+                        
+                        // 根据错误类型决定是否继续
+                        match &e {
+                            TransportError::Connection { reason, retryable } => {
+                                if *retryable {
+                                    if reason.contains("would block") || reason.contains("WouldBlock") {
+                                        tracing::debug!("🔄 {} 无连接可接受，继续等待", protocol_name);
+                                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                                        continue;
+                                    } else if reason.contains("interrupted") || reason.contains("Interrupted") {
+                                        tracing::warn!("⚠️ {} 接受连接被中断，继续监听", protocol_name);
+                                        continue;
+                                    } else {
+                                        tracing::warn!("⚠️ {} 可重试的连接错误，继续监听: {}", protocol_name, reason);
+                                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                        continue;
+                                    }
+                                } else {
+                                    tracing::error!("💥 {} 不可重试的连接错误，停止监听: {}", protocol_name, reason);
+                                    break;
+                                }
+                            }
+                            _ => {
+                                tracing::error!("💥 {} 其他类型错误，停止监听: {:?}", protocol_name, e);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            tracing::info!("🛑 {} 服务器已停止 (共接受 {} 个连接)", protocol_name, accept_count);
+        });
+        
+        tracing::info!("✅ {} 协议监听任务创建完成", protocol_name_for_log);
+        tracing::info!("🎯 {} 任务句柄已准备就绪", protocol_name_for_log);
+        Ok(task)
+    }
+
+    /// 🔧 内部方法：从协议配置中提取监听地址（使用 DynServerConfig 通用方法）
+    fn get_protocol_bind_address(&self, protocol_config: &Box<dyn crate::protocol::adapter::DynServerConfig>) -> std::net::SocketAddr {
+        // 🎯 使用 DynServerConfig 的通用方法，无需协议特定代码
+        protocol_config.get_bind_address()
+    }
+
     /// 🎯 停止服务端
     pub async fn stop(&self) {
         tracing::info!("🛑 停止 TransportServer");
         self.is_running.store(false, std::sync::atomic::Ordering::SeqCst);
     }
-
-    /// 🔧 内部方法：从协议配置中提取监听地址
-    fn get_protocol_bind_address(&self, protocol_config: &Box<dyn DynProtocolConfig>) -> std::net::SocketAddr {
-        // 通过 as_any() 尝试向下转型到具体的协议配置类型
-        match protocol_config.protocol_name() {
-            "tcp" => {
-                if let Some(tcp_config) = protocol_config.as_any().downcast_ref::<crate::protocol::TcpServerConfig>() {
-                    tcp_config.bind_address
-                } else {
-                    "127.0.0.1:8000".parse().unwrap()
-                }
-            }
-            "websocket" => {
-                if let Some(ws_config) = protocol_config.as_any().downcast_ref::<crate::protocol::WebSocketServerConfig>() {
-                    ws_config.bind_address
-                } else {
-                    "127.0.0.1:8001".parse().unwrap()
-                }
-            }
-            "quic" => {
-                if let Some(quic_config) = protocol_config.as_any().downcast_ref::<crate::protocol::QuicServerConfig>() {
-                    quic_config.bind_address
-                } else {
-                    "127.0.0.1:8002".parse().unwrap()
-                }
-            }
-            _ => {
-                "127.0.0.1:8080".parse().unwrap()
-            }
-        }
-    }
 }
 
 impl Clone for TransportServer {
     fn clone(&self) -> Self {
-        // 克隆协议配置 - 使用 clone_dyn()
+        // 克隆协议配置 - 使用 clone_server_dyn()
         let mut cloned_configs = std::collections::HashMap::new();
         for (name, config) in &self.protocol_configs {
-            cloned_configs.insert(name.clone(), config.clone_dyn());
+            cloned_configs.insert(name.clone(), config.clone_server_dyn());
         }
         
         Self {

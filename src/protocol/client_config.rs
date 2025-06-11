@@ -7,6 +7,7 @@ use serde::{Serialize, Deserialize};
 use crate::error::TransportError;
 use crate::protocol::{ConfigError, ProtocolConfig};
 use crate::protocol::adapter::{DynProtocolConfig};
+use crate::connection::Connection;
 
 /// TCP客户端配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -756,10 +757,16 @@ impl DynProtocolConfig for QuicClientConfig {
 }
 
 impl crate::transport::client::ConnectableConfig for TcpClientConfig {
-    async fn connect(&self, transport: &crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
-        // 暂时返回简化实现
-        let session_id = crate::SessionId::new(1);
-        tracing::info!("TCP 客户端连接到 {}:{}", self.target_address.ip(), self.target_address.port());
+    async fn connect(&self, _transport: &crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
+        tracing::info!("🔌 TCP 客户端开始连接到 {}:{}", self.target_address.ip(), self.target_address.port());
+        
+        // 使用 ClientConfig::build_connection() 构建连接
+        let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
+        
+        // 获取会话ID
+        let session_id = connection.session_id();
+        
+        tracing::info!("✅ TCP 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
         Ok(session_id)
     }
     
@@ -768,6 +775,14 @@ impl crate::transport::client::ConnectableConfig for TcpClientConfig {
             return Err(crate::TransportError::config_error("target_address", "Target address port cannot be zero"));
         }
         Ok(())
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "tcp"
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -784,6 +799,14 @@ impl crate::transport::client::ConnectableConfig for WebSocketClientConfig {
             return Err(crate::TransportError::config_error("target_url", "Target URL cannot be empty"));
         }
         Ok(())
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "tcp"
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 

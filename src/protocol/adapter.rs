@@ -118,7 +118,7 @@ pub trait ProtocolConfig: Send + Sync + Clone + std::fmt::Debug + 'static {
     fn merge(self, other: Self) -> Self;
 }
 
-/// Object-safe 的协议配置 trait，用于统一 Builder 接口
+/// 🔧 基础动态协议配置 - 共同的方法
 pub trait DynProtocolConfig: Send + Sync + 'static {
     /// 获取协议名称
     fn protocol_name(&self) -> &'static str;
@@ -131,6 +131,30 @@ pub trait DynProtocolConfig: Send + Sync + 'static {
     
     /// 克隆为 Box<dyn DynProtocolConfig>
     fn clone_dyn(&self) -> Box<dyn DynProtocolConfig>;
+}
+
+/// 🔧 服务端专用动态配置
+pub trait DynServerConfig: DynProtocolConfig {
+    /// 动态构建服务器（object-safe）
+    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Server>, crate::error::TransportError>> + Send + '_>>;
+    
+    /// 获取绑定地址
+    fn get_bind_address(&self) -> std::net::SocketAddr;
+    
+    /// 克隆为 Box<dyn DynServerConfig>
+    fn clone_server_dyn(&self) -> Box<dyn DynServerConfig>;
+}
+
+/// 🔧 客户端专用动态配置  
+pub trait DynClientConfig: DynProtocolConfig {
+    /// 动态构建连接（object-safe）
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>>;
+    
+    /// 获取目标信息（可能是 SocketAddr 或 URL）
+    fn get_target_info(&self) -> String;
+    
+    /// 克隆为 Box<dyn DynClientConfig>
+    fn clone_client_dyn(&self) -> Box<dyn DynClientConfig>;
 }
 
 /// 协议配置错误
