@@ -720,6 +720,24 @@ impl DynProtocolConfig for TcpClientConfig {
     }
 }
 
+/// 🔧 新增：实现 TCP 客户端专用配置
+impl crate::protocol::adapter::DynClientConfig for TcpClientConfig {
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>> {
+        Box::pin(async move {
+            let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
+            Ok(Box::new(connection) as Box<dyn crate::protocol::Connection>)
+        })
+    }
+    
+    fn get_target_info(&self) -> String {
+        self.target_address.to_string()
+    }
+    
+    fn clone_client_dyn(&self) -> Box<dyn crate::protocol::adapter::DynClientConfig> {
+        Box::new(self.clone())
+    }
+}
+
 impl DynProtocolConfig for WebSocketClientConfig {
     fn protocol_name(&self) -> &'static str {
         "websocket"
@@ -823,5 +841,13 @@ impl crate::transport::client::ConnectableConfig for QuicClientConfig {
             return Err(crate::TransportError::config_error("target_address", "Target address cannot be unspecified"));
         }
         Ok(())
+    }
+    
+    fn protocol_name(&self) -> &'static str {
+        "quic"
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 } 

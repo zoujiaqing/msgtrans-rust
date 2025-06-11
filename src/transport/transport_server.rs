@@ -286,9 +286,7 @@ impl TransportServer {
     }
 
     /// 🎯 启动协议监听器 - 通用方法
-    async fn start_protocol_listener<S>(&self, mut server: S, protocol_name: String) -> Result<tokio::task::JoinHandle<()>, TransportError>
-    where
-        S: crate::protocol::Server + 'static,
+    async fn start_protocol_listener(&self, mut server: Box<dyn crate::protocol::Server>, protocol_name: String) -> Result<tokio::task::JoinHandle<()>, TransportError>
     {
         tracing::info!("🔧 即将创建 {} 协议监听任务", protocol_name);
         

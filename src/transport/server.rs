@@ -100,7 +100,7 @@ pub struct TransportServerBuilder {
     graceful_shutdown: Option<Duration>,
     transport_config: TransportConfig,
     /// 协议配置存储 - 服务端支持多协议监听
-    protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
+    protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynServerConfig>>,
 }
 
 impl TransportServerBuilder {
@@ -166,7 +166,7 @@ impl TransportServerBuilder {
     }
     
     /// 🌟 统一协议配置接口 - 服务端支持多协议
-    pub fn with_protocol<T: crate::protocol::adapter::DynProtocolConfig>(mut self, config: T) -> Self {
+    pub fn with_protocol<T: crate::protocol::adapter::DynServerConfig>(mut self, config: T) -> Self {
         let protocol_name = config.protocol_name().to_string();
         self.protocol_configs.insert(protocol_name, Box::new(config));
         self
