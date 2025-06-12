@@ -108,6 +108,11 @@ impl Connection for TcpServerConnection {
         use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
     }
+    
+    /// 获取事件流 - TCP服务器连接特有的实现
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        Some(self.inner.subscribe_events())
+    }
 }
 
 /// TCP服务器的Server包装器

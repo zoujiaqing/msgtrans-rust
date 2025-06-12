@@ -24,6 +24,9 @@ pub trait Connection: Send + Sync {
     
     /// 刷新缓冲区
     async fn flush(&mut self) -> Result<(), TransportError>;
+    
+    /// 获取事件流 - TCP连接特有的实现
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>>;
 }
 
 /// 服务器接口 - 接受新连接
@@ -62,6 +65,13 @@ impl TcpConnection {
         let cached_info = adapter.connection_info();
         Self { adapter, cached_info }
     }
+    
+    /// 获取事件流接收器
+    /// 
+    /// 这允许客户端订阅TCP适配器内部事件循环发送的事件
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::TransportEvent> {
+        self.adapter.subscribe_events()
+    }
 }
 
 #[async_trait]
@@ -99,6 +109,11 @@ impl Connection for TcpConnection {
         use crate::protocol::ProtocolAdapter;
         self.adapter.flush().await.map_err(Into::into)
     }
+    
+    /// 获取事件流 - TCP连接特有的实现
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        Some(self.adapter.subscribe_events())
+    }
 }
 
 // 为 protocol::protocol::Connection trait 添加实现
@@ -131,6 +146,11 @@ impl crate::protocol::Connection for TcpConnection {
     
     fn connection_info(&self) -> crate::command::ConnectionInfo {
         self.info().clone()
+    }
+    
+    /// 获取事件流 - TCP连接特有的实现
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        Some(self.adapter.subscribe_events())
     }
 }
 

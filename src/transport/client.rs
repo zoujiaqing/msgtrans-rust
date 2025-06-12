@@ -385,104 +385,26 @@ impl TransportClient {
     pub async fn events(&self) -> Result<EventStream, TransportError> {
         use crate::stream::StreamFactory;
         use crate::event::TransportEvent;
-        use tokio::sync::broadcast;
         
-        // 创建客户端专用的事件流
-        let (sender, receiver) = broadcast::channel(64); // 增大缓冲区
-        
-        // 如果已连接，发送连接已建立的事件并启动消息接收循环
+        // 如果已连接，尝试获取连接的事件流
         if let Some(session_id) = self.current_session().await {
-            let now = std::time::SystemTime::now();
-            
-            // 🔧 从协议配置获取真实的协议类型和地址信息
-            let (protocol_name, target_address) = if let Some(protocol_config) = &self.protocol_config {
-                // 直接使用客户端配置获取目标信息
-                let target_info = protocol_config.get_target_info();
-                let target_address = target_info.parse::<std::net::SocketAddr>()
-                    .unwrap_or_else(|_| "127.0.0.1:8001".parse().unwrap());
+            // 🔧 修复：直接使用Transport的事件流
+            if let Some(event_receiver) = self.inner.get_event_stream().await {
+                tracing::debug!("✅ TransportClient 获取到TCP适配器的事件流");
                 
-                let protocol_name = protocol_config.protocol_name().to_string();
-                (protocol_name, target_address)
+                // 发送连接已建立的事件（如果需要）
+                // 注意：TCP适配器的事件循环已经会发送这个事件，所以这里可能不需要重复发送
+                
+                tracing::debug!("📡 TransportClient 事件流创建完成 (使用TCP适配器事件流)");
+                return Ok(StreamFactory::event_stream(event_receiver));
             } else {
-                ("tcp".to_string(), "127.0.0.1:8001".parse().unwrap())
-            };
-            
-            let connection_info = crate::command::ConnectionInfo {
-                session_id,
-                local_addr: "0.0.0.0:0".parse().unwrap(),        // TODO: 从实际连接获取本地地址
-                peer_addr: target_address,                       // 使用目标地址作为对端地址
-                protocol: protocol_name,
-                state: crate::command::ConnectionState::Connected,
-                established_at: now,
-                closed_at: None,
-                last_activity: now,
-                packets_sent: 0,
-                packets_received: 0,
-                bytes_sent: 0,
-                bytes_received: 0,
-            };
-            
-            let event = TransportEvent::ConnectionEstablished { 
-                session_id, 
-                info: connection_info 
-            };
-            let _ = sender.send(event);
-            
-            tracing::debug!("✅ TransportClient 事件流初始化完成，已发送连接建立事件");
-            
-            // 🔧 修复：启动消息接收循环
-            if let Some(connection_adapter) = self.inner.connection_adapter() {
-                let connection_adapter = connection_adapter.clone();
-                let sender_clone = sender.clone();
-                
-                tokio::spawn(async move {
-                    tracing::debug!("🎧 客户端消息接收循环开始");
-                    
-                    loop {
-                        let mut conn = connection_adapter.lock().await;
-                        match conn.receive().await {
-                            Ok(Some(packet)) => {
-                                tracing::debug!("📥 客户端收到消息: {} bytes", packet.payload.len());
-                                
-                                let event = TransportEvent::MessageReceived {
-                                    session_id,
-                                    packet,
-                                };
-                                
-                                if let Err(_) = sender_clone.send(event) {
-                                    tracing::debug!("📡 客户端事件发送失败，可能没有接收者");
-                                    break;
-                                }
-                            }
-                            Ok(None) => {
-                                tracing::info!("🔚 客户端连接已关闭");
-                                let close_event = TransportEvent::ConnectionClosed {
-                                    session_id,
-                                    reason: crate::error::CloseReason::Normal,
-                                };
-                                let _ = sender_clone.send(close_event);
-                                break;
-                            }
-                            Err(e) => {
-                                tracing::error!("❌ 客户端接收消息错误: {:?}", e);
-                                let close_event = TransportEvent::ConnectionClosed {
-                                    session_id,
-                                    reason: crate::error::CloseReason::Error(format!("{:?}", e)),
-                                };
-                                let _ = sender_clone.send(close_event);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    tracing::debug!("📡 客户端消息接收循环结束");
-                });
+                // 如果无法获取事件流，返回错误
+                return Err(TransportError::connection_error("Connection does not support event streams", false));
             }
+        } else {
+            // 如果未连接，返回错误
+            return Err(TransportError::connection_error("Not connected - call connect() first", false));
         }
-        
-        tracing::debug!("📡 TransportClient 事件流创建完成 (完整版本)");
-        
-        Ok(StreamFactory::event_stream(receiver))
     }
     
     /// 获取客户端连接统计

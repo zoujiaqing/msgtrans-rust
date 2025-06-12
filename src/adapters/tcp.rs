@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use tokio::{
     net::{TcpStream, TcpListener},
     io::{AsyncReadExt, AsyncWriteExt},
+    sync::{mpsc, broadcast},
 };
 use std::io;
 use crate::{
@@ -10,6 +11,7 @@ use crate::{
     packet::{Packet, PacketError},
     command::{ConnectionInfo, ConnectionState},
     protocol::{ProtocolAdapter, AdapterStats, TcpClientConfig, TcpServerConfig},
+    event::TransportEvent,
 };
 use std::sync::Arc;
 
@@ -48,12 +50,8 @@ impl From<TcpError> for TransportError {
     }
 }
 
-/// TCP协议适配器
+/// TCP协议适配器 - 事件驱动版本
 pub struct TcpAdapter<C> {
-    /// TCP流读半部
-    read_half: tokio::net::tcp::OwnedReadHalf,
-    /// TCP流写半部
-    write_half: Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>,
     /// 会话ID
     session_id: SessionId,
     /// 配置
@@ -62,13 +60,19 @@ pub struct TcpAdapter<C> {
     stats: AdapterStats,
     /// 连接信息
     connection_info: ConnectionInfo,
-    /// 连接状态
-    is_connected: bool,
+    /// 发送队列
+    send_queue: mpsc::UnboundedSender<Packet>,
+    /// 事件发送器
+    event_sender: broadcast::Sender<TransportEvent>,
+    /// 关闭信号发送器
+    shutdown_sender: mpsc::UnboundedSender<()>,
+    /// 事件循环句柄
+    event_loop_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<C> TcpAdapter<C> {
     /// 创建新的TCP适配器
-    pub async fn new(stream: TcpStream, config: C) -> Result<Self, TcpError> {
+    pub async fn new(stream: TcpStream, config: C, event_sender: broadcast::Sender<TransportEvent>) -> Result<Self, TcpError> {
         // 设置基本TCP选项
         stream.set_nodelay(true)?;
         
@@ -82,101 +86,179 @@ impl<C> TcpAdapter<C> {
         connection_info.state = ConnectionState::Connected;
         connection_info.established_at = std::time::SystemTime::now();
         
-        let (read_half, write_half) = stream.into_split();
+        let session_id = SessionId::new(0); // 临时ID，稍后会被设置
+        
+        // 创建通信通道
+        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
+        
+        // 启动事件循环
+        let event_loop_handle = Self::start_event_loop(
+            stream,
+            session_id,
+            send_queue_rx,
+            shutdown_rx,
+            event_sender.clone(),
+        ).await;
         
         Ok(Self {
-            read_half,
-            write_half: Arc::new(tokio::sync::Mutex::new(write_half)),
-            session_id: SessionId::new(0),
+            session_id,
             config,
             stats: AdapterStats::new(),
             connection_info,
-            is_connected: true,
+            send_queue: send_queue_tx,
+            event_sender,
+            shutdown_sender: shutdown_tx,
+            event_loop_handle: Some(event_loop_handle),
         })
     }
     
-    /// 读取完整的数据包
-    async fn read_packet(&mut self) -> Result<Option<Packet>, TcpError> {
-        tracing::debug!("🔍 TCP read_packet - 开始尝试读取数据包");
-        
-        // 检查连接状态
-        if !self.is_connected {
-            tracing::debug!("🔍 TCP连接已关闭，返回None");
-            return Ok(None);
-        }
-        
-        // 直接读取包头（9字节）
-        tracing::debug!("🔍 开始读取9字节包头...");
+    /// 获取事件流接收器
+    /// 
+    /// 这允许客户端订阅TCP适配器内部事件循环发送的事件
+    pub fn subscribe_events(&self) -> broadcast::Receiver<TransportEvent> {
+        self.event_sender.subscribe()
+    }
+
+    /// 启动基于 tokio::select! 的事件循环
+    async fn start_event_loop(
+        stream: TcpStream,
+        session_id: SessionId,
+        mut send_queue: mpsc::UnboundedReceiver<Packet>,
+        mut shutdown_signal: mpsc::UnboundedReceiver<()>,
+        event_sender: broadcast::Sender<TransportEvent>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            tracing::debug!("🚀 TCP事件循环启动 (会话: {})", session_id);
+            
+            // 分离读写流
+            let (mut read_half, mut write_half) = stream.into_split();
+            
+            loop {
+                tokio::select! {
+                    // 🔍 处理接收数据
+                    read_result = Self::read_packet_from_stream(&mut read_half) => {
+                        match read_result {
+                            Ok(Some(packet)) => {
+                                tracing::debug!("📥 TCP接收到数据包: {} bytes (会话: {})", packet.payload.len(), session_id);
+                                
+                                // 发送接收事件
+                                let event = TransportEvent::MessageReceived {
+                                    session_id,
+                                    packet,
+                                };
+                                
+                                if let Err(e) = event_sender.send(event) {
+                                    tracing::warn!("📥 发送接收事件失败: {:?}", e);
+                                }
+                            }
+                            Ok(None) => {
+                                tracing::info!("🔗 TCP连接已关闭 (会话: {})", session_id);
+                                break;
+                            }
+                            Err(e) => {
+                                tracing::error!("📥 TCP读取错误: {:?} (会话: {})", e, session_id);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // 📤 处理发送数据
+                    packet = send_queue.recv() => {
+                        if let Some(packet) = packet {
+                            match Self::write_packet_to_stream(&mut write_half, &packet).await {
+                                Ok(_) => {
+                                    tracing::debug!("📤 TCP发送成功: {} bytes (会话: {})", packet.payload.len(), session_id);
+                                    
+                                    // 发送发送事件
+                                    let event = TransportEvent::MessageSent {
+                                        session_id,
+                                        packet_id: packet.message_id,
+                                    };
+                                    
+                                    if let Err(e) = event_sender.send(event) {
+                                        tracing::warn!("📤 发送发送事件失败: {:?}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("📤 TCP发送错误: {:?} (会话: {})", e, session_id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 🛑 处理关闭信号
+                    _ = shutdown_signal.recv() => {
+                        tracing::info!("🛑 收到关闭信号，停止TCP事件循环 (会话: {})", session_id);
+                        break;
+                    }
+                }
+            }
+            
+            // 发送连接关闭事件
+            let close_event = TransportEvent::ConnectionClosed {
+                session_id,
+                reason: crate::error::CloseReason::Normal,
+            };
+            
+            if let Err(e) = event_sender.send(close_event) {
+                tracing::warn!("🔗 发送关闭事件失败: {:?}", e);
+            }
+            
+            tracing::debug!("✅ TCP事件循环已结束 (会话: {})", session_id);
+        })
+    }
+    
+    /// 从流中读取数据包
+    async fn read_packet_from_stream(read_half: &mut tokio::net::tcp::OwnedReadHalf) -> Result<Option<Packet>, TcpError> {
+        // 读取包头（9字节）
         let mut header_buf = [0u8; 9];
-        match self.read_half.read_exact(&mut header_buf).await {
-            Ok(_) => {
-                tracing::debug!("🔍 成功读取包头9字节");
-            },
+        match read_half.read_exact(&mut header_buf).await {
+            Ok(_) => {}
             Err(e) => {
-                // 🔧 修复：区分正常连接关闭和真正的错误
                 match e.kind() {
                     std::io::ErrorKind::ConnectionReset | 
                     std::io::ErrorKind::ConnectionAborted |
                     std::io::ErrorKind::BrokenPipe |
                     std::io::ErrorKind::UnexpectedEof => {
-                        tracing::info!("🔗 TCP连接已被对端关闭: {}", e);
-                        self.is_connected = false;
-                        self.connection_info.state = ConnectionState::Closed;
-                        self.connection_info.closed_at = Some(std::time::SystemTime::now());
-                        return Ok(None);
+                        return Ok(None); // 连接正常关闭
                     }
                     _ => {
-                        tracing::error!("🔍 TCP读取包头失败: {:?}", e);
                         return Err(TcpError::Io(e));
                     }
                 }
             }
         }
         
-        tracing::debug!("🔍 TCP读取到包头: {:?}", header_buf);
-        
         // 解析包头获取负载长度
         let payload_len = u32::from_be_bytes([header_buf[5], header_buf[6], header_buf[7], header_buf[8]]) as usize;
         
-        tracing::debug!("🔍 解析出负载长度: {} bytes", payload_len);
-        
         // 防止恶意的大数据包
         if payload_len > 1024 * 1024 { // 1MB 限制
-            tracing::error!("🔍 负载过大，拒绝接收: {} bytes", payload_len);
             return Err(TcpError::BufferOverflow);
         }
         
         // 读取负载
         let mut payload = vec![0u8; payload_len];
-        match self.read_half.read_exact(&mut payload).await {
-            Ok(_) => {
-                tracing::debug!("🔍 成功读取负载: {} bytes", payload_len);
-            }
-            Err(e) => {
-                tracing::error!("🔍 TCP读取负载失败: {:?}", e);
-                return Err(TcpError::Io(e));
-            }
-        }
+        read_half.read_exact(&mut payload).await.map_err(TcpError::Io)?;
         
         // 重构完整的数据包
         let mut packet_data = Vec::with_capacity(9 + payload_len);
         packet_data.extend_from_slice(&header_buf);
         packet_data.extend_from_slice(&payload);
         
-        tracing::debug!("🔍 重构数据包，总长度: {} bytes", packet_data.len());
-        
         // 解析数据包
-        match Packet::from_bytes(&packet_data) {
-            Ok(packet) => {
-                tracing::debug!("🔍 成功解析数据包: 类型={:?}, ID={}, 负载={}bytes", 
-                    packet.packet_type, packet.message_id, packet.payload.len());
-                Ok(Some(packet))
-            }
-            Err(e) => {
-                tracing::error!("🔍 数据包解析失败: {:?}", e);
-                Err(TcpError::Packet(e))
-            }
-        }
+        let packet = Packet::from_bytes(&packet_data).map_err(TcpError::Packet)?;
+        Ok(Some(packet))
+    }
+    
+    /// 向流中写入数据包
+    async fn write_packet_to_stream(write_half: &mut tokio::net::tcp::OwnedWriteHalf, packet: &Packet) -> Result<(), TcpError> {
+        let packet_bytes = packet.to_bytes();
+        write_half.write_all(&packet_bytes).await.map_err(TcpError::Io)?;
+        write_half.flush().await.map_err(TcpError::Io)?;
+        Ok(())
     }
 }
 
@@ -197,7 +279,7 @@ impl TcpAdapter<TcpClientConfig> {
         
         tracing::debug!("✅ TCP连接建立成功");
         
-        Self::new(stream, config).await
+        Self::new(stream, config, broadcast::channel(16).0).await
     }
 }
 
@@ -207,72 +289,29 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     type Error = TcpError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        // 🔧 添加详细日志确认方法被调用
-        tracing::debug!("🔍 TCP适配器开始发送数据包: ID={}, 大小={}bytes", 
-            packet.message_id, packet.payload.len());
-            
-        if !self.is_connected {
-            tracing::warn!("⚠️ TCP适配器: 连接已断开，无法发送数据包");
-            return Err(TcpError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "Connection not established"
-            )));
-        }
-
-        // 序列化数据包
-        let data = packet.to_bytes();
-        tracing::debug!("🔍 数据包序列化后大小: {}bytes", data.len());
-
-        // 🔧 修复：使用写半部发送数据
-        let mut write_half = self.write_half.lock().await;
-        tracing::debug!("🔍 开始写入TCP socket...");
+        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), self.session_id);
         
-        write_half.write_all(&data).await.map_err(|e| {
-            tracing::error!("❌ TCP write_all 失败: {:?}", e);
-            TcpError::Io(e)
-        })?;
+        // 通过队列发送数据包，事件循环会处理实际的发送
+        self.send_queue.send(packet)
+            .map_err(|_| TcpError::ConnectionClosed)?;
         
-        tracing::debug!("🔍 TCP write_all 成功，开始flush...");
-        write_half.flush().await.map_err(|e| {
-            tracing::error!("❌ TCP flush 失败: {:?}", e);
-            TcpError::Io(e)
-        })?;
-        
-        tracing::debug!("🔍 TCP flush 成功，数据包发送完成");
-
-        // 更新统计
-        self.stats.packets_sent += 1;
-        self.stats.bytes_sent += data.len() as u64;
-        self.connection_info.packets_sent += 1;
-        self.connection_info.bytes_sent += data.len() as u64;
-        self.connection_info.last_activity = std::time::SystemTime::now();
-
         Ok(())
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        if !self.is_connected {
-            return Ok(None);
-        }
-
-        // 应用读超时
-        if let Some(timeout) = self.config.read_timeout {
-            let read_future = self.read_packet();
-            tokio::time::timeout(timeout, read_future).await
-                .map_err(|_| TcpError::Timeout)?
-        } else {
-            self.read_packet().await
-        }
-    }
-    
     async fn close(&mut self) -> Result<(), Self::Error> {
-        if self.is_connected {
-            let mut write_half = self.write_half.lock().await;
-            let _ = write_half.shutdown().await;
-            self.is_connected = false;
-            self.connection_info.state = ConnectionState::Closed;
-            self.connection_info.closed_at = Some(std::time::SystemTime::now());
+        tracing::debug!("🔗 关闭TCP连接 (会话: {})", self.session_id);
+        
+        // 发送关闭信号
+        let _ = self.shutdown_sender.send(());
+        
+        // 等待事件循环结束
+        if let Some(handle) = self.event_loop_handle.take() {
+            let _ = handle.await;
         }
+        
+        self.connection_info.state = ConnectionState::Closed;
+        self.connection_info.closed_at = Some(std::time::SystemTime::now());
+        
         Ok(())
     }
     
@@ -281,7 +320,7 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     }
     
     fn is_connected(&self) -> bool {
-        self.is_connected
+        self.connection_info.state == ConnectionState::Connected
     }
     
     fn stats(&self) -> AdapterStats {
@@ -298,18 +337,13 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     }
     
     async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 尝试读取但不消费数据
-        let mut buf = [0u8; 1];
-        match self.read_half.try_read(&mut buf) {
-            Ok(_) => Ok(true),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
-            Err(_) => Ok(false),
-        }
+        // 在事件驱动模式下，这个方法不再需要
+        // 数据可读性由事件循环处理
+        Ok(true)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        let mut write_half = self.write_half.lock().await;
-        write_half.flush().await?;
+        // 在事件驱动模式下，flush由事件循环自动处理
         Ok(())
     }
 }
@@ -321,65 +355,29 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     type Error = TcpError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        // 🔧 添加详细日志确认方法被调用（服务端版本）
-        tracing::debug!("🔍 TCP适配器开始发送数据包: ID={}, 大小={}bytes", 
-            packet.message_id, packet.payload.len());
-            
-        if !self.is_connected {
-            tracing::warn!("⚠️ TCP适配器: 连接已断开，无法发送数据包");
-            return Err(TcpError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotConnected,
-                "Connection not established"
-            )));
-        }
-
-        // 序列化数据包
-        let data = packet.to_bytes();
-        tracing::debug!("🔍 数据包序列化后大小: {}bytes", data.len());
-
-        // 🔧 修复：使用写半部发送数据
-        let mut write_half = self.write_half.lock().await;
-        tracing::debug!("🔍 开始写入TCP socket...");
+        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), self.session_id);
         
-        write_half.write_all(&data).await.map_err(|e| {
-            tracing::error!("❌ TCP write_all 失败: {:?}", e);
-            TcpError::Io(e)
-        })?;
+        // 通过队列发送数据包，事件循环会处理实际的发送
+        self.send_queue.send(packet)
+            .map_err(|_| TcpError::ConnectionClosed)?;
         
-        tracing::debug!("🔍 TCP write_all 成功，开始flush...");
-        write_half.flush().await.map_err(|e| {
-            tracing::error!("❌ TCP flush 失败: {:?}", e);
-            TcpError::Io(e)
-        })?;
-        
-        tracing::debug!("🔍 TCP flush 成功，数据包发送完成");
-
-        // 更新统计
-        self.stats.packets_sent += 1;
-        self.stats.bytes_sent += data.len() as u64;
-        self.connection_info.packets_sent += 1;
-        self.connection_info.bytes_sent += data.len() as u64;
-        self.connection_info.last_activity = std::time::SystemTime::now();
-
         Ok(())
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        if !self.is_connected {
-            return Ok(None);
-        }
-
-        self.read_packet().await
-    }
-    
     async fn close(&mut self) -> Result<(), Self::Error> {
-        if self.is_connected {
-            let mut write_half = self.write_half.lock().await;
-            let _ = write_half.shutdown().await;
-            self.is_connected = false;
-            self.connection_info.state = ConnectionState::Closed;
-            self.connection_info.closed_at = Some(std::time::SystemTime::now());
+        tracing::debug!("🔗 关闭TCP连接 (会话: {})", self.session_id);
+        
+        // 发送关闭信号
+        let _ = self.shutdown_sender.send(());
+        
+        // 等待事件循环结束
+        if let Some(handle) = self.event_loop_handle.take() {
+            let _ = handle.await;
         }
+        
+        self.connection_info.state = ConnectionState::Closed;
+        self.connection_info.closed_at = Some(std::time::SystemTime::now());
+        
         Ok(())
     }
     
@@ -388,7 +386,7 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     }
     
     fn is_connected(&self) -> bool {
-        self.is_connected
+        self.connection_info.state == ConnectionState::Connected
     }
     
     fn stats(&self) -> AdapterStats {
@@ -405,17 +403,13 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     }
     
     async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        let mut buf = [0u8; 1];
-        match self.read_half.try_read(&mut buf) {
-            Ok(_) => Ok(true),
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
-            Err(_) => Ok(false),
-        }
+        // 在事件驱动模式下，这个方法不再需要
+        // 数据可读性由事件循环处理
+        Ok(true)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        let mut write_half = self.write_half.lock().await;
-        write_half.flush().await?;
+        // 在事件驱动模式下，flush由事件循环自动处理
         Ok(())
     }
 }
@@ -482,7 +476,7 @@ impl TcpServer {
         
         tracing::debug!("🔗 TCP新连接来自: {}", peer_addr);
         
-        TcpAdapter::new(stream, self.config.clone()).await
+        TcpAdapter::new(stream, self.config.clone(), broadcast::channel(16).0).await
     }
     
     pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, TcpError> {

@@ -310,4 +310,9 @@ impl Connection for PluginConnection {
     async fn flush(&mut self) -> Result<(), TransportError> {
         self.inner.flush().await
     }
+    
+    /// 获取事件流 - 委托给内部连接
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        self.inner.get_event_stream()
+    }
 } 

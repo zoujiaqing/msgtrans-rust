@@ -21,7 +21,7 @@ use crate::{
 /// 
 /// 所有协议适配器都需要实现这个trait
 #[async_trait]
-pub trait Connection: Send + Sync {
+pub trait Connection: Send + Sync + std::any::Any {
     /// 发送数据包
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError>;
     
@@ -42,6 +42,13 @@ pub trait Connection: Send + Sync {
     
     /// 获取连接信息
     fn connection_info(&self) -> crate::command::ConnectionInfo;
+    
+    /// 获取事件流（如果支持）
+    /// 
+    /// 默认实现返回None，具体的连接类型可以重写此方法
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        None
+    }
 }
 
 /// 协议服务器的通用接口

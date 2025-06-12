@@ -123,9 +123,10 @@ impl TransportServer {
         }
     }
 
-    /// 添加新会话
+    /// 添加会话 - 使用连接已有的会话ID
     pub async fn add_session(&self, connection: Box<dyn crate::protocol::Connection>) -> SessionId {
-        let session_id = self.generate_session_id();
+        // 🔧 修复：使用连接已有的会话ID，而不是生成新的
+        let session_id = connection.session_id();
         let wrapped_connection = Arc::new(tokio::sync::Mutex::new(connection));
         self.connections.insert(session_id, wrapped_connection);
         self.stats.insert(session_id, TransportStats::new());
@@ -283,6 +284,9 @@ impl TransportServer {
                         connection.set_session_id(session_id);
                         tracing::info!("🆔 为 {} 连接生成会话ID: {}", protocol_name, session_id);
                         
+                        // 🔧 修复：在移动connection之前获取事件流
+                        let event_receiver = connection.get_event_stream();
+                        
                         // 添加到会话管理
                         let actual_session_id = server_clone.add_session(connection).await;
                         
@@ -294,69 +298,100 @@ impl TransportServer {
                         let _ = server_clone.event_sender.send(connect_event);
                         tracing::info!("📨 {} 连接事件已发送", protocol_name);
                         
-                        // 启动消息接收循环
-                        let event_sender = server_clone.event_sender.clone();
-                        let connections = server_clone.connections.clone();
-                        let server_for_cleanup = server_clone.clone();
+                        // 🔧 修复：不再启动错误的消息接收循环
+                        // TCP适配器已经有自己的事件循环来处理消息接收和事件发送
+                        // TransportServer只需要管理连接的生命周期
                         
-                        tokio::spawn(async move {
-                            tracing::info!("📥 消息接收循环开始: {}", actual_session_id);
+                        // 如果连接支持事件流，订阅其事件并转发
+                        if let Some(event_receiver) = event_receiver {
+                            let event_sender = server_clone.event_sender.clone();
+                            let server_for_cleanup = server_clone.clone();
                             
-                            loop {
-                                if let Some(connection) = connections.get(&actual_session_id) {
-                                    let mut conn = connection.lock().await;
-                                    match conn.receive().await {
-                                        Ok(Some(packet)) => {
-                                            tracing::info!("📥 收到消息: {} bytes (会话: {})", packet.payload.len(), actual_session_id);
-                                            
-                                            let event = TransportEvent::MessageReceived {
-                                                session_id: actual_session_id,
-                                                packet: packet.clone(),
-                                            };
-                                            
-                                            if let Err(e) = event_sender.send(event) {
-                                                tracing::error!("❌ 发送 MessageReceived 事件失败: {:?}", e);
-                                                break;
-                                            } else {
-                                                tracing::debug!("✅ MessageReceived 事件已发送: {}", actual_session_id);
-                                            }
-                                        }
-                                        Ok(None) => {
-                                            tracing::info!("🔚 连接已关闭: {}", actual_session_id);
-                                            break;
-                                        }
-                                        Err(e) => {
-                                            // 🔧 修复：区分正常连接关闭和真正的错误
-                                            let error_msg = format!("{:?}", e);
-                                            if error_msg.contains("Connection reset") || 
-                                               error_msg.contains("Connection closed") ||
-                                               error_msg.contains("ConnectionReset") ||
-                                               error_msg.contains("UnexpectedEof") ||
-                                               error_msg.contains("Broken pipe") {
-                                                tracing::info!("🔗 会话 {} 连接已被对端关闭: {}", actual_session_id, e);
-                                            } else {
-                                                tracing::error!("❌ 接收消息错误: {:?} (会话: {})", e, actual_session_id);
-                                            }
-                                            break;
-                                        }
+                            tokio::spawn(async move {
+                                tracing::info!("📡 开始监听连接事件: {}", actual_session_id);
+                                
+                                let mut receiver = event_receiver;
+                                while let Ok(event) = receiver.recv().await {
+                                    // 转发事件到服务器的事件流
+                                    if let Err(e) = event_sender.send(event.clone()) {
+                                        tracing::warn!("⚠️ 转发事件失败: {:?}", e);
+                                        break;
                                     }
-                                } else {
-                                    tracing::error!("❌ 会话 {} 的连接已不存在", actual_session_id);
-                                    break;
+                                    
+                                    // 如果是连接关闭事件，清理会话
+                                    if matches!(event, TransportEvent::ConnectionClosed { .. }) {
+                                        tracing::info!("🔗 检测到连接关闭事件，清理会话: {}", actual_session_id);
+                                        let _ = server_for_cleanup.remove_session(actual_session_id).await;
+                                        break;
+                                    }
                                 }
-                            }
+                                
+                                tracing::info!("📡 连接事件监听结束: {}", actual_session_id);
+                            });
+                        } else {
+                            tracing::warn!("⚠️ 连接不支持事件流，使用传统消息接收循环: {}", actual_session_id);
                             
-                            // 🔧 关键修复：消息接收循环结束时清理连接
-                            tracing::info!("📥 消息接收循环结束，清理会话: {}", actual_session_id);
-                            let _ = server_for_cleanup.remove_session(actual_session_id).await;
+                            // 对于不支持事件流的连接，保留传统的消息接收循环
+                            let event_sender = server_clone.event_sender.clone();
+                            let connections = server_clone.connections.clone();
+                            let server_for_cleanup = server_clone.clone();
                             
-                            // 发送连接关闭事件
-                            let close_event = TransportEvent::ConnectionClosed { 
-                                session_id: actual_session_id,
-                                reason: crate::error::CloseReason::Error("Connection closed".to_string()),
-                            };
-                            let _ = event_sender.send(close_event);
-                        });
+                            tokio::spawn(async move {
+                                tracing::info!("📥 传统消息接收循环开始: {}", actual_session_id);
+                                
+                                loop {
+                                    if let Some(connection) = connections.get(&actual_session_id) {
+                                        let mut conn = connection.lock().await;
+                                        match conn.receive().await {
+                                            Ok(Some(packet)) => {
+                                                tracing::info!("📥 收到消息: {} bytes (会话: {})", packet.payload.len(), actual_session_id);
+                                                
+                                                let event = TransportEvent::MessageReceived {
+                                                    session_id: actual_session_id,
+                                                    packet: packet.clone(),
+                                                };
+                                                
+                                                if let Err(e) = event_sender.send(event) {
+                                                    tracing::error!("❌ 发送 MessageReceived 事件失败: {:?}", e);
+                                                    break;
+                                                } else {
+                                                    tracing::debug!("✅ MessageReceived 事件已发送: {}", actual_session_id);
+                                                }
+                                            }
+                                            Ok(None) => {
+                                                tracing::info!("🔚 连接已关闭: {}", actual_session_id);
+                                                break;
+                                            }
+                                            Err(e) => {
+                                                let error_msg = format!("{:?}", e);
+                                                if error_msg.contains("Connection reset") || 
+                                                   error_msg.contains("Connection closed") ||
+                                                   error_msg.contains("ConnectionReset") ||
+                                                   error_msg.contains("UnexpectedEof") ||
+                                                   error_msg.contains("Broken pipe") {
+                                                    tracing::info!("🔗 会话 {} 连接已被对端关闭: {}", actual_session_id, e);
+                                                } else {
+                                                    tracing::error!("❌ 接收消息错误: {:?} (会话: {})", e, actual_session_id);
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    } else {
+                                        tracing::error!("❌ 会话 {} 的连接已不存在", actual_session_id);
+                                        break;
+                                    }
+                                }
+                                
+                                tracing::info!("📥 传统消息接收循环结束，清理会话: {}", actual_session_id);
+                                let _ = server_for_cleanup.remove_session(actual_session_id).await;
+                                
+                                let close_event = TransportEvent::ConnectionClosed { 
+                                    session_id: actual_session_id,
+                                    reason: crate::error::CloseReason::Error("Connection closed".to_string()),
+                                };
+                                let _ = event_sender.send(close_event);
+                            });
+                        }
                     }
                     Err(e) => {
                         tracing::error!("❌ {} 接受连接失败: {:?}", protocol_name, e);

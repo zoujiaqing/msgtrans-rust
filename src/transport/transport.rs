@@ -172,6 +172,20 @@ impl Transport {
     pub fn connection_adapter(&self) -> Option<Arc<Mutex<dyn Connection>>> {
         self.connection_adapter.clone()
     }
+    
+    /// 获取连接的事件流（如果支持）
+    /// 
+    /// 这个方法尝试将连接转换为支持事件流的类型
+    pub async fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        if let Some(connection_adapter) = &self.connection_adapter {
+            let conn = connection_adapter.lock().await;
+            
+            // 直接调用Connection的get_event_stream方法
+            return conn.get_event_stream();
+        }
+        
+        None
+    }
 }
 
 impl Clone for Transport {
