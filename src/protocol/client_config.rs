@@ -702,9 +702,9 @@ impl QuicClientConfig {
     }
 }
 
-impl DynProtocolConfig for TcpClientConfig {
+impl DynProtocolConfig for QuicClientConfig {
     fn protocol_name(&self) -> &'static str {
-        "tcp"
+        "quic"
     }
     
     fn validate_dyn(&self) -> Result<(), ConfigError> {
@@ -716,6 +716,24 @@ impl DynProtocolConfig for TcpClientConfig {
     }
     
     fn clone_dyn(&self) -> Box<dyn DynProtocolConfig> {
+        Box::new(self.clone())
+    }
+}
+
+/// 🔧 新增：实现 WebSocket 客户端专用配置
+impl crate::protocol::adapter::DynClientConfig for WebSocketClientConfig {
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>> {
+        Box::pin(async move {
+            let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
+            Ok(Box::new(connection) as Box<dyn crate::protocol::Connection>)
+        })
+    }
+    
+    fn get_target_info(&self) -> String {
+        self.target_url.clone()
+    }
+    
+    fn clone_client_dyn(&self) -> Box<dyn crate::protocol::adapter::DynClientConfig> {
         Box::new(self.clone())
     }
 }
@@ -738,27 +756,27 @@ impl crate::protocol::adapter::DynClientConfig for TcpClientConfig {
     }
 }
 
-impl DynProtocolConfig for WebSocketClientConfig {
-    fn protocol_name(&self) -> &'static str {
-        "websocket"
+/// 🔧 新增：实现 QUIC 客户端专用配置
+impl crate::protocol::adapter::DynClientConfig for QuicClientConfig {
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>> {
+        Box::pin(async move {
+            let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
+            Ok(Box::new(connection) as Box<dyn crate::protocol::Connection>)
+        })
     }
     
-    fn validate_dyn(&self) -> Result<(), ConfigError> {
-        ProtocolConfig::validate(self)
+    fn get_target_info(&self) -> String {
+        self.target_address.to_string()
     }
     
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-    
-    fn clone_dyn(&self) -> Box<dyn DynProtocolConfig> {
+    fn clone_client_dyn(&self) -> Box<dyn crate::protocol::adapter::DynClientConfig> {
         Box::new(self.clone())
     }
 }
 
-impl DynProtocolConfig for QuicClientConfig {
+impl DynProtocolConfig for TcpClientConfig {
     fn protocol_name(&self) -> &'static str {
-        "quic"
+        "tcp"
     }
     
     fn validate_dyn(&self) -> Result<(), ConfigError> {
@@ -852,5 +870,23 @@ impl crate::transport::client::ConnectableConfig for QuicClientConfig {
     
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+impl DynProtocolConfig for WebSocketClientConfig {
+    fn protocol_name(&self) -> &'static str {
+        "websocket"
+    }
+    
+    fn validate_dyn(&self) -> Result<(), ConfigError> {
+        ProtocolConfig::validate(self)
+    }
+    
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    
+    fn clone_dyn(&self) -> Box<dyn DynProtocolConfig> {
+        Box::new(self.clone())
     }
 } 
