@@ -1,3 +1,11 @@
+/// 🔧 事件驱动QUIC适配器
+/// 
+/// 这是QUIC适配器的现代化版本TODO，支持：
+/// - 双向流复用
+/// - 事件驱动架构
+/// - 读写分离
+/// - 异步队列
+
 use async_trait::async_trait;
 use quinn::{
     Endpoint, ServerConfig, ClientConfig, Connection, RecvStream, SendStream,
