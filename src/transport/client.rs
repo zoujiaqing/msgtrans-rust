@@ -255,7 +255,7 @@ impl TransportClient {
     }
     
     /// 🔌 使用构建时指定的协议配置进行连接 - 框架唯一连接方式
-    pub async fn connect(&mut self) -> Result<SessionId, TransportError> {
+    pub async fn connect(&mut self) -> Result<(), TransportError> {
         // 检查是否有协议配置并克隆以避免借用冲突
         let protocol_config = self.protocol_config.as_ref()
             .ok_or_else(|| TransportError::config_error("protocol", 
@@ -268,12 +268,12 @@ impl TransportClient {
         // 使用存储的协议配置连接
         let session_id = self.connect_with_stored_config(&protocol_config).await?;
         
-        // 更新当前会话ID
+        // 更新当前会话ID (内部使用)
         let mut current_session = self.current_session_id.write().await;
         *current_session = Some(session_id);
         
-        tracing::info!("✅ TransportClient 连接成功: {:?}", session_id);
-        Ok(session_id)
+        tracing::info!("✅ TransportClient 连接成功");
+        Ok(())
     }
 
     /// 🔧 内部方法：使用存储的协议配置连接
@@ -348,12 +348,13 @@ impl TransportClient {
     
     /// 📡 断开连接
     pub async fn disconnect(&mut self) -> Result<(), TransportError> {
-        // 清除当前会话ID
+        // 检查是否已连接
         let mut current_session = self.current_session_id.write().await;
-        if let Some(session_id) = current_session.take() {
+        if current_session.is_some() {
+            current_session.take(); // 清除会话ID
             drop(current_session);
             
-            tracing::info!("TransportClient 断开连接 (会话: {})", session_id);
+            tracing::info!("TransportClient 断开连接");
             self.inner.disconnect().await?;
             Ok(())
         } else {
@@ -376,35 +377,29 @@ impl TransportClient {
         self.inner.is_connected()
     }
     
-    /// 🔍 获取当前会话ID (仅用于调试)
-    pub async fn current_session(&self) -> Option<SessionId> {
-        self.inner.current_session_id()
-    }
-    
-    /// 获取客户端事件流 - 返回当前连接的事件流
-    pub async fn events(&self) -> Result<EventStream, TransportError> {
+    /// 获取客户端事件流 - 返回当前连接的事件流（隐藏会话ID）
+    pub async fn events(&self) -> Result<crate::stream::ClientEventStream, TransportError> {
         use crate::stream::StreamFactory;
-        use crate::event::TransportEvent;
         
-        // 如果已连接，尝试获取连接的事件流
-        if let Some(session_id) = self.current_session().await {
-            // 🔧 修复：直接使用Transport的事件流
-            if let Some(event_receiver) = self.inner.get_event_stream().await {
-                tracing::debug!("✅ TransportClient 获取到TCP适配器的事件流");
-                
-                // 发送连接已建立的事件（如果需要）
-                // 注意：TCP适配器的事件循环已经会发送这个事件，所以这里可能不需要重复发送
-                
-                tracing::debug!("📡 TransportClient 事件流创建完成 (使用TCP适配器事件流)");
-                return Ok(StreamFactory::event_stream(event_receiver));
-            } else {
-                // 如果无法获取事件流，返回错误
-                return Err(TransportError::connection_error("Connection does not support event streams", false));
-            }
-        } else {
-            // 如果未连接，返回错误
+        // 检查是否已连接
+        if !self.is_connected().await {
             return Err(TransportError::connection_error("Not connected - call connect() first", false));
         }
+        
+        // 🔧 修复：直接使用Transport的事件流，不再依赖会话ID
+        if let Some(event_receiver) = self.inner.get_event_stream().await {
+            tracing::debug!("✅ TransportClient 获取到连接适配器的事件流");
+            tracing::debug!("📡 TransportClient 客户端事件流创建完成");
+            return Ok(StreamFactory::client_event_stream(event_receiver));
+        } else {
+            // 如果无法获取事件流，返回错误
+            return Err(TransportError::connection_error("Connection does not support event streams", false));
+        }
+    }
+    
+    /// 🔍 内部方法：获取当前会话ID (仅用于内部调试)
+    async fn current_session(&self) -> Option<SessionId> {
+        self.inner.current_session_id()
     }
     
     /// 获取客户端连接统计

@@ -68,6 +68,11 @@ impl From<SessionId> for u64 {
 
 // 重新导出核心类型
 pub use packet::{Packet, PacketType, PacketError};
+pub use event::{TransportEvent, ClientEvent, TcpEvent, WebSocketEvent, QuicEvent};
+pub use error::{TransportError, CloseReason};
+pub use command::{TransportCommand, TransportStats, ConnectionInfo};
+pub use stream::{EventStream, PacketStream, ClientEventStream};
+
 pub use transport::{
     TransportConfig, ExpertConfig, SmartPoolConfig, PerformanceConfig,
     // 核心传输类型
@@ -86,10 +91,6 @@ pub use transport::{
     // LockFree 基础组件
     LockFreeHashMap, LockFreeQueue, LockFreeCounter,
 };
-pub use event::TransportEvent;  // 🔧 移除别名，直接导出TransportEvent
-pub use stream::EventStream;
-pub use error::{TransportError, CloseReason};
-pub use command::{ConnectionInfo, TransportStats};
 
 pub use protocol::{TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebSocketServerConfig, QuicClientConfig, QuicServerConfig, ServerConfig, ClientConfig};
 // 重新导出新的抽象

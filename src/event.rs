@@ -305,4 +305,78 @@ impl ProtocolEvent for QuicEvent {
     fn is_error_event(&self) -> bool {
         false
     }
+}
+
+/// 客户端专用事件 - 隐藏会话ID概念
+#[derive(Debug, Clone)]
+pub enum ClientEvent {
+    /// 连接建立
+    Connected { 
+        info: crate::command::ConnectionInfo 
+    },
+    /// 连接关闭
+    Disconnected { 
+        reason: crate::error::CloseReason 
+    },
+    /// 收到消息
+    MessageReceived { 
+        packet: crate::packet::Packet 
+    },
+    /// 消息发送成功
+    MessageSent { 
+        packet_id: crate::PacketId 
+    },
+    /// 传输错误
+    Error { 
+        error: crate::error::TransportError 
+    },
+}
+
+impl ClientEvent {
+    /// 从TransportEvent转换为ClientEvent，隐藏会话ID
+    pub fn from_transport_event(event: TransportEvent) -> Option<Self> {
+        match event {
+            TransportEvent::ConnectionEstablished { info, .. } => {
+                Some(ClientEvent::Connected { info })
+            }
+            TransportEvent::ConnectionClosed { reason, .. } => {
+                Some(ClientEvent::Disconnected { reason })
+            }
+            TransportEvent::MessageReceived { packet, .. } => {
+                Some(ClientEvent::MessageReceived { packet })
+            }
+            TransportEvent::MessageSent { packet_id, .. } => {
+                Some(ClientEvent::MessageSent { packet_id })
+            }
+            TransportEvent::TransportError { error, .. } => {
+                Some(ClientEvent::Error { error })
+            }
+            // 忽略服务器专用事件
+            TransportEvent::ServerStarted { .. } | 
+            TransportEvent::ServerStopped |
+            TransportEvent::ClientConnected { .. } |
+            TransportEvent::ClientDisconnected => None,
+        }
+    }
+    
+    /// 判断是否为连接相关事件
+    pub fn is_connection_event(&self) -> bool {
+        matches!(self, 
+            ClientEvent::Connected { .. } | 
+            ClientEvent::Disconnected { .. }
+        )
+    }
+    
+    /// 判断是否为数据传输事件
+    pub fn is_data_event(&self) -> bool {
+        matches!(self, 
+            ClientEvent::MessageReceived { .. } | 
+            ClientEvent::MessageSent { .. }
+        )
+    }
+    
+    /// 判断是否为错误事件
+    pub fn is_error_event(&self) -> bool {
+        matches!(self, ClientEvent::Error { .. })
+    }
 } 

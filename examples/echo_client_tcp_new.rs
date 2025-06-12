@@ -8,9 +8,8 @@ use msgtrans::{
     transport::{client::TransportClientBuilder},
     protocol::TcpClientConfig,
     packet::Packet,
-    event::TransportEvent,
+    event::ClientEvent,
 };
-use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔌 准备连接到服务器: {}", tcp_config.target_address);
 
     // 🔧 修正：使用TransportClientBuilder构建标准客户端
-    let mut client_transport = TransportClientBuilder::new()
+    let mut transport = TransportClientBuilder::new()
         .with_protocol(tcp_config)
         .connect_timeout(Duration::from_secs(10))
         .enable_connection_monitoring(true)
@@ -50,44 +49,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ 客户端Transport构建成功");
 
     // 建立连接
-    client_transport.connect().await?;
+    transport.connect().await?;
     println!("✅ 连接建立成功");
 
     // 获取事件流来接收回显消息
-    let mut events = client_transport.events().await?;
+    let mut events = transport.events().await?;
     
     // 启动接收任务来处理回显
     let receiver_task = tokio::spawn(async move {
         println!("🎧 开始监听回显事件...");
         let mut received_count = 0u64;
         
-        while let Some(event) = events.next().await {
-            match event {
-                TransportEvent::MessageReceived { session_id, packet } => {
-                    received_count += 1;
-                    let message = String::from_utf8_lossy(&packet.payload);
-                    println!("📥 收到回显 #{}: (会话: {}, ID: {})", received_count, session_id, packet.message_id);
-                    println!("   内容: \"{}\"", message);
-                    
-                    // 检查是否是最后一条消息
-                    if message.contains("Message #4") {
-                        println!("🎯 收到最后一条回显，准备结束");
-                        break;
+        loop {
+            match events.next().await {
+                Ok(event) => {
+                    match event {
+                        ClientEvent::MessageReceived { packet } => {
+                            received_count += 1;
+                            let message = String::from_utf8_lossy(&packet.payload);
+                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.message_id);
+                            println!("   内容: \"{}\"", message);
+                            
+                            // 检查是否是最后一条消息
+                            if message.contains("Message #4") {
+                                println!("🎯 收到最后一条回显，准备结束");
+                                break;
+                            }
+                        }
+                        ClientEvent::Disconnected { reason } => {
+                            println!("🔌 连接已关闭: {:?}", reason);
+                            break;
+                        }
+                        ClientEvent::Connected { info } => {
+                            println!("🔗 连接已建立: {} ↔ {}", info.local_addr, info.peer_addr);
+                        }
+                        ClientEvent::Error { error } => {
+                            println!("⚠️ 传输错误: {:?}", error);
+                            break;
+                        }
+                        ClientEvent::MessageSent { packet_id } => {
+                            println!("ℹ️ 消息发送确认: ID {}", packet_id);
+                        }
                     }
                 }
-                TransportEvent::ConnectionClosed { session_id, reason } => {
-                    println!("🔌 连接已关闭 (会话: {}): {:?}", session_id, reason);
+                Err(e) => {
+                    println!("❌ 事件接收错误: {:?}", e);
                     break;
-                }
-                TransportEvent::ConnectionEstablished { session_id, .. } => {
-                    println!("🔗 连接已建立 (会话: {})", session_id);
-                }
-                TransportEvent::TransportError { session_id, error } => {
-                    println!("⚠️ 传输错误 (会话: {:?}): {:?}", session_id, error);
-                    break;
-                }
-                _ => {
-                    println!("ℹ️ 其他事件: {:?}", event);
                 }
             }
         }
@@ -112,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 🔧 使用标准的客户端发送方法
         let packet = Packet::data((i as u32) + 1, message.as_bytes());
         
-        match client_transport.send(packet).await {
+        match transport.send(packet).await {
             Ok(_) => {
                 println!("✅ 消息 #{} 发送成功（通过Transport）", i + 1);
             }
@@ -147,7 +154,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 关闭连接
     println!("👋 关闭客户端连接...");
-    if let Err(e) = client_transport.disconnect().await {
+    if let Err(e) = transport.disconnect().await {
         println!("❌ 关闭连接失败: {:?}", e);
     } else {
         println!("✅ 连接已关闭");

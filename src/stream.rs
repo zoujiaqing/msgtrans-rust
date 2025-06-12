@@ -334,6 +334,11 @@ impl StreamFactory {
     ) -> PacketStream {
         PacketStream::with_session_filter(receiver, session_id)
     }
+    
+    /// 创建客户端事件流（隐藏会话ID）
+    pub fn client_event_stream(receiver: tokio::sync::broadcast::Receiver<crate::event::TransportEvent>) -> ClientEventStream {
+        ClientEventStream::new(receiver)
+    }
 }
 
 /// 流组合器
@@ -404,5 +409,64 @@ impl ReceiverExt for broadcast::Receiver<TransportEvent> {
     
     fn into_connection_stream(self) -> ConnectionStream {
         ConnectionStream::new(self)
+    }
+}
+
+/// 客户端事件流 - 隐藏会话ID概念
+pub struct ClientEventStream {
+    inner: tokio::sync::broadcast::Receiver<crate::event::TransportEvent>,
+}
+
+impl ClientEventStream {
+    /// 创建新的客户端事件流
+    pub fn new(receiver: tokio::sync::broadcast::Receiver<crate::event::TransportEvent>) -> Self {
+        Self { inner: receiver }
+    }
+    
+    /// 接收下一个客户端事件
+    pub async fn next(&mut self) -> Result<crate::event::ClientEvent, crate::error::TransportError> {
+        loop {
+            match self.inner.recv().await {
+                Ok(transport_event) => {
+                    // 转换为客户端事件，过滤掉不相关的事件
+                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
+                        return Ok(client_event);
+                    }
+                    // 如果是不相关的事件，继续循环等待下一个事件
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(crate::error::TransportError::connection_error("Event stream closed", false));
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // 事件流滞后，继续接收
+                    continue;
+                }
+            }
+        }
+    }
+    
+    /// 尝试接收事件（非阻塞）
+    pub fn try_next(&mut self) -> Result<Option<crate::event::ClientEvent>, crate::error::TransportError> {
+        loop {
+            match self.inner.try_recv() {
+                Ok(transport_event) => {
+                    // 转换为客户端事件，过滤掉不相关的事件
+                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
+                        return Ok(Some(client_event));
+                    }
+                    // 如果是不相关的事件，继续循环
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                    return Ok(None);
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    return Err(crate::error::TransportError::connection_error("Event stream closed", false));
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                    // 事件流滞后，继续接收
+                    continue;
+                }
+            }
+        }
     }
 } 
