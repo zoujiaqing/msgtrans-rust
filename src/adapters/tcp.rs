@@ -52,8 +52,8 @@ impl From<TcpError> for TransportError {
 
 /// TCP协议适配器 - 事件驱动版本
 pub struct TcpAdapter<C> {
-    /// 会话ID
-    session_id: SessionId,
+    /// 会话ID (使用原子类型以便事件循环访问)
+    session_id: Arc<std::sync::atomic::AtomicU64>,
     /// 配置
     config: C,
     /// 统计信息
@@ -86,7 +86,7 @@ impl<C> TcpAdapter<C> {
         connection_info.state = ConnectionState::Connected;
         connection_info.established_at = std::time::SystemTime::now();
         
-        let session_id = SessionId::new(0); // 临时ID，稍后会被设置
+        let session_id = Arc::new(std::sync::atomic::AtomicU64::new(0)); // 临时ID，稍后会被设置
         
         // 创建通信通道
         let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
@@ -95,7 +95,7 @@ impl<C> TcpAdapter<C> {
         // 启动事件循环
         let event_loop_handle = Self::start_event_loop(
             stream,
-            session_id,
+            session_id.clone(),
             send_queue_rx,
             shutdown_rx,
             event_sender.clone(),
@@ -123,28 +123,32 @@ impl<C> TcpAdapter<C> {
     /// 启动基于 tokio::select! 的事件循环
     async fn start_event_loop(
         stream: TcpStream,
-        session_id: SessionId,
+        session_id: Arc<std::sync::atomic::AtomicU64>,
         mut send_queue: mpsc::UnboundedReceiver<Packet>,
         mut shutdown_signal: mpsc::UnboundedReceiver<()>,
         event_sender: broadcast::Sender<TransportEvent>,
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
-            tracing::debug!("🚀 TCP事件循环启动 (会话: {})", session_id);
+            let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+            tracing::debug!("🚀 TCP事件循环启动 (会话: {})", current_session_id);
             
             // 分离读写流
             let (mut read_half, mut write_half) = stream.into_split();
             
             loop {
+                // 获取当前会话ID
+                let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+                
                 tokio::select! {
                     // 🔍 处理接收数据
                     read_result = Self::read_packet_from_stream(&mut read_half) => {
                         match read_result {
                             Ok(Some(packet)) => {
-                                tracing::debug!("📥 TCP接收到数据包: {} bytes (会话: {})", packet.payload.len(), session_id);
+                                tracing::debug!("📥 TCP接收到数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
                                 
                                 // 发送接收事件
                                 let event = TransportEvent::MessageReceived {
-                                    session_id,
+                                    session_id: current_session_id,
                                     packet,
                                 };
                                 
@@ -153,11 +157,11 @@ impl<C> TcpAdapter<C> {
                                 }
                             }
                             Ok(None) => {
-                                tracing::info!("🔗 TCP连接已关闭 (会话: {})", session_id);
+                                tracing::info!("🔗 TCP连接已关闭 (会话: {})", current_session_id);
                                 break;
                             }
                             Err(e) => {
-                                tracing::error!("📥 TCP读取错误: {:?} (会话: {})", e, session_id);
+                                tracing::error!("📥 TCP读取错误: {:?} (会话: {})", e, current_session_id);
                                 break;
                             }
                         }
@@ -168,11 +172,11 @@ impl<C> TcpAdapter<C> {
                         if let Some(packet) = packet {
                             match Self::write_packet_to_stream(&mut write_half, &packet).await {
                                 Ok(_) => {
-                                    tracing::debug!("📤 TCP发送成功: {} bytes (会话: {})", packet.payload.len(), session_id);
+                                    tracing::debug!("📤 TCP发送成功: {} bytes (会话: {})", packet.payload.len(), current_session_id);
                                     
                                     // 发送发送事件
                                     let event = TransportEvent::MessageSent {
-                                        session_id,
+                                        session_id: current_session_id,
                                         packet_id: packet.message_id,
                                     };
                                     
@@ -181,7 +185,7 @@ impl<C> TcpAdapter<C> {
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!("📤 TCP发送错误: {:?} (会话: {})", e, session_id);
+                                    tracing::error!("📤 TCP发送错误: {:?} (会话: {})", e, current_session_id);
                                     break;
                                 }
                             }
@@ -190,15 +194,16 @@ impl<C> TcpAdapter<C> {
                     
                     // 🛑 处理关闭信号
                     _ = shutdown_signal.recv() => {
-                        tracing::info!("🛑 收到关闭信号，停止TCP事件循环 (会话: {})", session_id);
+                        tracing::info!("🛑 收到关闭信号，停止TCP事件循环 (会话: {})", current_session_id);
                         break;
                     }
                 }
             }
             
             // 发送连接关闭事件
+            let final_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
             let close_event = TransportEvent::ConnectionClosed {
-                session_id,
+                session_id: final_session_id,
                 reason: crate::error::CloseReason::Normal,
             };
             
@@ -206,7 +211,7 @@ impl<C> TcpAdapter<C> {
                 tracing::warn!("🔗 发送关闭事件失败: {:?}", e);
             }
             
-            tracing::debug!("✅ TCP事件循环已结束 (会话: {})", session_id);
+            tracing::debug!("✅ TCP事件循环已结束 (会话: {})", final_session_id);
         })
     }
     
@@ -289,7 +294,8 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     type Error = TcpError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), self.session_id);
+        let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
+        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
         
         // 通过队列发送数据包，事件循环会处理实际的发送
         self.send_queue.send(packet)
@@ -299,7 +305,8 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
-        tracing::debug!("🔗 关闭TCP连接 (会话: {})", self.session_id);
+        let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
+        tracing::debug!("🔗 关闭TCP连接 (会话: {})", current_session_id);
         
         // 发送关闭信号
         let _ = self.shutdown_sender.send(());
@@ -328,11 +335,11 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     }
     
     fn session_id(&self) -> SessionId {
-        self.session_id
+        SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst))
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        self.session_id = session_id;
+        self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
         self.connection_info.session_id = session_id;
     }
     
@@ -355,7 +362,8 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     type Error = TcpError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), self.session_id);
+        let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
+        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
         
         // 通过队列发送数据包，事件循环会处理实际的发送
         self.send_queue.send(packet)
@@ -365,7 +373,8 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
-        tracing::debug!("🔗 关闭TCP连接 (会话: {})", self.session_id);
+        let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
+        tracing::debug!("🔗 关闭TCP连接 (会话: {})", current_session_id);
         
         // 发送关闭信号
         let _ = self.shutdown_sender.send(());
@@ -394,11 +403,11 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     }
     
     fn session_id(&self) -> SessionId {
-        self.session_id
+        SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst))
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        self.session_id = session_id;
+        self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
         self.connection_info.session_id = session_id;
     }
     

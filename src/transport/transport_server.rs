@@ -45,7 +45,7 @@ impl TransportServer {
         Ok(Self {
             config,
             connections: Arc::new(LockFreeHashMap::new()),
-            session_id_generator: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            session_id_generator: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             stats: Arc::new(LockFreeHashMap::new()),
             event_sender,
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -63,7 +63,7 @@ impl TransportServer {
         Ok(Self {
             config,
             connections: Arc::new(LockFreeHashMap::new()),
-            session_id_generator: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            session_id_generator: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             stats: Arc::new(LockFreeHashMap::new()),
             event_sender,
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
