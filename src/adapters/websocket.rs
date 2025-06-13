@@ -1,13 +1,13 @@
 use async_trait::async_trait;
-use tokio_tungstenite::{
+use tokio_tungstenite::{MaybeTlsStream,
     tungstenite::{protocol::Message, Error as TungsteniteError},
-    WebSocketStream, MaybeTlsStream,
+    WebSocketStream,
     accept_async, connect_async,
 };
 use tokio::net::{TcpListener, TcpStream};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast, mpsc};
 
 use crate::{
     SessionId,
@@ -15,6 +15,7 @@ use crate::{
     packet::Packet,
     protocol::{ProtocolAdapter, AdapterStats, ProtocolConfig, WebSocketClientConfig, WebSocketServerConfig},
     command::{ConnectionInfo, ConnectionState},
+    event::TransportEvent,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -47,36 +48,232 @@ impl From<WebSocketError> for TransportError {
     }
 }
 
+/// WebSocket协议适配器 - 事件驱动版本
 pub struct WebSocketAdapter<C> {
+    /// 会话ID (使用原子类型以便事件循环访问)
+    session_id: Arc<std::sync::atomic::AtomicU64>,
+    /// 配置
     config: C,
-    session_id: SessionId,
+    /// 统计信息
     stats: AdapterStats,
+    /// 连接信息
     connection_info: ConnectionInfo,
-    // WebSocket连接流 - 支持TLS和非TLS连接
-    stream: Option<Arc<Mutex<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
-    is_connected: bool,
+    /// 发送队列
+    send_queue: mpsc::UnboundedSender<Packet>,
+    /// 事件发送器
+    event_sender: broadcast::Sender<TransportEvent>,
+    /// 关闭信号发送器
+    shutdown_sender: mpsc::UnboundedSender<()>,
+    /// 事件循环句柄
+    event_loop_handle: Option<tokio::task::JoinHandle<()>>,
+    /// 连接状态
+    is_connected: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<C> WebSocketAdapter<C> {
     pub fn new(config: C) -> Self {
+        let (event_sender, _) = broadcast::channel(1000);
+        let (send_queue_tx, _) = mpsc::unbounded_channel();
+        let (shutdown_tx, _) = mpsc::unbounded_channel();
+        
         Self {
+            session_id: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             config,
-            session_id: SessionId::new(0),
             stats: AdapterStats::new(),
             connection_info: ConnectionInfo::default(),
-            stream: None,
-            is_connected: false,
+            send_queue: send_queue_tx,
+            event_sender,
+            shutdown_sender: shutdown_tx,
+            event_loop_handle: None,
+            is_connected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
     
-    pub fn new_with_stream(config: C, stream: WebSocketStream<MaybeTlsStream<TcpStream>>) -> Self {
-        Self {
+    /// 创建带有WebSocket流的适配器
+    pub async fn new_with_stream(config: C, stream: WebSocketStream<MaybeTlsStream<TcpStream>>, event_sender: broadcast::Sender<TransportEvent>) -> Result<Self, WebSocketError> {
+        let mut connection_info = ConnectionInfo::default();
+        connection_info.protocol = "websocket".to_string();
+        connection_info.state = ConnectionState::Connected;
+        connection_info.established_at = std::time::SystemTime::now();
+        
+        let session_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let is_connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        
+        // 创建通信通道
+        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
+        
+        // 启动事件循环
+        let event_loop_handle = Self::start_event_loop(
+            stream,
+            session_id.clone(),
+            is_connected.clone(),
+            send_queue_rx,
+            shutdown_rx,
+            event_sender.clone(),
+        ).await;
+        
+        Ok(Self {
+            session_id,
             config,
-            session_id: SessionId::new(0),
             stats: AdapterStats::new(),
-            connection_info: ConnectionInfo::default(),
-            stream: Some(Arc::new(Mutex::new(stream))),
-            is_connected: true,
+            connection_info,
+            send_queue: send_queue_tx,
+            event_sender,
+            shutdown_sender: shutdown_tx,
+            event_loop_handle: Some(event_loop_handle),
+            is_connected,
+        })
+    }
+    
+    /// 获取事件流接收器
+    pub fn subscribe_events(&self) -> broadcast::Receiver<TransportEvent> {
+        self.event_sender.subscribe()
+    }
+
+    /// 启动基于 tokio::select! 的事件循环
+    async fn start_event_loop(
+        mut stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        session_id: Arc<std::sync::atomic::AtomicU64>,
+        is_connected: Arc<std::sync::atomic::AtomicBool>,
+        mut send_queue: mpsc::UnboundedReceiver<Packet>,
+        mut shutdown_signal: mpsc::UnboundedReceiver<()>,
+        event_sender: broadcast::Sender<TransportEvent>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+            tracing::debug!("🚀 WebSocket事件循环启动 (会话: {})", current_session_id);
+            
+            loop {
+                // 获取当前会话ID
+                let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+                
+                tokio::select! {
+                    // 🔍 处理接收数据
+                    read_result = stream.next() => {
+                        match read_result {
+                            Some(Ok(message)) => {
+                                match Self::process_websocket_message(message) {
+                                    Ok(Some(packet)) => {
+                                        tracing::debug!("📥 WebSocket接收到数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
+                                        
+                                        // 发送接收事件
+                                        let event = TransportEvent::MessageReceived {
+                                            session_id: current_session_id,
+                                            packet,
+                                        };
+                                        
+                                        if let Err(e) = event_sender.send(event) {
+                                            tracing::warn!("📥 发送接收事件失败: {:?}", e);
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        // 心跳消息，继续循环
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("📥 WebSocket消息处理错误: {:?} (会话: {})", e, current_session_id);
+                                        is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
+                                        break;
+                                    }
+                                }
+                            }
+                            Some(Err(e)) => {
+                                tracing::error!("📥 WebSocket读取错误: {:?} (会话: {})", e, current_session_id);
+                                is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
+                                break;
+                            }
+                            None => {
+                                tracing::info!("🔗 WebSocket连接已关闭 (会话: {})", current_session_id);
+                                is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // 📤 处理发送数据
+                    packet = send_queue.recv() => {
+                        if let Some(packet) = packet {
+                            let serialized_data = packet.to_bytes();
+                            let message = Message::Binary(serialized_data.to_vec());
+                            
+                            match stream.send(message).await {
+                                Ok(_) => {
+                                    tracing::debug!("📤 WebSocket发送成功: {} bytes (会话: {})", packet.payload.len(), current_session_id);
+                                    
+                                    // 发送发送事件
+                                    let event = TransportEvent::MessageSent {
+                                        session_id: current_session_id,
+                                        packet_id: packet.message_id,
+                                    };
+                                    
+                                    if let Err(e) = event_sender.send(event) {
+                                        tracing::warn!("📤 发送发送事件失败: {:?}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("📤 WebSocket发送错误: {:?} (会话: {})", e, current_session_id);
+                                    is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 🛑 处理关闭信号
+                    _ = shutdown_signal.recv() => {
+                        tracing::info!("🛑 收到关闭信号，停止WebSocket事件循环 (会话: {})", current_session_id);
+                        break;
+                    }
+                }
+            }
+            
+            // 发送连接关闭事件
+            let final_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+            let close_event = TransportEvent::ConnectionClosed {
+                session_id: final_session_id,
+                reason: crate::error::CloseReason::Normal,
+            };
+            
+            if let Err(e) = event_sender.send(close_event) {
+                tracing::warn!("🔗 发送关闭事件失败: {:?}", e);
+            } else {
+                tracing::warn!("🔗 发送关闭事件失败: SendError(ConnectionClosed {{ session_id: {}, reason: Normal }})", final_session_id);
+            }
+            
+            tracing::debug!("✅ WebSocket事件循环已结束 (会话: {})", final_session_id);
+        })
+    }
+    
+    /// 处理WebSocket消息
+    fn process_websocket_message(message: Message) -> Result<Option<Packet>, WebSocketError> {
+        match message {
+            Message::Binary(data) => {
+                // 尝试从二进制数据解析Packet
+                match Packet::from_bytes(&data) {
+                    Ok(packet) => Ok(Some(packet)),
+                    Err(_) => {
+                        // 如果解析失败，创建一个基本的数据包
+                        let packet = Packet::data(0, &data[..]);
+                        Ok(Some(packet))
+                    }
+                }
+            }
+            Message::Text(text) => {
+                // 文本消息直接创建数据包
+                let packet = Packet::data(0, text.as_bytes());
+                Ok(Some(packet))
+            }
+            Message::Close(_) => {
+                Err(WebSocketError::ConnectionClosed)
+            }
+            Message::Ping(_) | Message::Pong(_) => {
+                // 心跳消息，返回None表示继续处理
+                Ok(None)
+            }
+            Message::Frame(_) => {
+                Err(WebSocketError::InvalidMessageType)
+            }
         }
     }
 }
@@ -90,84 +287,28 @@ where
     type Error = WebSocketError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        if let Some(stream) = &self.stream {
-            let mut ws_stream = stream.lock().await;
-            let serialized_data = packet.to_bytes();
-            let message = Message::Binary(serialized_data.to_vec());
-            ws_stream.send(message).await?;
-            
-            // 更新统计信息
-            self.stats.record_packet_sent(packet.payload.len());
-            Ok(())
-        } else {
-            Err(WebSocketError::ConnectionClosed)
-        }
+        // 使用发送队列而不是直接发送
+        self.send_queue.send(packet).map_err(|_| WebSocketError::ConnectionClosed)?;
+        Ok(())
     }
     
+    
     async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        if let Some(stream) = &self.stream {
-            let mut ws_stream = stream.lock().await;
-            
-            match ws_stream.next().await {
-                Some(Ok(message)) => {
-                    match message {
-                        Message::Binary(data) => {
-                            // 尝试从二进制数据解析Packet
-                            match Packet::from_bytes(&data) {
-                                Ok(packet) => {
-                                    // 更新统计信息
-                                    self.stats.record_packet_received(data.len());
-                                    Ok(Some(packet))
-                                }
-                                Err(_) => {
-                                    // 如果解析失败，创建一个基本的数据包
-                                    let packet = Packet::data(0, &data[..]);
-                                    self.stats.record_packet_received(data.len());
-                                    Ok(Some(packet))
-                                }
-                            }
-                        }
-                        Message::Text(text) => {
-                            // 文本消息直接创建数据包
-                            let packet = Packet::data(0, text.as_bytes());
-                            
-                            // 更新统计信息
-                            self.stats.record_packet_received(text.len());
-                            Ok(Some(packet))
-                        }
-                        Message::Close(_) => {
-                            self.is_connected = false;
-                            Err(WebSocketError::ConnectionClosed)
-                        }
-                        Message::Ping(_) | Message::Pong(_) => {
-                            // 心跳消息，继续接收下一个消息
-                            Ok(None)
-                        }
-                        Message::Frame(_) => {
-                            Err(WebSocketError::InvalidMessageType)
-                        }
-                    }
-                }
-                Some(Err(e)) => {
-                    self.is_connected = false;
-                    Err(WebSocketError::Tungstenite(e))
-                }
-                None => {
-                    self.is_connected = false;
-                    Err(WebSocketError::ConnectionClosed)
-                }
-            }
-        } else {
-            Err(WebSocketError::ConnectionClosed)
-        }
+        // 在事件驱动架构中，不应该直接调用receive
+        // 客户端应该使用事件流来接收消息
+        Err(WebSocketError::Config("Use event-driven architecture with EventStream instead".to_string()))
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
-        if let Some(stream) = &self.stream {
-            let mut ws_stream = stream.lock().await;
-            ws_stream.close(None).await?;
-            self.is_connected = false;
+        // 发送关闭信号
+        let _ = self.shutdown_sender.send(());
+        
+        // 等待事件循环结束
+        if let Some(handle) = self.event_loop_handle.take() {
+            let _ = handle.await;
         }
+        
+        self.is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
     
@@ -176,7 +317,7 @@ where
     }
     
     fn is_connected(&self) -> bool {
-        self.is_connected
+        self.is_connected.load(std::sync::atomic::Ordering::SeqCst)
     }
     
     fn stats(&self) -> AdapterStats {
@@ -184,11 +325,11 @@ where
     }
     
     fn session_id(&self) -> SessionId {
-        self.session_id
+        SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst))
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        self.session_id = session_id;
+        self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
     }
     
     async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
@@ -237,59 +378,38 @@ impl<C: 'static> WebSocketServer<C> {
         // 如果还没有监听器，先创建一个
         if self.listener.is_none() {
             let bind_addr = if let Some(ws_config) = (&self.config as &dyn std::any::Any).downcast_ref::<crate::protocol::WebSocketServerConfig>() {
-                ws_config.bind_address
+                ws_config.bind_address.to_string()
             } else {
-                return Err(WebSocketError::Config("Invalid WebSocket server config type".to_string()));
+                "127.0.0.1:8080".parse().unwrap()
             };
             
-            let listener = TcpListener::bind(bind_addr).await?;
-            tracing::info!("🌐 WebSocket 服务器监听: {}", bind_addr);
+            let listener = TcpListener::bind(&bind_addr).await?;
+            tracing::debug!("🚀 WebSocket服务器启动在: {}", bind_addr);
             self.listener = Some(listener);
         }
         
-        // 接受新的TCP连接
-        let listener = self.listener.as_ref().unwrap();
-        let (tcp_stream, peer_addr) = listener.accept().await?;
-        
-        // 将TcpStream包装为MaybeTlsStream（非TLS）
-        let maybe_tls_stream = MaybeTlsStream::Plain(tcp_stream);
-        
-        // 执行WebSocket握手
-        let ws_stream = accept_async(maybe_tls_stream).await?;
-        tracing::info!("✅ WebSocket 连接已建立，来自: {}", peer_addr);
-        
-        // 创建连接信息
-        let local_addr = self.local_addr()?;
-        let now = std::time::SystemTime::now();
-        let connection_info = crate::command::ConnectionInfo {
-            session_id: crate::SessionId::new(0), // 临时ID，稍后会被设置
-            local_addr,
-            peer_addr,
-            protocol: "websocket".to_string(),
-            state: crate::command::ConnectionState::Connected,
-            established_at: now,
-            closed_at: None,
-            last_activity: now,
-            packets_sent: 0,
-            packets_received: 0,
-            bytes_sent: 0,
-            bytes_received: 0,
-        };
-        
-        // 创建适配器
-        let mut adapter = WebSocketAdapter::new_with_stream(self.config.clone(), ws_stream);
-        adapter.connection_info = connection_info;
-        adapter.is_connected = true;
-        
-        Ok(adapter)
+        if let Some(listener) = &self.listener {
+            let (tcp_stream, addr) = listener.accept().await?;
+            tracing::debug!("✅ WebSocket服务器接受连接: {}", addr);
+            
+            // 执行WebSocket握手
+            let maybe_tls_stream = MaybeTlsStream::Plain(tcp_stream); let ws_stream = accept_async(maybe_tls_stream).await?;
+            
+            // 创建事件发送器
+            let (event_sender, _) = broadcast::channel(1000);
+            
+            // 创建WebSocket适配器
+            WebSocketAdapter::new_with_stream(self.config.clone(), ws_stream, event_sender).await
+        } else {
+            Err(WebSocketError::Config("No listener available".to_string()))
+        }
     }
     
     pub(crate) fn local_addr(&self) -> Result<std::net::SocketAddr, WebSocketError> {
-        // 获取配置中的绑定地址
-        if let Some(ws_config) = (&self.config as &dyn std::any::Any).downcast_ref::<crate::protocol::WebSocketServerConfig>() {
-            Ok(ws_config.bind_address)
+        if let Some(listener) = &self.listener {
+            listener.local_addr().map_err(WebSocketError::Io)
         } else {
-            Err(WebSocketError::Config("Invalid WebSocket server config type".to_string()))
+            Err(WebSocketError::Config("Server not bound".to_string()))
         }
     }
 }
@@ -318,51 +438,24 @@ impl<C> WebSocketClientBuilder<C> {
     {
         let config = self.config.ok_or_else(|| WebSocketError::Config("Missing WebSocket client config".to_string()))?;
         
-        // 获取WebSocket客户端配置
-        let ws_config = if let Some(ws_config) = (&config as &dyn std::any::Any).downcast_ref::<crate::protocol::WebSocketClientConfig>() {
-            ws_config
+        // 从配置中获取连接URL
+        let url = if let Some(ws_config) = (&config as &dyn std::any::Any).downcast_ref::<crate::protocol::WebSocketClientConfig>() {
+            ws_config.target_url.clone()
         } else {
-            return Err(WebSocketError::Config("Invalid WebSocket client config type".to_string()));
+            "ws://127.0.0.1:8080".to_string()
         };
         
-        // 建立WebSocket连接，使用字符串URL
-        let (ws_stream, _response) = connect_async(&ws_config.target_url).await?;
-        tracing::info!("🔌 WebSocket客户端已连接到: {}", ws_config.target_url);
+        tracing::debug!("🔌 WebSocket客户端连接到: {}", url);
         
-        // 尝试从URL解析远程地址，使用默认地址作为后备
-        let remote_addr = if let Ok(url) = ws_config.target_url.parse::<url::Url>() {
-            if let Some(host) = url.host_str() {
-                let port = url.port().unwrap_or(if url.scheme() == "wss" { 443 } else { 80 });
-                format!("{}:{}", host, port).parse().unwrap_or_else(|_| "127.0.0.1:80".parse().unwrap())
-            } else {
-                "127.0.0.1:80".parse().unwrap()
-            }
-        } else {
-            "127.0.0.1:80".parse().unwrap()
-        };
+        // 连接到WebSocket服务器
+        let (ws_stream, _) = connect_async(&url).await?;
         
-        // 创建连接信息
-        let now = std::time::SystemTime::now();
-        let connection_info = crate::command::ConnectionInfo {
-            session_id: crate::SessionId::new(0), // 临时ID，稍后会被设置
-            local_addr: "0.0.0.0:0".parse().unwrap(), // 客户端本地地址通常不确定
-            peer_addr: remote_addr,
-            protocol: "websocket".to_string(),
-            state: crate::command::ConnectionState::Connected,
-            established_at: now,
-            closed_at: None,
-            last_activity: now,
-            packets_sent: 0,
-            packets_received: 0,
-            bytes_sent: 0,
-            bytes_received: 0,
-        };
+        tracing::debug!("✅ WebSocket客户端已连接到: {}", url);
         
-        // 创建适配器
-        let mut adapter = WebSocketAdapter::new_with_stream(config, ws_stream);
-        adapter.connection_info = connection_info;
-        adapter.is_connected = true;
+        // 创建事件发送器
+        let (event_sender, _) = broadcast::channel(1000);
         
-        Ok(adapter)
+        // 创建WebSocket适配器
+        WebSocketAdapter::new_with_stream(config, ws_stream, event_sender).await
     }
 } 

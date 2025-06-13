@@ -287,6 +287,12 @@ impl Connection for WebSocketConnection {
         use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
     }
+    
+    /// 获取事件流 - WebSocket客户端连接的事件流支持
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        // 使用WebSocket适配器的事件流支持
+        Some(self.inner.subscribe_events())
+    }
 }
 
 pub struct WebSocketServerWrapper {
@@ -344,6 +350,12 @@ impl Connection for WebSocketServerConnection {
     fn connection_info(&self) -> ConnectionInfo {
         use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
+    }
+    
+    /// 获取事件流 - WebSocket服务器连接的事件流支持
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        // 使用WebSocket适配器的事件流支持
+        Some(self.inner.subscribe_events())
     }
 }
 

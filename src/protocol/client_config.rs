@@ -827,9 +827,18 @@ impl crate::transport::client::ConnectableConfig for TcpClientConfig {
 
 impl crate::transport::client::ConnectableConfig for WebSocketClientConfig {
     async fn connect(&self, transport: &mut crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
-        // 暂时返回简化实现
-        let session_id = crate::SessionId::new(2);
-        tracing::info!("WebSocket 客户端连接到 {}", self.target_url);
+        tracing::info!("🔌 WebSocket 客户端开始连接到 {}", self.target_url);
+        
+        // 使用 ClientConfig::build_connection() 构建连接
+        let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
+        
+        // 获取会话ID
+        let session_id = connection.session_id();
+        
+        // 🔧 将连接设置到 Transport 中
+        transport.set_connection(connection, session_id);
+        
+        tracing::info!("✅ WebSocket 客户端连接成功: {} -> 会话ID: {}", self.target_url, session_id);
         Ok(session_id)
     }
     
