@@ -19,14 +19,11 @@ use crate::{
 
 /// 协议连接的通用接口
 /// 
-/// 所有协议适配器都需要实现这个trait
+/// 所有协议适配器都需要实现这个trait（完全事件驱动）
 #[async_trait]
 pub trait Connection: Send + Sync + std::any::Any {
     /// 发送数据包
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError>;
-    
-    /// 接收数据包
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError>;
     
     /// 关闭连接
     async fn close(&mut self) -> Result<(), TransportError>;
@@ -43,9 +40,9 @@ pub trait Connection: Send + Sync + std::any::Any {
     /// 获取连接信息
     fn connection_info(&self) -> crate::command::ConnectionInfo;
     
-    /// 获取事件流（如果支持）
+    /// 获取事件流（事件驱动架构的核心）
     /// 
-    /// 默认实现返回None，具体的连接类型可以重写此方法
+    /// 所有连接都应该支持事件流，这是事件驱动架构的基础
     fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         None
     }

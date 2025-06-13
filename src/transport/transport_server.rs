@@ -332,68 +332,17 @@ impl TransportServer {
                                 tracing::info!("📡 连接事件监听结束: {}", actual_session_id);
                             });
                         } else {
-                            tracing::warn!("⚠️ 连接不支持事件流，使用传统消息接收循环: {}", actual_session_id);
+                            tracing::warn!("⚠️ 连接不支持事件流，这在完全事件驱动架构中不应该发生: {}", actual_session_id);
                             
-                            // 对于不支持事件流的连接，保留传统的消息接收循环
-                            let event_sender = server_clone.event_sender.clone();
-                            let connections = server_clone.connections.clone();
-                            let server_for_cleanup = server_clone.clone();
+                            // 在完全事件驱动架构中，所有连接都应该支持事件流
+                            // 如果不支持，我们直接关闭连接并清理会话
+                            let _ = server_clone.remove_session(actual_session_id).await;
                             
-                            tokio::spawn(async move {
-                                tracing::info!("📥 传统消息接收循环开始: {}", actual_session_id);
-                                
-                                loop {
-                                    if let Some(connection) = connections.get(&actual_session_id) {
-                                        let mut conn = connection.lock().await;
-                                        match conn.receive().await {
-                                            Ok(Some(packet)) => {
-                                                tracing::info!("📥 收到消息: {} bytes (会话: {})", packet.payload.len(), actual_session_id);
-                                                
-                                                let event = TransportEvent::MessageReceived {
-                                                    session_id: actual_session_id,
-                                                    packet: packet.clone(),
-                                                };
-                                                
-                                                if let Err(e) = event_sender.send(event) {
-                                                    tracing::error!("❌ 发送 MessageReceived 事件失败: {:?}", e);
-                                                    break;
-                                                } else {
-                                                    tracing::debug!("✅ MessageReceived 事件已发送: {}", actual_session_id);
-                                                }
-                                            }
-                                            Ok(None) => {
-                                                tracing::info!("🔚 连接已关闭: {}", actual_session_id);
-                                                break;
-                                            }
-                                            Err(e) => {
-                                                let error_msg = format!("{:?}", e);
-                                                if error_msg.contains("Connection reset") || 
-                                                   error_msg.contains("Connection closed") ||
-                                                   error_msg.contains("ConnectionReset") ||
-                                                   error_msg.contains("UnexpectedEof") ||
-                                                   error_msg.contains("Broken pipe") {
-                                                    tracing::info!("🔗 会话 {} 连接已被对端关闭: {}", actual_session_id, e);
-                                                } else {
-                                                    tracing::error!("❌ 接收消息错误: {:?} (会话: {})", e, actual_session_id);
-                                                }
-                                                break;
-                                            }
-                                        }
-                                    } else {
-                                        tracing::error!("❌ 会话 {} 的连接已不存在", actual_session_id);
-                                        break;
-                                    }
-                                }
-                                
-                                tracing::info!("📥 传统消息接收循环结束，清理会话: {}", actual_session_id);
-                                let _ = server_for_cleanup.remove_session(actual_session_id).await;
-                                
-                                let close_event = TransportEvent::ConnectionClosed { 
-                                    session_id: actual_session_id,
-                                    reason: crate::error::CloseReason::Error("Connection closed".to_string()),
-                                };
-                                let _ = event_sender.send(close_event);
-                            });
+                            let close_event = TransportEvent::ConnectionClosed { 
+                                session_id: actual_session_id,
+                                reason: crate::error::CloseReason::Error("Connection does not support event streams".to_string()),
+                            };
+                            let _ = server_clone.event_sender.send(close_event);
                         }
                     }
                     Err(e) => {

@@ -30,10 +30,6 @@ impl Connection for TcpClientConnection {
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
-    }
     
     async fn close(&mut self) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
@@ -79,10 +75,6 @@ impl Connection for TcpServerConnection {
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
-    }
     
     async fn close(&mut self) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
@@ -258,10 +250,6 @@ impl Connection for WebSocketConnection {
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
-    }
     
     async fn close(&mut self) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
@@ -322,10 +310,6 @@ impl Connection for WebSocketServerConnection {
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
-    }
     
     async fn close(&mut self) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
@@ -403,10 +387,6 @@ impl Connection for QuicServerConnection {
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
-    }
     
     async fn close(&mut self) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
@@ -447,10 +427,6 @@ impl Connection for QuicConnection {
         self.inner.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.inner.receive().await.map_err(Into::into)
-    }
     
     async fn close(&mut self) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;

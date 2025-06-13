@@ -50,46 +50,6 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
         result
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        tracing::debug!("🔍 ProtocolConnectionAdapter::receive - 开始接收数据...");
-        tracing::debug!("🔍 连接状态检查: is_connected = {}", self.connection.is_connected());
-        
-        let result = self.connection.receive().await;
-        
-        match &result {
-            Ok(Some(packet)) => {
-                let packet_size = packet.payload.len();
-                self.stats.record_packet_received(packet_size);
-                tracing::info!("🔍 ProtocolConnectionAdapter::receive - 成功接收数据包: 类型{:?}, ID{}, {}bytes", 
-                              packet.packet_type, packet.message_id, packet_size);
-            }
-            Ok(None) => {
-                tracing::debug!("🔍 ProtocolConnectionAdapter::receive - 连接关闭");
-            }
-            Err(e) => {
-                self.stats.record_error();
-                
-                // 根据错误类型决定日志级别和处理方式
-                let error_msg = format!("{:?}", e);
-                if error_msg.contains("Connection reset without closing handshake") ||
-                   error_msg.contains("timed out") ||
-                   error_msg.contains("connection closed") ||
-                   error_msg.contains("EOF") ||
-                   error_msg.contains("UnexpectedEof") ||
-                   error_msg.contains("Accept stream error") ||
-                   error_msg.contains("connection closed by peer") {
-                    // 这些是正常的连接关闭情况，使用info级别，并简化消息
-                    tracing::info!("🔍 连接正常关闭 - {:?}", e);
-                } else {
-                    // 其他错误使用error级别
-                    tracing::error!("🔍 ProtocolConnectionAdapter::receive - 接收错误: {:?}", e);
-                }
-            }
-        }
-        
-        result
-    }
-    
     async fn close(&mut self) -> Result<(), Self::Error> {
         self.connection.close().await
     }
@@ -114,14 +74,16 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
         self.connection.set_session_id(session_id);
     }
     
-    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 对于协议连接，我们简单地返回连接状态
-        Ok(self.is_connected())
-    }
-    
     async fn flush(&mut self) -> Result<(), Self::Error> {
         // 大多数协议连接不需要显式flush
         Ok(())
+    }
+}
+
+impl ProtocolConnectionAdapter {
+    /// 获取事件流 - 事件驱动架构的核心
+    pub fn subscribe_events(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        self.connection.get_event_stream()
     }
 }
 

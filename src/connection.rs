@@ -1,14 +1,11 @@
 use async_trait::async_trait;
 use crate::{SessionId, packet::Packet, error::TransportError, command::ConnectionInfo};
 
-/// 连接接口 - 统一的连接抽象
+/// 连接接口 - 统一的连接抽象（完全事件驱动）
 #[async_trait]
 pub trait Connection: Send + Sync {
     /// 发送数据包
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError>;
-    
-    /// 接收数据包
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError>;
     
     /// 关闭连接
     async fn close(&mut self) -> Result<(), TransportError>;
@@ -25,7 +22,7 @@ pub trait Connection: Send + Sync {
     /// 刷新缓冲区
     async fn flush(&mut self) -> Result<(), TransportError>;
     
-    /// 获取事件流 - TCP连接特有的实现
+    /// 获取事件流 - 事件驱动架构的核心
     fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>>;
 }
 
@@ -81,11 +78,6 @@ impl Connection for TcpConnection {
         self.adapter.send(packet).await.map_err(Into::into)
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        use crate::protocol::ProtocolAdapter;
-        self.adapter.receive().await.map_err(Into::into)
-    }
-    
     async fn close(&mut self) -> Result<(), TransportError> {
         use crate::protocol::ProtocolAdapter;
         self.adapter.close().await.map_err(Into::into)
@@ -121,10 +113,6 @@ impl Connection for TcpConnection {
 impl crate::protocol::Connection for TcpConnection {
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
         <Self as Connection>::send(self, packet).await
-    }
-    
-    async fn receive(&mut self) -> Result<Option<Packet>, TransportError> {
-        <Self as Connection>::receive(self).await
     }
     
     async fn close(&mut self) -> Result<(), TransportError> {

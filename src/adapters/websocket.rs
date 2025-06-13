@@ -303,13 +303,6 @@ where
         Ok(())
     }
     
-    
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        // 在事件驱动架构中，不应该直接调用receive
-        // 客户端应该使用事件流来接收消息
-        Err(WebSocketError::Config("Use event-driven architecture with EventStream instead".to_string()))
-    }
-    
     async fn close(&mut self) -> Result<(), Self::Error> {
         // 发送关闭信号
         let _ = self.shutdown_sender.send(());
@@ -341,10 +334,6 @@ where
     
     fn set_session_id(&mut self, session_id: SessionId) {
         self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
-    }
-    
-    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        Ok(false)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {

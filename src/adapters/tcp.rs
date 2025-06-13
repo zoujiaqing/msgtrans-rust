@@ -343,12 +343,6 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
         self.connection_info.session_id = session_id;
     }
     
-    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 在事件驱动模式下，这个方法不再需要
-        // 数据可读性由事件循环处理
-        Ok(true)
-    }
-    
     async fn flush(&mut self) -> Result<(), Self::Error> {
         // 在事件驱动模式下，flush由事件循环自动处理
         Ok(())
@@ -409,12 +403,6 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     fn set_session_id(&mut self, session_id: SessionId) {
         self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
         self.connection_info.session_id = session_id;
-    }
-    
-    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 在事件驱动模式下，这个方法不再需要
-        // 数据可读性由事件循环处理
-        Ok(true)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {

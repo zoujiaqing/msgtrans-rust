@@ -387,11 +387,6 @@ impl ProtocolAdapter for QuicAdapter<QuicClientConfig> {
         Ok(())
     }
     
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        // 事件驱动模式下，不直接调用receive，而是通过事件流
-        Err(QuicError::Config("Use event stream for receiving messages".to_string()))
-    }
-    
     async fn close(&mut self) -> Result<(), Self::Error> {
         tracing::debug!("🔌 关闭QUIC客户端连接");
         
@@ -433,11 +428,6 @@ impl ProtocolAdapter for QuicAdapter<QuicClientConfig> {
         self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
     }
     
-    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 事件驱动模式下总是可读的
-        Ok(true)
-    }
-    
     async fn flush(&mut self) -> Result<(), Self::Error> {
         // QUIC流会自动刷新
         Ok(())
@@ -453,11 +443,6 @@ impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         self.send_queue.send(packet).map_err(|_| QuicError::ConnectionClosed)?;
         Ok(())
-    }
-    
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        // 事件驱动模式下，不直接调用receive，而是通过事件流
-        Err(QuicError::Config("Use event stream for receiving messages".to_string()))
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
@@ -499,11 +484,6 @@ impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
     
     fn set_session_id(&mut self, session_id: SessionId) {
         self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
-    }
-    
-    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 事件驱动模式下总是可读的
-        Ok(true)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {

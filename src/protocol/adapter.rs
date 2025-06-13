@@ -57,9 +57,10 @@ impl AdapterStats {
     }
 }
 
-/// 协议适配器抽象接口
+/// 协议适配器trait
 /// 
-/// 此trait定义了所有协议适配器必须实现的基本功能
+/// 定义了所有协议适配器必须实现的基本接口
+/// 这是事件驱动架构的核心抽象
 #[async_trait]
 pub trait ProtocolAdapter: Send + 'static {
     type Config: ProtocolConfig;
@@ -67,18 +68,6 @@ pub trait ProtocolAdapter: Send + 'static {
     
     /// 发送数据包
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error>;
-    
-    /// 接收数据包（非阻塞）
-    /// 
-    /// ⚠️ **已弃用**: 在事件驱动架构中，数据接收由内部事件循环处理，
-    /// 通过事件流（EventStream）获取接收到的数据包。
-    /// 
-    /// 此方法仅为向后兼容而保留，新的实现应该返回 Ok(None)。
-    #[deprecated(note = "Use event-driven architecture with EventStream instead")]
-    async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        // 默认实现：在事件驱动模式下不再使用
-        Ok(None)
-    }
     
     /// 关闭连接
     async fn close(&mut self) -> Result<(), Self::Error>;
@@ -97,15 +86,6 @@ pub trait ProtocolAdapter: Send + 'static {
     
     /// 设置会话ID
     fn set_session_id(&mut self, session_id: SessionId);
-    
-    /// 检查是否有数据可读
-    /// 
-    /// ⚠️ **已弃用**: 在事件驱动架构中，数据可读性由内部事件循环处理。
-    #[deprecated(note = "Use event-driven architecture instead")]
-    async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        // 默认实现：在事件驱动模式下总是返回 true
-        Ok(true)
-    }
     
     /// 刷新发送缓冲区
     async fn flush(&mut self) -> Result<(), Self::Error> {

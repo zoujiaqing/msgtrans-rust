@@ -287,10 +287,6 @@ impl Connection for PluginConnection {
         self.inner.send(packet).await
     }
     
-    async fn receive(&mut self) -> Result<Option<crate::packet::Packet>, TransportError> {
-        self.inner.receive().await
-    }
-    
     async fn close(&mut self) -> Result<(), TransportError> {
         self.inner.close().await
     }
