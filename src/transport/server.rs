@@ -3,23 +3,16 @@
 /// 提供专门针对服务端监听的传输层API
 
 use std::time::Duration;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::Mutex;
-use std::collections::HashMap;
-use crossbeam_channel::{unbounded as crossbeam_unbounded, Receiver as CrossbeamReceiver, Sender as CrossbeamSender};
 
 use crate::{
     SessionId,
     error::TransportError,
-    transport::{config::TransportConfig, lockfree_enhanced::LockFreeHashMap},
-    protocol::{adapter::ServerConfig, protocol::Server},
-    stream::EventStream,
+    transport::config::TransportConfig,
+    protocol::adapter::ServerConfig,
 };
 
 // 导入新的 TransportServer
 use super::transport_server::TransportServer;
-use super::transport::Transport;
 
 /// 接受器配置
 #[derive(Debug, Clone)]
@@ -173,7 +166,7 @@ impl TransportServerBuilder {
     }
     
     /// 构建服务端传输层 - 返回 TransportServer
-    pub async fn build(mut self) -> Result<TransportServer, TransportError> {
+    pub async fn build(self) -> Result<TransportServer, TransportError> {
         // 创建基础配置并构建新的 TransportServer，传递协议配置
         let transport_config = self.transport_config.clone();
         let protocol_configs = self.protocol_configs;

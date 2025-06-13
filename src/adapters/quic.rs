@@ -8,18 +8,16 @@
 
 use async_trait::async_trait;
 use quinn::{
-    Endpoint, ServerConfig, ClientConfig, Connection, RecvStream, SendStream,
+    Endpoint, ServerConfig, ClientConfig, Connection,
     ConnectError, ConnectionError, ReadError, WriteError, ClosedStream, ReadToEndError,
-    Incoming,
 };
 use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName},
-    RootCertStore,
+    pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName},
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     DigitallySignedStruct, SignatureScheme,
 };
 use std::{sync::Arc, net::SocketAddr, time::Duration, convert::TryInto};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
@@ -156,6 +154,69 @@ fn configure_client_insecure() -> ClientConfig {
     client_config
 }
 
+/// Configure client with QuicClientConfig parameters
+fn configure_client_with_config(config: &QuicClientConfig) -> Result<ClientConfig, QuicError> {
+    let crypto = if config.verify_certificate {
+        // 使用证书验证模式
+        let mut root_store = rustls::RootCertStore::empty();
+        
+        if let Some(ca_cert_pem) = &config.ca_cert_pem {
+            // 如果提供了自定义 CA 证书，使用它
+            let cert_bytes = ca_cert_pem.as_bytes();
+            let ca_certs = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_bytes))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| QuicError::Config(format!("Failed to parse CA certificate: {}", e)))?;
+            
+            for cert in ca_certs {
+                root_store.add(cert)
+                    .map_err(|e| QuicError::Config(format!("Failed to add CA certificate to store: {}", e)))?;
+            }
+            
+            tracing::debug!("🔐 使用自定义 CA 证书进行 QUIC 客户端证书验证");
+        } else {
+            // 使用系统根证书
+            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            tracing::debug!("🔐 使用系统根证书进行 QUIC 客户端证书验证");
+        }
+        
+        rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth()
+    } else {
+        // 不验证证书（不安全模式）
+        tracing::debug!("🔓 QUIC 客户端使用不安全模式（跳过证书验证）");
+        rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
+            .with_no_client_auth()
+    };
+
+    let mut client_config = ClientConfig::new(
+        Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+            .map_err(|e| QuicError::Config(format!("QUIC client config error: {}", e)))?)
+    );
+    
+    // 配置传输参数
+    let mut transport_config = quinn::TransportConfig::default();
+    transport_config.max_idle_timeout(Some(config.max_idle_timeout.try_into()
+        .map_err(|e| QuicError::Config(format!("Invalid idle timeout: {}", e)))?));
+    
+    if let Some(keep_alive) = config.keep_alive_interval {
+        transport_config.keep_alive_interval(Some(keep_alive));
+    }
+    
+    transport_config.initial_rtt(config.initial_rtt);
+    
+    // Convert u64 to u32 for VarInt (VarInt only supports From<u32>)
+    let max_streams = config.max_concurrent_streams.min(u32::MAX as u64) as u32;
+    transport_config.max_concurrent_uni_streams(max_streams.into());
+    transport_config.max_concurrent_bidi_streams(max_streams.into());
+    
+    client_config.transport_config(Arc::new(transport_config));
+    
+    Ok(client_config)
+}
+
 /// Configure server with self-signed certificate
 fn configure_server_insecure() -> (ServerConfig, CertificateDer<'static>) {
     let (cert, key) = generate_self_signed_cert();
@@ -170,6 +231,47 @@ fn configure_server_insecure() -> (ServerConfig, CertificateDer<'static>) {
     transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
 
     (server_config, cert)
+}
+
+/// Configure server with PEM certificate and key
+fn configure_server_with_pem(cert_pem: &str, key_pem: &str) -> Result<(ServerConfig, CertificateDer<'static>), QuicError> {
+    // Parse private key from PEM string
+    let key_bytes = key_pem.as_bytes();
+    let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_bytes))
+        .map_err(|e| QuicError::Config(format!("Failed to parse private key: {}", e)))?
+        .ok_or_else(|| QuicError::Config("No private key found in PEM data".to_string()))?;
+
+    // Parse certificate chain from PEM string
+    let cert_bytes = cert_pem.as_bytes();
+    let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_bytes))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| QuicError::Config(format!("Failed to parse certificates: {}", e)))?;
+    
+    if certs.is_empty() {
+        return Err(QuicError::Config("No certificates found in PEM data".to_string()));
+    }
+
+    // Get the first certificate for return (client verification)
+    let first_cert = certs[0].clone();
+
+    // Create server crypto configuration
+    let server_crypto = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| QuicError::Config(format!("TLS configuration error: {}", e)))?;
+    
+    // Create QUIC server configuration
+    let quic_server_config = quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)
+        .map_err(|e| QuicError::Config(format!("QUIC configuration error: {}", e)))?;
+    
+    let mut server_config = ServerConfig::with_crypto(Arc::new(quic_server_config));
+    
+    // Configure transport parameters
+    let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
+    transport_config.receive_window((1500u32 * 100).into());
+    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+    
+    Ok((server_config, first_cert))
 }
 
 /// QUIC协议适配器（泛型支持客户端和服务端配置）
@@ -364,16 +466,23 @@ impl QuicAdapter<QuicClientConfig> {
     pub async fn connect(addr: SocketAddr, config: QuicClientConfig) -> Result<Self, QuicError> {
         tracing::debug!("🔌 QUIC客户端连接到: {}", addr);
         
-        // 创建客户端端点
-        let client_config = configure_client_insecure();
-        let mut endpoint = Endpoint::client(SocketAddr::from(([0, 0, 0, 0], 0)))?;
+        // 根据配置创建客户端配置
+        let client_config = configure_client_with_config(&config)?;
+        let mut endpoint = Endpoint::client(config.local_bind_address.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))))?;
         endpoint.set_default_client_config(client_config);
         
-        // 连接到服务器
-        let connection = endpoint.connect(addr, "localhost")?.await?;
-        tracing::debug!("✅ QUIC客户端已连接到: {}", addr);
+        // 使用配置的服务器名称或默认值
+        let server_name = config.server_name.as_deref().unwrap_or("localhost");
         
-        Self::new_with_connection(connection, config, (broadcast::channel(1000).0)).await
+        // 连接到服务器（使用配置的超时时间）
+        let connecting = endpoint.connect(addr, server_name)?;
+        let connection = tokio::time::timeout(config.connect_timeout, connecting)
+            .await
+            .map_err(|_| QuicError::Config(format!("Connection timeout after {:?}", config.connect_timeout)))?
+            .map_err(QuicError::Connection)?;
+        tracing::debug!("✅ QUIC客户端已连接到: {} (服务器名称: {}) 超时: {:?}", addr, server_name, config.connect_timeout);
+        
+        Self::new_with_connection(connection, config, broadcast::channel(1000).0).await
     }
 }
 
@@ -519,7 +628,22 @@ impl QuicServerBuilder {
     pub(crate) async fn build(self) -> Result<QuicServer, QuicError> {
         let bind_addr = self.bind_address.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
         
-        let (server_config, _cert) = configure_server_insecure();
+        // 根据配置选择证书模式
+        let server_config = match (&self.config.cert_pem, &self.config.key_pem) {
+            (Some(cert_pem), Some(key_pem)) if !cert_pem.is_empty() && !key_pem.is_empty() => {
+                // 使用传入的 PEM 证书和私钥
+                tracing::debug!("🔐 使用传入的 PEM 证书启动 QUIC 服务器");
+                let (server_config, _cert) = configure_server_with_pem(cert_pem, key_pem)?;
+                server_config
+            }
+            _ => {
+                // 使用自签名证书
+                tracing::debug!("🔓 使用自签名证书启动 QUIC 服务器");
+                let (server_config, _cert) = configure_server_insecure();
+                server_config
+            }
+        };
+        
         let endpoint = Endpoint::server(server_config, bind_addr)?;
         
         tracing::debug!("🚀 QUIC服务器启动在: {}", endpoint.local_addr()?);
@@ -553,7 +677,7 @@ impl QuicServer {
         
         tracing::debug!("✅ QUIC服务器接受连接: {}", connection.remote_address());
         
-        QuicAdapter::new_with_connection(connection, self.config.clone(), (broadcast::channel(1000).0)).await
+        QuicAdapter::new_with_connection(connection, self.config.clone(), broadcast::channel(1000).0).await
     }
     
     pub(crate) fn local_addr(&self) -> Result<SocketAddr, QuicError> {

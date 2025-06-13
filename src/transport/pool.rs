@@ -22,9 +22,9 @@ use tokio::sync::RwLock;
 use crossbeam_channel::{unbounded as crossbeam_unbounded, Sender as CrossbeamSender, Receiver as CrossbeamReceiver};
 
 use crate::error::TransportError;
-use crate::transport::lockfree_enhanced::{LockFreeHashMap, LockFreeQueue, LockFreeCounter};
+use crate::transport::lockfree_enhanced::{LockFreeHashMap, LockFreeQueue};
 use crate::SessionId;
-use crate::transport::memory_pool_v2::{OptimizedMemoryPool, OptimizedMemoryStatsSnapshot, MemoryPoolEvent, BufferSize};
+use crate::transport::memory_pool_v2::{OptimizedMemoryPool, OptimizedMemoryStatsSnapshot};
 
 /// 🚀 Phase 3: 优化后的智能连接池
 pub struct ConnectionPool {
@@ -256,10 +256,10 @@ impl ConnectionPool {
     }
 
     /// 🚀 Phase 3: 初始化连接池 (替代 with_lockfree_optimization)
-    pub async fn initialize_pool(mut self) -> Result<Self, TransportError> {
+    pub async fn initialize_pool(self) -> Result<Self, TransportError> {
         // 创建初始连接
-        for i in 0..self.initial_size {
-            let connection_id = ConnectionId::new(i as u64);
+        for _ in 0..self.initial_size {
+            let connection_id = ConnectionId::new(self.connection_id_counter.fetch_add(1, Ordering::Relaxed));
             let connection = PoolConnection {
                 id: connection_id,
                 session_id: None,
@@ -271,25 +271,32 @@ impl ConnectionPool {
             
             // LockFree 存储连接
             if let Err(e) = self.active_connections.insert(connection_id, connection) {
-                return Err(TransportError::config_error("pool_init", format!("Failed to insert connection: {:?}", e)));
+                return Err(TransportError::config_error("initialize_pool", format!("Failed to create connection: {:?}", e)));
             }
             
             // 添加到可用队列
             if let Err(e) = self.available_connections.push(connection_id) {
-                return Err(TransportError::config_error("pool_init", format!("Failed to queue connection: {:?}", e)));
+                return Err(TransportError::config_error("initialize_pool", format!("Failed to add available connection: {:?}", e)));
             }
             
-            // 更新计数器
-            self.connection_id_counter.store(i as u64 + 1, Ordering::Relaxed);
+            // 更新统计
             self.stats.total_connections.fetch_add(1, Ordering::Relaxed);
             self.stats.available_connections.fetch_add(1, Ordering::Relaxed);
+            self.stats.create_operations.fetch_add(1, Ordering::Relaxed);
             
             // 发送创建事件
             let _ = self.event_broadcaster.send(PoolEvent::ConnectionCreated { connection_id });
         }
         
-        tracing::info!("🚀 Phase 3: 连接池初始化完成，创建了 {} 个连接", self.initial_size);
+        tracing::info!("🚀 Phase 3: 连接池初始化完成 - 初始连接数: {}", self.initial_size);
         Ok(self)
+    }
+    
+    /// 🚀 Phase 3: 兼容方法 - with_lockfree_optimization (用于基准测试)
+    pub fn with_lockfree_optimization(self) -> Self {
+        // Phase 3 中默认已启用 LockFree 优化，此方法仅为兼容性
+        tracing::info!("🚀 Phase 3: LockFree 优化已默认启用");
+        self
     }
 
     /// 🚀 Phase 3: 高性能连接获取 (LockFree)

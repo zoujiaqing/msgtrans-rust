@@ -10,7 +10,6 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use flume::{Sender as FlumeSender, Receiver as FlumeReceiver};
-use tokio::time::timeout;
 use crate::{
     error::TransportError,
     packet::Packet,

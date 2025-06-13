@@ -10,7 +10,7 @@ use crate::command::ConnectionInfo;
 use crate::packet::Packet;
 use crate::error::TransportError;
 use crate::SessionId;
-use super::{tcp, websocket, quic};
+use super::tcp;
 
 /// TCP适配器的Connection包装器（客户端）
 pub struct TcpClientConnection {

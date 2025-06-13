@@ -5,19 +5,12 @@
 use std::time::Duration;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 
 use crate::{
     SessionId,
     error::TransportError,
-    transport::{
-        config::TransportConfig,
-        expert_config::ExpertConfig,
-    },
-    protocol::{ProtocolConfig, adapter::{DynProtocolConfig, DynClientConfig}},
-    stream::EventStream,
-    packet::Packet,
-    command::TransportStats,
+    transport::config::TransportConfig,
+    protocol::adapter::{DynProtocolConfig, DynClientConfig},
 };
 
 // 内部使用新的 Transport 结构体
@@ -212,7 +205,7 @@ impl TransportClientBuilder {
     }
 
     /// 构建客户端传输层 - 返回 TransportClient
-    pub async fn build(mut self) -> Result<TransportClient, TransportError> {
+    pub async fn build(self) -> Result<TransportClient, TransportError> {
         // 创建底层 Transport
         let transport = Transport::new(self.transport_config).await?;
         

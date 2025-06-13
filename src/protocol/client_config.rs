@@ -4,7 +4,6 @@
 
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
-use crate::error::TransportError;
 use crate::protocol::{ConfigError, ProtocolConfig};
 use crate::protocol::adapter::{DynProtocolConfig};
 use crate::protocol::protocol::Connection;
@@ -521,7 +520,7 @@ impl Default for QuicClientConfig {
             target_address: "127.0.0.1:443".parse().unwrap(),
             server_name: None,
             connect_timeout: Duration::from_secs(10),
-            verify_certificate: true,
+            verify_certificate: false,  // 默认不验证证书，适合开发环境
             ca_cert_pem: None,
             max_concurrent_streams: 100,
             max_idle_timeout: Duration::from_secs(30),

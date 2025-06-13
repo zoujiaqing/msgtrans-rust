@@ -67,14 +67,13 @@ fn bench_memory_pool_vs_standard(c: &mut Criterion) {
                     _ => BufferSize::Large,
                 };
                 
-                if let Ok(buffer) = pool.get_buffer(size).await {
-                    buffers.push((buffer, size));
-                }
+                let buffer = pool.get_buffer(size);
+                buffers.push((buffer, size));
             }
             
             // 归还缓冲区
             for (buffer, size) in buffers {
-                pool.return_buffer(buffer, size).await;
+                pool.return_buffer(buffer, size);
             }
             
             black_box(pool.status().await)
@@ -121,9 +120,8 @@ fn bench_concurrent_scenarios(c: &mut Criterion) {
                 let pool_clone = pool.clone();
                 let handle = tokio::spawn(async move {
                     for _ in 0..100 {
-                        if let Ok(buffer) = pool_clone.get_buffer(BufferSize::Medium).await {
-                            pool_clone.return_buffer(buffer, BufferSize::Medium).await;
-                        }
+                        let buffer = pool_clone.get_buffer(BufferSize::Medium);
+                        pool_clone.return_buffer(buffer, BufferSize::Medium);
                     }
                 });
                 handles.push(handle);
@@ -147,9 +145,8 @@ fn bench_concurrent_scenarios(c: &mut Criterion) {
                 let pool_clone = pool.clone();
                 let handle = tokio::spawn(async move {
                     for _ in 0..10 {
-                        if let Ok(buffer) = pool_clone.get_buffer(BufferSize::Small).await {
-                            pool_clone.return_buffer(buffer, BufferSize::Small).await;
-                        }
+                        let buffer = pool_clone.get_buffer(BufferSize::Small);
+                        pool_clone.return_buffer(buffer, BufferSize::Small);
                     }
                 });
                 handles.push(handle);
@@ -221,8 +218,8 @@ fn bench_memory_efficiency(c: &mut Criterion) {
             
             // 分配并归还大量缓冲区
             for _ in 0..1000 {
-                let buffer = pool.get_buffer(BufferSize::Medium).await.unwrap();
-                pool.return_buffer(buffer, BufferSize::Medium).await;
+                let buffer = pool.get_buffer(BufferSize::Medium);
+                pool.return_buffer(buffer, BufferSize::Medium);
             }
             
             black_box(pool.status().await)
@@ -266,14 +263,14 @@ fn bench_realistic_workload(c: &mut Criterion) {
                 let pool_clone = memory_pool.clone();
                 let handle = tokio::spawn(async move {
                     // 模拟HTTP请求处理
-                    let request_buffer = pool_clone.get_buffer(BufferSize::Small).await.unwrap();
-                    let response_buffer = pool_clone.get_buffer(BufferSize::Medium).await.unwrap();
+                    let request_buffer = pool_clone.get_buffer(BufferSize::Small);
+                    let response_buffer = pool_clone.get_buffer(BufferSize::Medium);
                     
                     // 模拟处理时间
                     tokio::time::sleep(Duration::from_millis(1)).await;
                     
-                    pool_clone.return_buffer(request_buffer, BufferSize::Small).await;
-                    pool_clone.return_buffer(response_buffer, BufferSize::Medium).await;
+                    pool_clone.return_buffer(request_buffer, BufferSize::Small);
+                    pool_clone.return_buffer(response_buffer, BufferSize::Medium);
                 });
                 handles.push(handle);
             }

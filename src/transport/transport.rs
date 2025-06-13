@@ -14,7 +14,6 @@ use crate::{
         config::TransportConfig,
         pool::ConnectionPool,
         memory_pool_v2::OptimizedMemoryPool,
-        expert_config::ExpertConfig,
     },
     protocol::{ProtocolRegistry, ProtocolAdapter, Connection},
     adapters::create_standard_registry,

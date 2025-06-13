@@ -194,7 +194,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
     }
     
     /// 🚀 运行优化的双管道处理 - 真实网络适配器版本
-    pub async fn run_dual_pipeline(mut self) -> Result<(), TransportError> 
+    pub async fn run_dual_pipeline(self) -> Result<(), TransportError> 
     where 
         A: Send + 'static,
         A::Config: Send + 'static,

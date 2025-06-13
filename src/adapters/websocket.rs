@@ -7,13 +7,13 @@ use tokio_tungstenite::{MaybeTlsStream,
 use tokio::net::{TcpListener, TcpStream};
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc};
 
 use crate::{
     SessionId,
     error::TransportError,
     packet::Packet,
-    protocol::{ProtocolAdapter, AdapterStats, ProtocolConfig, WebSocketClientConfig, WebSocketServerConfig},
+    protocol::{ProtocolAdapter, AdapterStats, ProtocolConfig},
     command::{ConnectionInfo, ConnectionState},
     event::TransportEvent,
 };

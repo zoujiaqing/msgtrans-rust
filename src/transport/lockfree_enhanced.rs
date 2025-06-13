@@ -11,12 +11,11 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
-use crossbeam::epoch::{self, Atomic, Owned, Shared, Guard};
+use crossbeam::epoch::{self, Atomic, Owned};
 use crossbeam::utils::CachePadded;
 use crossbeam_channel::{unbounded, Sender, Receiver};
-use parking_lot::RwLock;
 
-use crate::{SessionId, error::TransportError};
+use crate::error::TransportError;
 
 /// 无锁哈希表 - 替代Arc<RwLock<HashMap>>
 /// 

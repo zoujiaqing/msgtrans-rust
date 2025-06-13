@@ -439,4 +439,9 @@ impl OptimizedMemoryPool {
     pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<MemoryPoolEvent> {
         self.event_broadcaster.subscribe()
     }
+    
+    /// 🚀 Phase 3.1.2: 获取内存池状态 (兼容旧API)
+    pub async fn status(&self) -> OptimizedMemoryStatsSnapshot {
+        self.get_stats()
+    }
 } 

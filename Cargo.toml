@@ -48,6 +48,7 @@ quinn = "0.11"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-pemfile = "2.0"
 rcgen = "0.13"
+webpki-roots = "0.26"
 
 # Optional compression support
 flate2 = { version = "1", optional = true }
@@ -61,14 +62,6 @@ criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 # Phase 2 testing dependencies
 rand = "0.8"
 
-[[example]]
-name = "packet"
-path = "examples/packet.rs"
-
-[[example]]
-name = "quic_event_test"
-path = "examples/quic_event_test.rs"
-
 # Phase 2 benchmarks
 [[bench]]
 name = "phase2_benchmarks"
@@ -80,3 +73,13 @@ path = "benches/phase2_benchmarks.rs"
 name = "modern_transport_benchmarks"
 harness = false
 path = "benches/modern_transport_benchmarks.rs"
+
+[[example]]
+name = "quic_event_test"
+path = "examples/quic_event_test.rs"
+
+[[example]]
+name = "event_driven_demo"
+path = "examples/event_driven_demo.rs"
+
+# Phase 2 benchmarks
