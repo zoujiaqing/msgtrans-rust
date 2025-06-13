@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use tokio_tungstenite::{MaybeTlsStream,
-    tungstenite::{protocol::Message, Error as TungsteniteError},
+    tungstenite::{protocol::Message, Error as TungsteniteError, error},
     WebSocketStream,
     accept_async, connect_async,
 };
@@ -179,7 +179,18 @@ impl<C> WebSocketAdapter<C> {
                                 }
                             }
                             Some(Err(e)) => {
-                                tracing::error!("📥 WebSocket读取错误: {:?} (会话: {})", e, current_session_id);
+                                // 优雅处理不同类型的WebSocket错误
+                                match e {
+                                    TungsteniteError::Protocol(error::ProtocolError::ResetWithoutClosingHandshake) => {
+                                        tracing::info!("🔗 WebSocket连接被客户端重置 (会话: {})", current_session_id);
+                                    }
+                                    TungsteniteError::ConnectionClosed => {
+                                        tracing::info!("🔗 WebSocket连接正常关闭 (会话: {})", current_session_id);
+                                    }
+                                    _ => {
+                                        tracing::warn!("📥 WebSocket读取错误: {:?} (会话: {})", e, current_session_id);
+                                    }
+                                }
                                 is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
                                 break;
                             }
@@ -238,7 +249,7 @@ impl<C> WebSocketAdapter<C> {
             if let Err(e) = event_sender.send(close_event) {
                 tracing::warn!("🔗 发送关闭事件失败: {:?}", e);
             } else {
-                tracing::warn!("🔗 发送关闭事件失败: SendError(ConnectionClosed {{ session_id: {}, reason: Normal }})", final_session_id);
+                tracing::debug!("✅ 关闭事件发送成功 (会话: {})", final_session_id);
             }
             
             tracing::debug!("✅ WebSocket事件循环已结束 (会话: {})", final_session_id);
