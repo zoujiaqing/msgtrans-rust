@@ -9,8 +9,8 @@ use crate::{
     command::ConnectionInfo,
     packet::Packet,
 };
+use crate::Connection;
 use super::{
-    protocol::Connection,
     adapter::{ProtocolAdapter, AdapterStats, ProtocolConfig},
 };
 
@@ -83,7 +83,7 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
 impl ProtocolConnectionAdapter {
     /// 获取事件流 - 事件驱动架构的核心
     pub fn subscribe_events(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        self.connection.get_event_stream()
+        self.connection.event_stream()
     }
 }
 

@@ -100,10 +100,10 @@ impl DynProtocolConfig for TcpServerConfig {
 
 /// 🔧 新增：实现服务端专用配置
 impl crate::protocol::adapter::DynServerConfig for TcpServerConfig {
-    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Server>, crate::error::TransportError>> + Send + '_>> {
+    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
             let server = crate::protocol::adapter::ServerConfig::build_server(self).await?;
-            Ok(Box::new(server) as Box<dyn crate::protocol::Server>)
+            Ok(Box::new(server) as Box<dyn crate::Server>)
         })
     }
     
@@ -279,10 +279,10 @@ impl DynProtocolConfig for WebSocketServerConfig {
 
 /// 🔧 新增：实现 WebSocket 服务端专用配置
 impl crate::protocol::adapter::DynServerConfig for WebSocketServerConfig {
-    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Server>, crate::error::TransportError>> + Send + '_>> {
+    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
             let server = crate::protocol::adapter::ServerConfig::build_server(self).await?;
-            Ok(Box::new(server) as Box<dyn crate::protocol::Server>)
+            Ok(Box::new(server) as Box<dyn crate::Server>)
         })
     }
     
@@ -461,10 +461,10 @@ impl DynProtocolConfig for QuicServerConfig {
 
 /// 🔧 新增：实现 QUIC 服务端专用配置
 impl crate::protocol::adapter::DynServerConfig for QuicServerConfig {
-    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Server>, crate::error::TransportError>> + Send + '_>> {
+    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
             let server = crate::protocol::adapter::ServerConfig::build_server(self).await?;
-            Ok(Box::new(server) as Box<dyn crate::protocol::Server>)
+            Ok(Box::new(server) as Box<dyn crate::Server>)
         })
     }
     

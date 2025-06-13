@@ -11,55 +11,9 @@ use tokio::sync::RwLock;
 use crate::{
     SessionId,
     error::TransportError,
-    packet::Packet,
+
+    connection::{Connection, Server}, // 使用统一的接口
 };
-
-
-
-
-/// 协议连接的通用接口
-/// 
-/// 所有协议适配器都需要实现这个trait（完全事件驱动）
-#[async_trait]
-pub trait Connection: Send + Sync + std::any::Any {
-    /// 发送数据包
-    async fn send(&mut self, packet: Packet) -> Result<(), TransportError>;
-    
-    /// 关闭连接
-    async fn close(&mut self) -> Result<(), TransportError>;
-    
-    /// 检查连接是否活跃
-    fn is_connected(&self) -> bool;
-    
-    /// 获取会话ID
-    fn session_id(&self) -> SessionId;
-    
-    /// 设置会话ID
-    fn set_session_id(&mut self, session_id: SessionId);
-    
-    /// 获取连接信息
-    fn connection_info(&self) -> crate::command::ConnectionInfo;
-    
-    /// 获取事件流（事件驱动架构的核心）
-    /// 
-    /// 所有连接都应该支持事件流，这是事件驱动架构的基础
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        None
-    }
-}
-
-/// 协议服务器的通用接口
-#[async_trait]
-pub trait Server: Send + Sync {
-    /// 接受新连接
-    async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError>;
-    
-    /// 获取监听地址
-    fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError>;
-    
-    /// 关闭服务器
-    async fn shutdown(&mut self) -> Result<(), TransportError>;
-}
 
 /// Future类型别名，简化类型签名
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;

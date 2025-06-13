@@ -14,11 +14,12 @@ use crate::{
         config::TransportConfig,
         pool::ConnectionPool,
         memory_pool_v2::OptimizedMemoryPool,
-        connection_state::{ConnectionState, ConnectionStateManager},
+        connection_state::ConnectionStateManager,
     },
-    protocol::{ProtocolRegistry, ProtocolAdapter, Connection},
+
+    protocol::{ProtocolRegistry, ProtocolAdapter},
+    connection::Connection,
     adapters::create_standard_registry,
-    event::TransportEvent,
 };
 
 /// 🎯 单连接传输抽象 - 真正符合架构设计的 Transport
@@ -286,7 +287,7 @@ impl Transport {
             let conn = connection_adapter.lock().await;
             
             // 直接调用Connection的get_event_stream方法
-            return conn.get_event_stream();
+            return conn.event_stream();
         }
         
         None

@@ -2,15 +2,16 @@
 /// 
 /// 为泛型协议适配器提供工厂接口实现
 
+use async_trait::async_trait;
 use std::any::Any;
 use std::collections::HashMap;
-use async_trait::async_trait;
-use crate::protocol::{Connection, Server, ProtocolFactory, TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebSocketServerConfig, QuicClientConfig, QuicServerConfig};
-use crate::command::ConnectionInfo;
-use crate::packet::Packet;
-use crate::error::TransportError;
-use crate::SessionId;
-use super::tcp;
+use crate::{
+    SessionId, TransportError, Packet,
+    connection::{Connection, Server}, // 使用统一的连接接口
+    protocol::{ProtocolFactory, TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebSocketServerConfig, QuicClientConfig, QuicServerConfig},
+    command::ConnectionInfo,
+};
+use crate::adapters::tcp;
 
 /// TCP适配器的Connection包装器（客户端）
 pub struct TcpClientConnection {
@@ -54,6 +55,15 @@ impl Connection for TcpClientConnection {
     fn connection_info(&self) -> ConnectionInfo {
         use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
+    }
+    
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.flush().await.map_err(Into::into)
+    }
+    
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        Some(self.inner.subscribe_events())
     }
 }
 
@@ -101,8 +111,12 @@ impl Connection for TcpServerConnection {
         self.inner.connection_info()
     }
     
-    /// 获取事件流 - TCP服务器连接特有的实现
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.flush().await.map_err(Into::into)
+    }
+    
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         Some(self.inner.subscribe_events())
     }
 }
@@ -276,9 +290,12 @@ impl Connection for WebSocketConnection {
         self.inner.connection_info()
     }
     
-    /// 获取事件流 - WebSocket客户端连接的事件流支持
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        // 使用WebSocket适配器的事件流支持
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.flush().await.map_err(Into::into)
+    }
+    
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         Some(self.inner.subscribe_events())
     }
 }
@@ -336,9 +353,12 @@ impl Connection for WebSocketServerConnection {
         self.inner.connection_info()
     }
     
-    /// 获取事件流 - WebSocket服务器连接的事件流支持
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        // 使用WebSocket适配器的事件流支持
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.flush().await.map_err(Into::into)
+    }
+    
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         Some(self.inner.subscribe_events())
     }
 }
@@ -413,9 +433,12 @@ impl Connection for QuicServerConnection {
         self.inner.connection_info()
     }
     
-    /// 获取事件流 - QUIC服务器连接的事件流支持
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        // 使用QUIC适配器的事件流支持
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.flush().await.map_err(Into::into)
+    }
+    
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         Some(self.inner.subscribe_events())
     }
 }
@@ -453,9 +476,12 @@ impl Connection for QuicConnection {
         self.inner.connection_info()
     }
     
-    /// 获取事件流 - QUIC服务器连接的临时事件流支持
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        // 使用QUIC适配器的临时事件流支持
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        use crate::protocol::ProtocolAdapter;
+        self.inner.flush().await.map_err(Into::into)
+    }
+    
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         Some(self.inner.subscribe_events())
     }
 }

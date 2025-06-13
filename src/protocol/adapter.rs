@@ -140,7 +140,7 @@ pub trait DynProtocolConfig: Send + Sync + 'static {
 /// 🔧 服务端专用动态配置
 pub trait DynServerConfig: DynProtocolConfig {
     /// 动态构建服务器（object-safe）
-    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Server>, crate::error::TransportError>> + Send + '_>>;
+    fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>>;
     
     /// 获取绑定地址
     fn get_bind_address(&self) -> std::net::SocketAddr;
@@ -152,7 +152,7 @@ pub trait DynServerConfig: DynProtocolConfig {
 /// 🔧 客户端专用动态配置  
 pub trait DynClientConfig: DynProtocolConfig {
     /// 动态构建连接（object-safe）
-    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>>;
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Connection>, crate::error::TransportError>> + Send + '_>>;
     
     /// 获取目标信息（可能是 SocketAddr 或 URL）
     fn get_target_info(&self) -> String;
@@ -365,7 +365,7 @@ impl ClientConfig for QuicClientConfig {
 
 /// 服务器配置trait - 用于类型安全的服务器启动
 pub trait ServerConfig: Send + Sync + 'static {
-    type Server: crate::protocol::Server;
+    type Server: crate::Server;
     
     /// 验证配置的正确性
     fn validate(&self) -> Result<(), TransportError>;
@@ -379,7 +379,7 @@ pub trait ServerConfig: Send + Sync + 'static {
 
 /// 客户端配置trait - 用于类型安全的客户端连接
 pub trait ClientConfig: Send + Sync + 'static {
-    type Connection: crate::protocol::Connection;
+    type Connection: crate::Connection;
     
     /// 验证配置的正确性
     fn validate(&self) -> Result<(), TransportError>;

@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use crate::{SessionId, packet::Packet, error::TransportError, command::ConnectionInfo};
 
-/// 连接接口 - 统一的连接抽象（完全事件驱动）
+/// 统一的连接接口 - 所有协议的连接抽象
+/// 
+/// 这是 msgtrans 中唯一的连接接口，所有协议适配器都应该实现此接口
 #[async_trait]
-pub trait Connection: Send + Sync {
+pub trait Connection: Send + Sync + std::any::Any {
     /// 发送数据包
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError>;
     
@@ -13,26 +15,29 @@ pub trait Connection: Send + Sync {
     /// 获取会话ID
     fn session_id(&self) -> SessionId;
     
+    /// 设置会话ID
+    fn set_session_id(&mut self, session_id: SessionId);
+    
     /// 获取连接信息
-    fn info(&self) -> &ConnectionInfo;
+    fn connection_info(&self) -> ConnectionInfo;
     
     /// 检查连接是否活跃
-    fn is_active(&self) -> bool;
+    fn is_connected(&self) -> bool;
     
-    /// 刷新缓冲区
+    /// 刷新发送缓冲区
     async fn flush(&mut self) -> Result<(), TransportError>;
     
     /// 获取事件流 - 事件驱动架构的核心
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>>;
+    /// 
+    /// 所有连接都应该支持事件流，这是事件驱动架构的基础
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>>;
 }
 
-/// 服务器接口 - 接受新连接
+/// 统一的服务器接口 - 接受新连接
 #[async_trait]
 pub trait Server: Send + Sync {
-    type Connection: Connection;
-    
     /// 接受新连接
-    async fn accept(&mut self) -> Result<Self::Connection, TransportError>;
+    async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError>;
     
     /// 获取服务器绑定地址
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError>;
@@ -44,10 +49,8 @@ pub trait Server: Send + Sync {
 /// 连接工厂 - 创建客户端连接
 #[async_trait]
 pub trait ConnectionFactory: Send + Sync {
-    type Connection: Connection;
-    
     /// 建立连接
-    async fn connect(&self) -> Result<Self::Connection, TransportError>;
+    async fn connect(&self) -> Result<Box<dyn Connection>, TransportError>;
 }
 
 /// TCP连接包装器
@@ -88,11 +91,16 @@ impl Connection for TcpConnection {
         self.adapter.session_id()
     }
     
-    fn info(&self) -> &ConnectionInfo {
-        &self.cached_info
+    fn set_session_id(&mut self, session_id: SessionId) {
+        use crate::protocol::ProtocolAdapter;
+        self.adapter.set_session_id(session_id);
     }
     
-    fn is_active(&self) -> bool {
+    fn connection_info(&self) -> ConnectionInfo {
+        self.cached_info.clone()
+    }
+    
+    fn is_connected(&self) -> bool {
         use crate::protocol::ProtocolAdapter;
         self.adapter.is_connected()
     }
@@ -103,41 +111,7 @@ impl Connection for TcpConnection {
     }
     
     /// 获取事件流 - TCP连接特有的实现
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        Some(self.adapter.subscribe_events())
-    }
-}
-
-// 为 protocol::protocol::Connection trait 添加实现
-#[async_trait]
-impl crate::protocol::Connection for TcpConnection {
-    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
-        <Self as Connection>::send(self, packet).await
-    }
-    
-    async fn close(&mut self) -> Result<(), TransportError> {
-        <Self as Connection>::close(self).await
-    }
-    
-    fn is_connected(&self) -> bool {
-        self.is_active()
-    }
-    
-    fn session_id(&self) -> SessionId {
-        <Self as Connection>::session_id(self)
-    }
-    
-    fn set_session_id(&mut self, session_id: SessionId) {
-        use crate::protocol::ProtocolAdapter;
-        self.adapter.set_session_id(session_id);
-    }
-    
-    fn connection_info(&self) -> crate::command::ConnectionInfo {
-        self.info().clone()
-    }
-    
-    /// 获取事件流 - TCP连接特有的实现
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         Some(self.adapter.subscribe_events())
     }
 }
@@ -155,9 +129,7 @@ impl TcpServer {
 
 #[async_trait]
 impl Server for TcpServer {
-    type Connection = TcpConnection;
-    
-    async fn accept(&mut self) -> Result<Self::Connection, TransportError> {
+    async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError> {
         let adapter = self.inner.accept().await.map_err(|e| {
             TransportError::protocol_error("generic", format!("TCP accept failed: {:?}", e))
         })?;
@@ -193,13 +165,11 @@ impl TcpConnectionFactory {
 
 #[async_trait]
 impl ConnectionFactory for TcpConnectionFactory {
-    type Connection = TcpConnection;
-    
-    async fn connect(&self) -> Result<Self::Connection, TransportError> {
+    async fn connect(&self) -> Result<Box<dyn Connection>, TransportError> {
         let adapter = crate::adapters::tcp::TcpAdapter::connect(self.target_addr, self.config.clone())
             .await
             .map_err(|e| TransportError::protocol_error("generic", format!("TCP connect failed: {:?}", e)))?;
-        
-        Ok(TcpConnection::new(adapter))
+            
+        Ok(Box::new(TcpConnection::new(adapter)))
     }
 } 

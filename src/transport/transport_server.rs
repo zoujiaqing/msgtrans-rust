@@ -8,7 +8,7 @@ use crate::{
     transport::{
         config::TransportConfig,
         lockfree_enhanced::LockFreeHashMap,
-        connection_state::{ConnectionState, ConnectionStateManager},
+        connection_state::ConnectionStateManager,
     },
     command::TransportStats,
     protocol::adapter::DynServerConfig,
@@ -25,7 +25,7 @@ pub struct TransportServer {
     /// 配置
     config: TransportConfig,
     /// 🎯 核心：会话到连接的映射 (使用 lockfree)
-    connections: Arc<LockFreeHashMap<SessionId, Arc<tokio::sync::Mutex<Box<dyn crate::protocol::Connection>>>>>,
+    connections: Arc<LockFreeHashMap<SessionId, Arc<tokio::sync::Mutex<Box<dyn crate::Connection>>>>>,
     /// 会话ID生成器
     session_id_generator: Arc<std::sync::atomic::AtomicU64>,
     /// 服务端统计信息 (使用 lockfree)
@@ -132,7 +132,7 @@ impl TransportServer {
     }
 
     /// 添加会话 - 使用连接已有的会话ID
-    pub async fn add_session(&self, connection: Box<dyn crate::protocol::Connection>) -> SessionId {
+    pub async fn add_session(&self, connection: Box<dyn crate::Connection>) -> SessionId {
         // 🔧 修复：使用连接已有的会话ID，而不是生成新的
         let session_id = connection.session_id();
         let wrapped_connection = Arc::new(tokio::sync::Mutex::new(connection));
@@ -405,7 +405,7 @@ impl TransportServer {
     }
 
     /// 🎯 启动协议监听器 - 通用方法
-    async fn start_protocol_listener(&self, mut server: Box<dyn crate::protocol::Server>, protocol_name: String) -> Result<tokio::task::JoinHandle<()>, TransportError>
+    async fn start_protocol_listener(&self, mut server: Box<dyn crate::Server>, protocol_name: String) -> Result<tokio::task::JoinHandle<()>, TransportError>
     {
         let server_clone = self.clone();
         
@@ -434,7 +434,7 @@ impl TransportServer {
                         tracing::info!("🆔 为 {} 连接生成会话ID: {}", protocol_name, session_id);
                         
                         // 🔧 修复：在移动connection之前获取事件流
-                        let event_receiver = connection.get_event_stream();
+                        let event_receiver = connection.event_stream();
                         
                         // 添加到会话管理
                         let actual_session_id = server_clone.add_session(connection).await;

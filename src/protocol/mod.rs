@@ -1,23 +1,24 @@
+/// 协议抽象层模块
+/// 
+/// 提供协议配置、适配器和工厂等抽象
+
 pub mod adapter;
 pub mod protocol;
-pub mod server_config;
 pub mod client_config;
+pub mod server_config;
 pub mod protocol_adapter;
 
-// 重新导出适配器相关类型（移除旧配置）
-pub use adapter::{
-    ProtocolAdapter, ProtocolConfig,
-    ConfigError,
-    ServerConfig, ClientConfig,  // 只保留trait
-    AdapterStats
-};
+// 重新导出核心类型
+pub use adapter::{ProtocolAdapter, AdapterStats};
+pub use protocol::{ProtocolFactory, ProtocolRegistry, BoxFuture, ProtocolSet, StandardProtocols, PluginManager};
 
-// 重新导出协议相关类型
-pub use protocol::{Connection, Server, ProtocolFactory, ProtocolRegistry, BoxFuture, ProtocolSet, StandardProtocols, PluginManager};
-
-// 重新导出协议适配器
-pub use protocol_adapter::{ProtocolConnectionAdapter, EmptyConfig};
-
-// 重新导出分离的配置类型（这是唯一的公开配置API）
+// 重新导出配置类型
+pub use client_config::{TcpClientConfig, WebSocketClientConfig, QuicClientConfig, RetryConfig};
 pub use server_config::{TcpServerConfig, WebSocketServerConfig, QuicServerConfig};
-pub use client_config::{TcpClientConfig, WebSocketClientConfig, QuicClientConfig, RetryConfig}; 
+
+// 重新导出适配器配置
+pub use adapter::{
+    ProtocolConfig, ConfigError, 
+    DynProtocolConfig, DynServerConfig, DynClientConfig,
+    ServerConfig, ClientConfig
+}; 

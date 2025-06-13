@@ -26,10 +26,10 @@ pub trait ProtocolPlugin: Send + Sync {
     async fn validate_config(&self, config: &dyn std::any::Any) -> Result<(), ConfigError>;
     
     /// 创建服务器
-    async fn create_server(&self, config: Box<dyn std::any::Any>) -> Result<Box<dyn Server<Connection = Box<dyn Connection>>>, TransportError>;
+    async fn create_server(&self, config: Box<dyn std::any::Any>) -> Result<Box<dyn Server>, TransportError>;
     
     /// 创建连接工厂
-    async fn create_connection_factory(&self, config: Box<dyn std::any::Any>) -> Result<Box<dyn ConnectionFactory<Connection = Box<dyn Connection>>>, TransportError>;
+    async fn create_connection_factory(&self, config: Box<dyn std::any::Any>) -> Result<Box<dyn ConnectionFactory>, TransportError>;
     
     /// 支持的配置类型名称
     fn config_type_name(&self) -> &str;
@@ -234,7 +234,7 @@ impl PluginManager {
         &self, 
         protocol: &str, 
         config: Box<dyn std::any::Any>
-    ) -> Result<Box<dyn Server<Connection = Box<dyn Connection>>>, TransportError> {
+    ) -> Result<Box<dyn Server>, TransportError> {
         if let Some(plugin) = self.get_plugin(protocol) {
             plugin.create_server(config).await
         } else {
@@ -251,7 +251,7 @@ impl PluginManager {
         &self,
         protocol: &str,
         config: Box<dyn std::any::Any>
-    ) -> Result<Box<dyn ConnectionFactory<Connection = Box<dyn Connection>>>, TransportError> {
+    ) -> Result<Box<dyn ConnectionFactory>, TransportError> {
         if let Some(plugin) = self.get_plugin(protocol) {
             plugin.create_connection_factory(config).await
         } else {
@@ -295,20 +295,23 @@ impl Connection for PluginConnection {
         self.inner.session_id()
     }
     
-    fn info(&self) -> &crate::command::ConnectionInfo {
-        self.inner.info()
+    fn set_session_id(&mut self, session_id: crate::SessionId) {
+        self.inner.set_session_id(session_id)
     }
     
-    fn is_active(&self) -> bool {
-        self.inner.is_active()
+    fn connection_info(&self) -> crate::command::ConnectionInfo {
+        self.inner.connection_info()
+    }
+    
+    fn is_connected(&self) -> bool {
+        self.inner.is_connected()
     }
     
     async fn flush(&mut self) -> Result<(), TransportError> {
         self.inner.flush().await
     }
     
-    /// 获取事件流 - 委托给内部连接
-    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        self.inner.get_event_stream()
+    fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        self.inner.event_stream()
     }
 } 

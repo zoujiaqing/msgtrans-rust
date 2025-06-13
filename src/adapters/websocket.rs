@@ -11,7 +11,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::{
     SessionId,
-    error::{CloseReason, TransportError},
+    error::TransportError,
     packet::Packet,
     protocol::{AdapterStats, ProtocolAdapter, ProtocolConfig},
     event::TransportEvent,

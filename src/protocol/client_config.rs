@@ -6,7 +6,7 @@ use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use crate::protocol::{ConfigError, ProtocolConfig};
 use crate::protocol::adapter::{DynProtocolConfig};
-use crate::protocol::protocol::Connection;
+use crate::Connection;
 
 /// TCP客户端配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -721,10 +721,10 @@ impl DynProtocolConfig for QuicClientConfig {
 
 /// 🔧 新增：实现 WebSocket 客户端专用配置
 impl crate::protocol::adapter::DynClientConfig for WebSocketClientConfig {
-    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>> {
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Connection>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
             let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
-            Ok(Box::new(connection) as Box<dyn crate::protocol::Connection>)
+            Ok(Box::new(connection) as Box<dyn crate::Connection>)
         })
     }
     
@@ -739,10 +739,10 @@ impl crate::protocol::adapter::DynClientConfig for WebSocketClientConfig {
 
 /// 🔧 新增：实现 TCP 客户端专用配置
 impl crate::protocol::adapter::DynClientConfig for TcpClientConfig {
-    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>> {
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Connection>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
             let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
-            Ok(Box::new(connection) as Box<dyn crate::protocol::Connection>)
+            Ok(Box::new(connection) as Box<dyn crate::Connection>)
         })
     }
     
@@ -757,10 +757,10 @@ impl crate::protocol::adapter::DynClientConfig for TcpClientConfig {
 
 /// 🔧 新增：实现 QUIC 客户端专用配置
 impl crate::protocol::adapter::DynClientConfig for QuicClientConfig {
-    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::protocol::Connection>, crate::error::TransportError>> + Send + '_>> {
+    fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Connection>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
             let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
-            Ok(Box::new(connection) as Box<dyn crate::protocol::Connection>)
+            Ok(Box::new(connection) as Box<dyn crate::Connection>)
         })
     }
     
