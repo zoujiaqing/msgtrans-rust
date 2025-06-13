@@ -458,6 +458,12 @@ impl Connection for QuicConnection {
         use crate::protocol::ProtocolAdapter;
         self.inner.connection_info()
     }
+    
+    /// 获取事件流 - QUIC服务器连接的临时事件流支持
+    fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
+        // 使用QUIC适配器的临时事件流支持
+        Some(self.inner.subscribe_events())
+    }
 }
 
 pub struct QuicServerWrapper {

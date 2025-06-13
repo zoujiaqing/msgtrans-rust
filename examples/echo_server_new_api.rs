@@ -6,6 +6,8 @@
 use msgtrans::{
     transport::TransportServerBuilder,
     protocol::TcpServerConfig,
+    protocol::WebSocketServerConfig,
+    protocol::QuicServerConfig,
     event::TransportEvent,
     packet::Packet,
 };
@@ -26,10 +28,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 创建TCP服务器配置
     let tcp_config = TcpServerConfig::new()
         .with_bind_address("127.0.0.1:8001".parse::<std::net::SocketAddr>()?);
+    let web_socket_server_config = WebSocketServerConfig::new()
+        .with_bind_address("127.0.0.1:8002".parse::<std::net::SocketAddr>()?);
+    let quic_server_config = QuicServerConfig::new()
+        .with_bind_address("127.0.0.1:8003".parse::<std::net::SocketAddr>()?);
     
     let transport = TransportServerBuilder::new()
         .max_connections(10)  // 限制连接数便于测试
         .with_protocol(tcp_config)
+        .with_protocol(web_socket_server_config)
+        .with_protocol(quic_server_config)
         .build()
         .await?;
     

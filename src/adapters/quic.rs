@@ -19,7 +19,7 @@ use rustls::{
     DigitallySignedStruct, SignatureScheme,
 };
 use std::{sync::Arc, net::SocketAddr, time::Duration, convert::TryInto};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
@@ -28,6 +28,7 @@ use crate::{
     packet::Packet, 
     command::ConnectionInfo,
     protocol::{ProtocolAdapter, AdapterStats, QuicClientConfig, QuicServerConfig},
+    event::TransportEvent,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -179,6 +180,7 @@ pub struct QuicAdapter<C> {
     connection: Option<Connection>,
     endpoint: Option<Endpoint>,
     is_connected: bool,
+    event_stream: Option<broadcast::Sender<TransportEvent>>,
 }
 
 impl<C> QuicAdapter<C> {
@@ -190,6 +192,7 @@ impl<C> QuicAdapter<C> {
             connection: None,
             endpoint: None,
             is_connected: false,
+            event_stream: { let (sender, _) = broadcast::channel(1024); Some(sender) },
         }
     }
     
@@ -201,6 +204,7 @@ impl<C> QuicAdapter<C> {
             connection: Some(connection),
             endpoint: None,
             is_connected: true,
+            event_stream: { let (sender, _) = broadcast::channel(1024); Some(sender) },
         }
     }
     
@@ -212,7 +216,19 @@ impl<C> QuicAdapter<C> {
             connection: None,
             endpoint: Some(endpoint),
             is_connected: false,
+            event_stream: { let (sender, _) = broadcast::channel(1024); Some(sender) },
         }
+    }
+    
+    /// 获取事件流接收器 (临时实现)
+    /// 
+    /// TODO: 实现完整的事件驱动架构
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::TransportEvent> {
+        // 创建一个临时的广播通道
+        let (sender, receiver) = tokio::sync::broadcast::channel(16);
+        // 丢弃发送器，这样接收器会立即关闭
+        drop(sender);
+        receiver
     }
 }
 

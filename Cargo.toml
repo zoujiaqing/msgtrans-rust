@@ -65,6 +65,10 @@ rand = "0.8"
 name = "packet"
 path = "examples/packet.rs"
 
+[[example]]
+name = "quic_event_test"
+path = "examples/quic_event_test.rs"
+
 # Phase 2 benchmarks
 [[bench]]
 name = "phase2_benchmarks"

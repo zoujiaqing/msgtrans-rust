@@ -90,14 +90,17 @@ impl TransportServer {
             
             tracing::debug!("🔍 会话 {} 连接状态正常，开始发送数据包", session_id);
             
+            // 获取连接协议信息
+            let protocol = conn.connection_info().protocol;
+            
             // 尝试发送数据包
             match conn.send(packet).await {
                 Ok(()) => {
-                    tracing::debug!("✅ 会话 {} TCP层发送成功 (TransportServer层确认)", session_id);
+                    tracing::debug!("✅ 会话 {} {}层发送成功 (TransportServer层确认)", session_id, protocol.to_uppercase());
                     Ok(())
                 }
                 Err(e) => {
-                    tracing::error!("❌ 会话 {} TCP层发送失败: {:?}", session_id, e);
+                    tracing::error!("❌ 会话 {} {}层发送失败: {:?}", session_id, protocol.to_uppercase(), e);
                     
                     // 🔧 关键修复：检查是否是连接相关错误
                     let error_msg = format!("{:?}", e);
