@@ -1,12 +1,15 @@
 #[derive(Debug, Clone)]
 pub struct TransportConfig { 
-    pub global: GlobalConfig 
+    pub global: GlobalConfig,
+    /// 优雅关闭超时时间
+    pub graceful_timeout: std::time::Duration,
 } 
 
 impl Default for TransportConfig { 
     fn default() -> Self { 
         Self { 
-            global: GlobalConfig::default() 
+            global: GlobalConfig::default(),
+            graceful_timeout: std::time::Duration::from_secs(5),
         } 
     } 
 }

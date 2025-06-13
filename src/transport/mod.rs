@@ -37,6 +37,7 @@ pub mod client;
 pub mod server;
 pub mod transport;
 pub mod transport_server;
+pub mod connection_state;
 
 // 🚀 Phase 3: 核心高性能组件 (默认启用)
 pub mod lockfree_enhanced;
@@ -108,4 +109,9 @@ pub use server::{
 pub use lockfree_enhanced::{
     LockFreeHashMap, LockFreeQueue, LockFreeCounter,
     LockFreeStats, QueueStats, CounterStats
+};
+
+// 连接状态管理导出
+pub use connection_state::{
+    ConnectionState, ConnectionStateManager
 };

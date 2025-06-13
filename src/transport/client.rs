@@ -339,16 +339,36 @@ impl TransportClient {
         std::time::Duration::from_secs_f64(delay)
     }
     
-    /// 📡 断开连接
+    /// 📡 断开连接（优雅关闭）
     pub async fn disconnect(&mut self) -> Result<(), TransportError> {
         // 检查是否已连接
         let mut current_session = self.current_session_id.write().await;
-        if current_session.is_some() {
-            current_session.take(); // 清除会话ID
+        if let Some(session_id) = current_session.take() {
             drop(current_session);
             
             tracing::info!("TransportClient 断开连接");
-            self.inner.disconnect().await?;
+            
+            // 使用 Transport 的统一关闭方法
+            self.inner.close_session(session_id).await?;
+            
+            Ok(())
+        } else {
+            Err(TransportError::connection_error("Not connected", false))
+        }
+    }
+    
+    /// 🔌 强制断开连接
+    pub async fn force_disconnect(&mut self) -> Result<(), TransportError> {
+        // 检查是否已连接
+        let mut current_session = self.current_session_id.write().await;
+        if let Some(session_id) = current_session.take() {
+            drop(current_session);
+            
+            tracing::info!("TransportClient 强制断开连接");
+            
+            // 使用 Transport 的强制关闭方法
+            self.inner.force_close_session(session_id).await?;
+            
             Ok(())
         } else {
             Err(TransportError::connection_error("Not connected", false))

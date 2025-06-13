@@ -11,12 +11,25 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::{
     SessionId,
-    error::TransportError,
+    error::{CloseReason, TransportError},
     packet::Packet,
-    protocol::{ProtocolAdapter, AdapterStats, ProtocolConfig},
-    command::{ConnectionInfo, ConnectionState},
+    protocol::{AdapterStats, ProtocolAdapter, ProtocolConfig},
     event::TransportEvent,
+    ConnectionInfo,
+    command::ConnectionState,
 };
+
+/// WebSocket消息处理结果
+enum MessageProcessResult {
+    /// 收到数据包
+    Packet(Packet),
+    /// 心跳消息，继续处理
+    Heartbeat,
+    /// 对端正常关闭
+    PeerClosed,
+    /// 处理错误
+    Error(WebSocketError),
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebSocketError {
@@ -154,7 +167,7 @@ impl<C> WebSocketAdapter<C> {
                         match read_result {
                             Some(Ok(message)) => {
                                 match Self::process_websocket_message(message) {
-                                    Ok(Some(packet)) => {
+                                    MessageProcessResult::Packet(packet) => {
                                         tracing::debug!("📥 WebSocket接收到数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
                                         
                                         // 发送接收事件
@@ -167,12 +180,38 @@ impl<C> WebSocketAdapter<C> {
                                             tracing::warn!("📥 发送接收事件失败: {:?}", e);
                                         }
                                     }
-                                    Ok(None) => {
+                                    MessageProcessResult::Heartbeat => {
                                         // 心跳消息，继续循环
                                         continue;
                                     }
-                                    Err(e) => {
+                                    MessageProcessResult::PeerClosed => {
+                                        // 对端正常关闭：通知上层应用连接已关闭，以便清理资源
+                                        let close_event = TransportEvent::ConnectionClosed {
+                                            session_id: current_session_id,
+                                            reason: crate::error::CloseReason::Normal,
+                                        };
+                                        
+                                        if let Err(e) = event_sender.send(close_event) {
+                                            tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                        } else {
+                                            tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
+                                        }
+                                        is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
+                                        break;
+                                    }
+                                    MessageProcessResult::Error(e) => {
                                         tracing::error!("📥 WebSocket消息处理错误: {:?} (会话: {})", e, current_session_id);
+                                        // 消息处理错误：通知上层应用连接出错，以便清理资源
+                                        let close_event = TransportEvent::ConnectionClosed {
+                                            session_id: current_session_id,
+                                            reason: crate::error::CloseReason::Error(format!("{:?}", e)),
+                                        };
+                                        
+                                        if let Err(e) = event_sender.send(close_event) {
+                                            tracing::debug!("🔗 通知上层消息处理错误失败: 会话 {} - {:?}", current_session_id, e);
+                                        } else {
+                                            tracing::debug!("📡 已通知上层消息处理错误: 会话 {}", current_session_id);
+                                        }
                                         is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
                                         break;
                                     }
@@ -180,22 +219,48 @@ impl<C> WebSocketAdapter<C> {
                             }
                             Some(Err(e)) => {
                                 // 优雅处理不同类型的WebSocket错误
-                                match e {
+                                let reason = match e {
                                     TungsteniteError::Protocol(error::ProtocolError::ResetWithoutClosingHandshake) => {
-                                        tracing::info!("🔗 WebSocket连接被客户端重置 (会话: {})", current_session_id);
+                                        tracing::debug!("📥 对端主动重置WebSocket连接 (会话: {})", current_session_id);
+                                        crate::error::CloseReason::Normal
                                     }
                                     TungsteniteError::ConnectionClosed => {
-                                        tracing::info!("🔗 WebSocket连接正常关闭 (会话: {})", current_session_id);
+                                        tracing::debug!("📥 对端主动关闭WebSocket连接 (会话: {})", current_session_id);
+                                        crate::error::CloseReason::Normal
                                     }
                                     _ => {
-                                        tracing::warn!("📥 WebSocket读取错误: {:?} (会话: {})", e, current_session_id);
+                                        tracing::error!("📥 WebSocket连接错误: {:?} (会话: {})", e, current_session_id);
+                                        crate::error::CloseReason::Error(format!("{:?}", e))
                                     }
+                                };
+                                
+                                // 网络异常或对端关闭：通知上层应用连接已关闭，以便清理资源
+                                let close_event = TransportEvent::ConnectionClosed {
+                                    session_id: current_session_id,
+                                    reason,
+                                };
+                                
+                                if let Err(e) = event_sender.send(close_event) {
+                                    tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                } else {
+                                    tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
                                 }
                                 is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
                                 break;
                             }
                             None => {
-                                tracing::info!("🔗 WebSocket连接已关闭 (会话: {})", current_session_id);
+                                tracing::debug!("📥 对端主动关闭WebSocket连接 (会话: {})", current_session_id);
+                                // 对端主动关闭：通知上层应用连接已关闭，以便清理资源
+                                let close_event = TransportEvent::ConnectionClosed {
+                                    session_id: current_session_id,
+                                    reason: crate::error::CloseReason::Normal,
+                                };
+                                
+                                if let Err(e) = event_sender.send(close_event) {
+                                    tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                } else {
+                                    tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
+                                }
                                 is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
                                 break;
                             }
@@ -224,6 +289,17 @@ impl<C> WebSocketAdapter<C> {
                                 }
                                 Err(e) => {
                                     tracing::error!("📤 WebSocket发送错误: {:?} (会话: {})", e, current_session_id);
+                                    // 发送错误：通知上层应用连接出错，以便清理资源
+                                    let close_event = TransportEvent::ConnectionClosed {
+                                        session_id: current_session_id,
+                                        reason: crate::error::CloseReason::Error(format!("{:?}", e)),
+                                    };
+                                    
+                                    if let Err(e) = event_sender.send(close_event) {
+                                        tracing::debug!("🔗 通知上层发送错误失败: 会话 {} - {:?}", current_session_id, e);
+                                    } else {
+                                        tracing::debug!("📡 已通知上层发送错误: 会话 {}", current_session_id);
+                                    }
                                     is_connected.store(false, std::sync::atomic::Ordering::SeqCst);
                                     break;
                                 }
@@ -234,56 +310,57 @@ impl<C> WebSocketAdapter<C> {
                     // 🛑 处理关闭信号
                     _ = shutdown_signal.recv() => {
                         tracing::info!("🛑 收到关闭信号，停止WebSocket事件循环 (会话: {})", current_session_id);
+                        // 主动关闭：先发送 WebSocket Close 帧，然后关闭连接
+                        tracing::debug!("🔌 发送WebSocket Close帧进行优雅关闭");
+                        
+                        // 发送 Close 帧
+                        if let Err(e) = stream.close(None).await {
+                            tracing::warn!("📤 发送WebSocket Close帧失败: {:?} (会话: {})", e, current_session_id);
+                        } else {
+                            tracing::debug!("📤 WebSocket Close帧发送成功 (会话: {})", current_session_id);
+                        }
+                        
+                        // 主动关闭：不需要发送关闭事件，因为是上层主动发起的关闭
+                        // 底层协议关闭已经通知了对端，上层也已经知道要关闭了
+                        tracing::debug!("🔌 主动关闭，不发送关闭事件");
                         break;
                     }
                 }
             }
             
-            // 发送连接关闭事件
-            let final_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
-            let close_event = TransportEvent::ConnectionClosed {
-                session_id: final_session_id,
-                reason: crate::error::CloseReason::Normal,
-            };
-            
-            if let Err(e) = event_sender.send(close_event) {
-                tracing::debug!("🔗 连接关闭事件未发送（接收器已关闭，正常情况）: 会话 {}", final_session_id);
-            } else {
-                tracing::debug!("✅ 关闭事件发送成功 (会话: {})", final_session_id);
-            }
-            
-            tracing::debug!("✅ WebSocket事件循环已结束 (会话: {})", final_session_id);
+            tracing::debug!("✅ WebSocket事件循环已结束 (会话: {})", current_session_id);
         })
     }
     
     /// 处理WebSocket消息
-    fn process_websocket_message(message: Message) -> Result<Option<Packet>, WebSocketError> {
+    fn process_websocket_message(message: Message) -> MessageProcessResult {
         match message {
             Message::Binary(data) => {
                 // 尝试从二进制数据解析Packet
                 match Packet::from_bytes(&data) {
-                    Ok(packet) => Ok(Some(packet)),
+                    Ok(packet) => MessageProcessResult::Packet(packet),
                     Err(_) => {
                         // 如果解析失败，创建一个基本的数据包
                         let packet = Packet::data(0, &data[..]);
-                        Ok(Some(packet))
+                        MessageProcessResult::Packet(packet)
                     }
                 }
             }
             Message::Text(text) => {
                 // 文本消息直接创建数据包
                 let packet = Packet::data(0, text.as_bytes());
-                Ok(Some(packet))
+                MessageProcessResult::Packet(packet)
             }
             Message::Close(_) => {
-                Err(WebSocketError::ConnectionClosed)
+                // Close 消息表示对端正常关闭
+                MessageProcessResult::PeerClosed
             }
             Message::Ping(_) | Message::Pong(_) => {
-                // 心跳消息，返回None表示继续处理
-                Ok(None)
+                // 心跳消息
+                MessageProcessResult::Heartbeat
             }
             Message::Frame(_) => {
-                Err(WebSocketError::InvalidMessageType)
+                MessageProcessResult::Error(WebSocketError::InvalidMessageType)
             }
         }
     }
@@ -304,6 +381,9 @@ where
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
+        let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
+        tracing::debug!("🔗 关闭WebSocket连接 (会话: {})", current_session_id);
+        
         // 发送关闭信号
         let _ = self.shutdown_sender.send(());
         

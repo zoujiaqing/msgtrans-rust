@@ -14,9 +14,11 @@ use crate::{
         config::TransportConfig,
         pool::ConnectionPool,
         memory_pool_v2::OptimizedMemoryPool,
+        connection_state::{ConnectionState, ConnectionStateManager},
     },
     protocol::{ProtocolRegistry, ProtocolAdapter, Connection},
     adapters::create_standard_registry,
+    event::TransportEvent,
 };
 
 /// 🎯 单连接传输抽象 - 真正符合架构设计的 Transport
@@ -33,6 +35,8 @@ pub struct Transport {
     connection_adapter: Option<Arc<Mutex<dyn Connection>>>,
     /// 当前连接的会话ID
     session_id: Option<SessionId>,
+    /// 连接状态管理器
+    state_manager: ConnectionStateManager,
 }
 
 impl Transport {
@@ -57,6 +61,7 @@ impl Transport {
             memory_pool,
             connection_adapter: None,
             session_id: None,
+            state_manager: ConnectionStateManager::new(),
         })
     }
     
@@ -117,14 +122,111 @@ impl Transport {
         }
     }
     
-    /// 🎯 核心方法：断开连接
+    /// 🎯 核心方法：断开连接（优雅关闭）
     pub async fn disconnect(&mut self) -> Result<(), TransportError> {
-        if let Some(session_id) = self.session_id.take() {
-            tracing::info!("🔌 Transport 断开连接: {}", session_id);
-            Ok(())
+        if let Some(session_id) = self.session_id {
+            self.close_session(session_id).await
         } else {
             Err(TransportError::connection_error("Not connected", false))
         }
+    }
+    
+    /// 🎯 统一关闭方法：优雅关闭会话
+    pub async fn close_session(&mut self, session_id: SessionId) -> Result<(), TransportError> {
+        // 1. 检查是否可以开始关闭
+        if !self.state_manager.try_start_closing(session_id).await {
+            tracing::debug!("会话 {} 已经在关闭或已关闭，跳过关闭逻辑", session_id);
+            return Ok(());
+        }
+        
+        tracing::info!("🔌 开始优雅关闭会话: {}", session_id);
+        
+        // 2. 执行实际关闭逻辑（底层适配器会自动发送关闭事件）
+        self.do_close_session(session_id).await?;
+        
+        // 3. 标记为已关闭
+        self.state_manager.mark_closed(session_id).await;
+        
+        // 4. 清理本地状态
+        if self.session_id == Some(session_id) {
+            self.session_id = None;
+            self.connection_adapter = None;
+        }
+        
+        tracing::info!("✅ 会话 {} 关闭完成", session_id);
+        Ok(())
+    }
+    
+    /// 🎯 强制关闭会话
+    pub async fn force_close_session(&mut self, session_id: SessionId) -> Result<(), TransportError> {
+        // 1. 检查是否可以开始关闭
+        if !self.state_manager.try_start_closing(session_id).await {
+            tracing::debug!("会话 {} 已经在关闭或已关闭，跳过强制关闭", session_id);
+            return Ok(());
+        }
+        
+        tracing::info!("🔌 强制关闭会话: {}", session_id);
+        
+        // 2. 立即强制关闭，不等待
+        if let Some(connection_adapter) = &self.connection_adapter {
+            let mut conn = connection_adapter.lock().await;
+            let _ = conn.close().await; // 忽略错误，直接关闭
+        }
+        
+        // 3. 标记为已关闭
+        self.state_manager.mark_closed(session_id).await;
+        
+        // 4. 清理本地状态
+        if self.session_id == Some(session_id) {
+            self.session_id = None;
+            self.connection_adapter = None;
+        }
+        
+        tracing::info!("✅ 会话 {} 强制关闭完成", session_id);
+        Ok(())
+    }
+    
+    /// 内部方法：执行实际关闭逻辑
+    async fn do_close_session(&mut self, session_id: SessionId) -> Result<(), TransportError> {
+        if let Some(connection_adapter) = &self.connection_adapter {
+            let mut conn = connection_adapter.lock().await;
+            
+            // 尝试优雅关闭
+            match tokio::time::timeout(
+                self.config.graceful_timeout,
+                self.try_graceful_close(&mut *conn)
+            ).await {
+                Ok(Ok(_)) => {
+                    tracing::debug!("✅ 会话 {} 优雅关闭成功", session_id);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("⚠️ 会话 {} 优雅关闭失败，执行强制关闭: {:?}", session_id, e);
+                    let _ = conn.close().await; // 忽略错误，直接关闭
+                }
+                Err(_) => {
+                    tracing::warn!("⚠️ 会话 {} 优雅关闭超时，执行强制关闭", session_id);
+                    let _ = conn.close().await; // 忽略错误，直接关闭
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// 尝试优雅关闭连接
+    async fn try_graceful_close(&self, conn: &mut dyn Connection) -> Result<(), TransportError> {
+        // 直接使用底层协议的关闭机制
+        // 每个协议都有自己的关闭信号：
+        // - QUIC: CONNECTION_CLOSE 帧
+        // - TCP: FIN 包  
+        // - WebSocket: Close 帧
+        tracing::debug!("🔌 使用底层协议的优雅关闭机制");
+        conn.close().await
+    }
+    
+    /// 检查连接是否应该忽略消息
+    pub async fn should_ignore_messages(&self, session_id: SessionId) -> bool {
+        self.state_manager.should_ignore_messages(session_id).await
     }
     
     /// 🎯 核心方法：检查连接状态
@@ -144,6 +246,10 @@ impl Transport {
     {
         self.connection_adapter = Some(Arc::new(Mutex::new(connection)));
         self.session_id = Some(session_id);
+        
+        // 添加连接状态管理
+        self.state_manager.add_connection(session_id);
+        
         tracing::debug!("✅ Transport 连接设置完成: {}", session_id);
     }
     
@@ -196,6 +302,7 @@ impl Clone for Transport {
             memory_pool: self.memory_pool.clone(),
             connection_adapter: None,  // 克隆时不复制连接
             session_id: None,
+            state_manager: ConnectionStateManager::new(),
         }
     }
 }

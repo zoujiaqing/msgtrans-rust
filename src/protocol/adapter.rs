@@ -72,6 +72,22 @@ pub trait ProtocolAdapter: Send + 'static {
     /// 关闭连接
     async fn close(&mut self) -> Result<(), Self::Error>;
     
+    /// 优雅关闭连接
+    /// 
+    /// 发送协议特定的关闭信号，等待对端确认
+    async fn graceful_close(&mut self) -> Result<(), Self::Error> {
+        // 默认实现：直接调用 close()
+        self.close().await
+    }
+    
+    /// 强制关闭连接
+    /// 
+    /// 立即关闭连接，不等待对端确认
+    async fn force_close(&mut self) -> Result<(), Self::Error> {
+        // 默认实现：直接调用 close()
+        self.close().await
+    }
+    
     /// 获取连接信息
     fn connection_info(&self) -> ConnectionInfo;
     

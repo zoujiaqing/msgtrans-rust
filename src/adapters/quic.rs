@@ -392,32 +392,79 @@ impl<C> QuicAdapter<C> {
                                         }
                                     }
                                     Err(e) => {
-                                        // 检查是否是正常的连接关闭或超时
-                                        match e {
+                                        // 根据不同的关闭原因决定是否通知上层
+                                        let (should_notify, reason, log_level) = match e {
                                             quinn::ReadToEndError::Read(quinn::ReadError::ConnectionLost(_)) => {
-                                                tracing::debug!("📥 QUIC连接正常关闭 (会话: {})", current_session_id);
+                                                (true, crate::error::CloseReason::Normal, "debug")
                                             }
                                             _ => {
-                                                tracing::debug!("📥 QUIC读取结束: {:?} (会话: {})", e, current_session_id);
+                                                (true, crate::error::CloseReason::Error(format!("{:?}", e)), "error")
+                                            }
+                                        };
+                                        
+                                        // 记录日志
+                                        match log_level {
+                                            "debug" => tracing::debug!("📥 QUIC连接关闭: {:?} (会话: {})", e, current_session_id),
+                                            "error" => tracing::error!("📥 QUIC连接错误: {:?} (会话: {})", e, current_session_id),
+                                            _ => {}
+                                        }
+                                        
+                                        // 通知上层连接关闭（网络异常或对端关闭）
+                                        if should_notify {
+                                            let close_event = TransportEvent::ConnectionClosed {
+                                                session_id: current_session_id,
+                                                reason,
+                                            };
+                                            
+                                            if let Err(e) = event_sender.send(close_event) {
+                                                tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                            } else {
+                                                tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
                                             }
                                         }
+                                        
                                         break;
                                     }
                                 }
                             }
                             Err(e) => {
-                                // 检查是否是正常的连接关闭或超时
-                                match e {
+                                // 根据不同的关闭原因决定是否通知上层
+                                let (should_notify, reason, log_level) = match e {
                                     quinn::ConnectionError::TimedOut => {
-                                        tracing::debug!("📥 QUIC连接空闲超时，正常关闭 (会话: {})", current_session_id);
+                                        (true, crate::error::CloseReason::Timeout, "debug")
                                     }
                                     quinn::ConnectionError::ConnectionClosed(_) => {
-                                        tracing::debug!("📥 QUIC连接被对端关闭 (会话: {})", current_session_id);
+                                        (true, crate::error::CloseReason::Normal, "debug")
+                                    }
+                                    quinn::ConnectionError::ApplicationClosed(_) => {
+                                        (true, crate::error::CloseReason::Normal, "debug")
                                     }
                                     _ => {
-                                        tracing::error!("📥 QUIC接收流错误: {:?} (会话: {})", e, current_session_id);
+                                        (true, crate::error::CloseReason::Error(format!("{:?}", e)), "error")
+                                    }
+                                };
+                                
+                                // 记录日志
+                                match log_level {
+                                    "debug" => tracing::debug!("📥 QUIC连接关闭: {:?} (会话: {})", e, current_session_id),
+                                    "error" => tracing::error!("📥 QUIC连接错误: {:?} (会话: {})", e, current_session_id),
+                                    _ => {}
+                                }
+                                
+                                // 通知上层连接关闭（网络异常或对端关闭）
+                                if should_notify {
+                                    let close_event = TransportEvent::ConnectionClosed {
+                                        session_id: current_session_id,
+                                        reason,
+                                    };
+                                    
+                                    if let Err(e) = event_sender.send(close_event) {
+                                        tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                    } else {
+                                        tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
                                     }
                                 }
+                                
                                 break;
                             }
                         }
@@ -464,23 +511,15 @@ impl<C> QuicAdapter<C> {
                     // 🛑 处理关闭信号
                     _ = shutdown_signal.recv() => {
                         tracing::info!("🛑 收到关闭信号，停止QUIC事件循环 (会话: {})", current_session_id);
+                        // 主动关闭：不需要发送关闭事件，因为是上层主动发起的关闭
+                        // 底层协议关闭已经通知了对端，上层也已经知道要关闭了
+                        tracing::debug!("🔌 主动关闭，不发送关闭事件");
                         break;
                     }
                 }
             }
             
-            // 发送连接关闭事件
-            let final_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
-            let close_event = TransportEvent::ConnectionClosed {
-                session_id: final_session_id,
-                reason: crate::error::CloseReason::Normal,
-            };
-            
-            if let Err(e) = event_sender.send(close_event) {
-                tracing::debug!("🔗 连接关闭事件未发送（接收器已关闭，正常情况）: 会话 {}", final_session_id);
-            }
-            
-            tracing::debug!("✅ QUIC事件循环已结束 (会话: {})", final_session_id);
+            tracing::debug!("✅ QUIC事件循环已结束 (会话: {})", current_session_id);
         })
     }
 }

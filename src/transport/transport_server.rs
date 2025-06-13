@@ -8,6 +8,7 @@ use crate::{
     transport::{
         config::TransportConfig,
         lockfree_enhanced::LockFreeHashMap,
+        connection_state::{ConnectionState, ConnectionStateManager},
     },
     command::TransportStats,
     protocol::adapter::DynServerConfig,
@@ -35,6 +36,8 @@ pub struct TransportServer {
     is_running: Arc<std::sync::atomic::AtomicBool>,
     /// 🔧 协议配置 - 改为服务端专用配置
     protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynServerConfig>>,
+    /// 连接状态管理器
+    state_manager: ConnectionStateManager,
 }
 
 impl TransportServer {
@@ -50,6 +53,7 @@ impl TransportServer {
             event_sender,
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             protocol_configs: std::collections::HashMap::new(),
+            state_manager: ConnectionStateManager::new(),
         })
     }
 
@@ -68,6 +72,7 @@ impl TransportServer {
             event_sender,
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             protocol_configs,
+            state_manager: ConnectionStateManager::new(),
         })
     }
 
@@ -134,6 +139,9 @@ impl TransportServer {
         self.connections.insert(session_id, wrapped_connection);
         self.stats.insert(session_id, TransportStats::new());
         
+        // 注册连接状态
+        self.state_manager.add_connection(session_id);
+        
         tracing::info!("✅ TransportServer 添加会话: {}", session_id);
         session_id
     }
@@ -142,8 +150,146 @@ impl TransportServer {
     pub async fn remove_session(&self, session_id: SessionId) -> Result<(), TransportError> {
         self.connections.remove(&session_id);
         self.stats.remove(&session_id);
+        self.state_manager.remove_connection(session_id);
         tracing::info!("🗑️ TransportServer 移除会话: {}", session_id);
         Ok(())
+    }
+    
+    /// 🎯 统一关闭方法：优雅关闭会话
+    pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
+        // 1. 检查是否可以开始关闭
+        if !self.state_manager.try_start_closing(session_id).await {
+            tracing::debug!("会话 {} 已经在关闭或已关闭，跳过关闭逻辑", session_id);
+            return Ok(());
+        }
+        
+        tracing::info!("🔌 开始优雅关闭会话: {}", session_id);
+        
+        // 2. 发送连接关闭事件（在资源清理前）
+        let close_event = TransportEvent::ConnectionClosed {
+            session_id,
+            reason: crate::error::CloseReason::Normal,
+        };
+        let _ = self.event_sender.send(close_event);
+        
+        // 3. 执行实际关闭逻辑
+        self.do_close_session(session_id).await?;
+        
+        // 4. 标记为已关闭
+        self.state_manager.mark_closed(session_id).await;
+        
+        // 5. 清理会话
+        self.remove_session(session_id).await?;
+        
+        tracing::info!("✅ 会话 {} 关闭完成", session_id);
+        Ok(())
+    }
+    
+    /// 🎯 强制关闭会话
+    pub async fn force_close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
+        // 1. 检查是否可以开始关闭
+        if !self.state_manager.try_start_closing(session_id).await {
+            tracing::debug!("会话 {} 已经在关闭或已关闭，跳过强制关闭", session_id);
+            return Ok(());
+        }
+        
+        tracing::info!("🔌 强制关闭会话: {}", session_id);
+        
+        // 2. 发送连接关闭事件
+        let close_event = TransportEvent::ConnectionClosed {
+            session_id,
+            reason: crate::error::CloseReason::Forced,
+        };
+        let _ = self.event_sender.send(close_event);
+        
+        // 3. 立即强制关闭，不等待
+        if let Some(connection) = self.connections.get(&session_id) {
+            let mut conn = connection.lock().await;
+            let _ = conn.close().await; // 忽略错误，直接关闭
+        }
+        
+        // 4. 标记为已关闭
+        self.state_manager.mark_closed(session_id).await;
+        
+        // 5. 清理会话
+        self.remove_session(session_id).await?;
+        
+        tracing::info!("✅ 会话 {} 强制关闭完成", session_id);
+        Ok(())
+    }
+    
+    /// 🎯 批量关闭所有会话
+    pub async fn close_all_sessions(&self) -> Result<(), TransportError> {
+        let session_ids = self.active_sessions().await;
+        let total_sessions = session_ids.len();
+        
+        if total_sessions == 0 {
+            tracing::info!("没有活跃会话需要关闭");
+            return Ok(());
+        }
+        
+        tracing::info!("🔌 开始批量关闭 {} 个会话", total_sessions);
+        
+        // 使用 graceful_timeout 作为批量关闭的总超时时间
+        let start_time = std::time::Instant::now();
+        let timeout = self.config.graceful_timeout;
+        
+        let mut success_count = 0;
+        let mut error_count = 0;
+        
+        for session_id in session_ids {
+            // 检查是否超时
+            if start_time.elapsed() >= timeout {
+                tracing::warn!("⚠️ 批量关闭超时，剩余会话将被强制关闭");
+                // 强制关闭剩余会话
+                let _ = self.force_close_session(session_id).await;
+                continue;
+            }
+            
+            // 尝试优雅关闭
+            match self.close_session(session_id).await {
+                Ok(_) => success_count += 1,
+                Err(e) => {
+                    error_count += 1;
+                    tracing::warn!("⚠️ 关闭会话 {} 失败: {:?}", session_id, e);
+                }
+            }
+        }
+        
+        tracing::info!("✅ 批量关闭完成，成功: {}, 失败: {}", success_count, error_count);
+        Ok(())
+    }
+    
+    /// 内部方法：执行实际关闭逻辑
+    async fn do_close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
+        if let Some(connection) = self.connections.get(&session_id) {
+            let mut conn = connection.lock().await;
+            
+            // 尝试优雅关闭
+            match tokio::time::timeout(
+                self.config.graceful_timeout,
+                conn.close()
+            ).await {
+                Ok(Ok(_)) => {
+                    tracing::debug!("✅ 会话 {} 优雅关闭成功", session_id);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("⚠️ 会话 {} 优雅关闭失败: {:?}", session_id, e);
+                    // 优雅关闭失败，但不返回错误，继续清理
+                }
+                Err(_) => {
+                    tracing::warn!("⚠️ 会话 {} 优雅关闭超时", session_id);
+                    // 超时，但不返回错误，继续清理
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// 检查连接是否应该忽略消息
+    pub async fn should_ignore_messages(&self, session_id: SessionId) -> bool {
+        self.state_manager.should_ignore_messages(session_id).await
     }
 
     /// 广播消息到所有会话
@@ -386,6 +532,7 @@ impl Clone for TransportServer {
             event_sender: self.event_sender.clone(),
             is_running: self.is_running.clone(),
             protocol_configs: cloned_configs,
+            state_manager: self.state_manager.clone(),
         }
     }
 }
