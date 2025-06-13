@@ -1,6 +1,6 @@
 /// 🔧 事件驱动QUIC适配器
 /// 
-/// 这是QUIC适配器的现代化版本TODO，支持：
+/// 这是QUIC适配器的现代化版本，支持：
 /// - 双向流复用
 /// - 事件驱动架构
 /// - 读写分离
@@ -174,61 +174,187 @@ fn configure_server_insecure() -> (ServerConfig, CertificateDer<'static>) {
 
 /// QUIC协议适配器（泛型支持客户端和服务端配置）
 pub struct QuicAdapter<C> {
-    session_id: SessionId,
+    /// 会话ID (使用原子类型以便事件循环访问)
+    session_id: Arc<std::sync::atomic::AtomicU64>,
     config: C,
     stats: AdapterStats,
-    connection: Option<Connection>,
-    endpoint: Option<Endpoint>,
-    is_connected: bool,
-    event_stream: Option<broadcast::Sender<TransportEvent>>,
+    connection_info: ConnectionInfo,
+    /// 发送队列
+    send_queue: mpsc::UnboundedSender<Packet>,
+    /// 事件发送器
+    event_sender: broadcast::Sender<TransportEvent>,
+    /// 关闭信号发送器
+    shutdown_sender: mpsc::UnboundedSender<()>,
+    /// 事件循环句柄
+    event_loop_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<C> QuicAdapter<C> {
-    pub fn new(config: C) -> Self {
-        Self {
-            session_id: SessionId::new(0),
+    pub async fn new_with_connection(
+        connection: Connection, 
+        config: C, 
+        event_sender: broadcast::Sender<TransportEvent>
+    ) -> Result<Self, QuicError> {
+        let session_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        
+        // 创建连接信息
+        let mut connection_info = ConnectionInfo::default();
+        connection_info.protocol = "quic".to_string();
+        connection_info.session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+        
+        // 获取地址信息
+        if let Some(local_addr) = connection.local_ip() {
+            connection_info.local_addr = format!("{}:0", local_addr).parse().unwrap_or(connection_info.local_addr);
+        }
+        
+        // 创建通信通道
+        let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
+        let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
+        
+        // 启动事件循环
+        let event_loop_handle = Self::start_event_loop(
+            connection,
+            session_id.clone(),
+            send_queue_rx,
+            shutdown_rx,
+            event_sender.clone(),
+        ).await;
+        
+        Ok(Self {
+            session_id,
             config,
             stats: AdapterStats::new(),
-            connection: None,
-            endpoint: None,
-            is_connected: false,
-            event_stream: { let (sender, _) = broadcast::channel(1024); Some(sender) },
-        }
+            connection_info,
+            send_queue: send_queue_tx,
+            event_sender,
+            shutdown_sender: shutdown_tx,
+            event_loop_handle: Some(event_loop_handle),
+        })
     }
     
-    pub fn new_with_connection(config: C, connection: Connection) -> Self {
-        Self {
-            session_id: SessionId::new(0),
-            config,
-            stats: AdapterStats::new(),
-            connection: Some(connection),
-            endpoint: None,
-            is_connected: true,
-            event_stream: { let (sender, _) = broadcast::channel(1024); Some(sender) },
-        }
-    }
-    
-    pub fn new_with_endpoint(config: C, endpoint: Endpoint) -> Self {
-        Self {
-            session_id: SessionId::new(0),
-            config,
-            stats: AdapterStats::new(),
-            connection: None,
-            endpoint: Some(endpoint),
-            is_connected: false,
-            event_stream: { let (sender, _) = broadcast::channel(1024); Some(sender) },
-        }
-    }
-    
-    /// 获取事件流接收器 (临时实现)
+    /// 获取事件流接收器
     /// 
-    /// TODO: 实现完整的事件驱动架构
-    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::TransportEvent> {
-        // 创建一个临时的广播通道
-        let (sender, receiver) = tokio::sync::broadcast::channel(16);
-        // 丢弃发送器，这样接收器会立即关闭
-        if let Some(ref sender) = self.event_stream { return sender.subscribe(); } drop(sender);
-        receiver
+    /// 这允许客户端订阅QUIC适配器内部事件循环发送的事件
+    pub fn subscribe_events(&self) -> broadcast::Receiver<TransportEvent> {
+        self.event_sender.subscribe()
+    }
+
+    /// 启动基于 tokio::select! 的事件循环
+    async fn start_event_loop(
+        connection: Connection,
+        session_id: Arc<std::sync::atomic::AtomicU64>,
+        mut send_queue: mpsc::UnboundedReceiver<Packet>,
+        mut shutdown_signal: mpsc::UnboundedReceiver<()>,
+        event_sender: broadcast::Sender<TransportEvent>,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+            tracing::debug!("🚀 QUIC事件循环启动 (会话: {})", current_session_id);
+            
+            loop {
+                // 获取当前会话ID
+                let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+                
+                tokio::select! {
+                    // 🔍 处理接收数据
+                    recv_result = connection.accept_uni() => {
+                        match recv_result {
+                            Ok(mut recv_stream) => {
+                                match recv_stream.read_to_end(1024 * 1024).await {
+                                    Ok(buf) => {
+                                        tracing::debug!("📥 QUIC接收到数据包: {} bytes (会话: {})", buf.len(), current_session_id);
+                                        
+                                        // 尝试解析数据包
+                                        let packet = match Packet::from_bytes(&buf) {
+                                            Ok(packet) => packet,
+                                            Err(_) => {
+                                                // 如果解析失败，创建基本数据包
+                                                Packet::data(0, &buf[..])
+                                            }
+                                        };
+                                        
+                                        // 发送接收事件
+                                        let event = TransportEvent::MessageReceived {
+                                            session_id: current_session_id,
+                                            packet,
+                                        };
+                                        
+                                        if let Err(e) = event_sender.send(event) {
+                                            tracing::warn!("📥 发送接收事件失败: {:?}", e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("📥 QUIC读取错误: {:?} (会话: {})", e, current_session_id);
+                                        break;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("📥 QUIC接收流错误: {:?} (会话: {})", e, current_session_id);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // 📤 处理发送数据
+                    packet = send_queue.recv() => {
+                        if let Some(packet) = packet {
+                            match connection.open_uni().await {
+                                Ok(mut send_stream) => {
+                                    let data = packet.to_bytes();
+                                    match send_stream.write_all(&data).await {
+                                        Ok(_) => {
+                                            if let Err(e) = send_stream.finish() {
+                                                tracing::error!("📤 QUIC流关闭错误: {:?} (会话: {})", e, current_session_id);
+                                            } else {
+                                                tracing::debug!("📤 QUIC发送成功: {} bytes (会话: {})", packet.payload.len(), current_session_id);
+                                                
+                                                // 发送发送事件
+                                                let event = TransportEvent::MessageSent {
+                                                    session_id: current_session_id,
+                                                    packet_id: packet.message_id,
+                                                };
+                                                
+                                                if let Err(e) = event_sender.send(event) {
+                                                    tracing::warn!("📤 发送发送事件失败: {:?}", e);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("📤 QUIC发送错误: {:?} (会话: {})", e, current_session_id);
+                                            break;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("📤 QUIC打开发送流错误: {:?} (会话: {})", e, current_session_id);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // 🛑 处理关闭信号
+                    _ = shutdown_signal.recv() => {
+                        tracing::info!("🛑 收到关闭信号，停止QUIC事件循环 (会话: {})", current_session_id);
+                        break;
+                    }
+                }
+            }
+            
+            // 发送连接关闭事件
+            let final_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
+            let close_event = TransportEvent::ConnectionClosed {
+                session_id: final_session_id,
+                reason: crate::error::CloseReason::Normal,
+            };
+            
+            if let Err(e) = event_sender.send(close_event) {
+                tracing::warn!("🔗 发送关闭事件失败: {:?}", e);
+            }
+            
+            tracing::debug!("✅ QUIC事件循环已结束 (会话: {})", final_session_id);
+        })
     }
 }
 
@@ -247,12 +373,7 @@ impl QuicAdapter<QuicClientConfig> {
         let connection = endpoint.connect(addr, "localhost")?.await?;
         tracing::debug!("✅ QUIC客户端已连接到: {}", addr);
         
-        let mut adapter = Self::new(config);
-        adapter.connection = Some(connection);
-        adapter.endpoint = Some(endpoint);
-        adapter.is_connected = true;
-        
-        Ok(adapter)
+        Self::new_with_connection(connection, config, broadcast::channel(16).0).await
     }
 }
 
@@ -262,59 +383,42 @@ impl ProtocolAdapter for QuicAdapter<QuicClientConfig> {
     type Error = QuicError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        if let Some(ref connection) = self.connection {
-            // 每次发送都创建新的单向流
-            let mut send_stream = connection.open_uni().await?;
-            let data = packet.to_bytes();
-            send_stream.write_all(&data).await?;
-            send_stream.finish()?;
-            
-            // 更新统计信息
-            self.stats.record_packet_sent(packet.payload.len());
-            Ok(())
-        } else {
-            Err(QuicError::ConnectionClosed)
-        }
+        self.send_queue.send(packet).map_err(|_| QuicError::ConnectionClosed)?;
+        Ok(())
     }
     
     async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        if let Some(ref connection) = self.connection {
-            // 等待接收流
-            let mut recv_stream = connection.accept_uni().await?;
-            let buf = recv_stream.read_to_end(1024 * 1024).await?; // 1MB limit
-            
-            // 尝试解析数据包
-            match Packet::from_bytes(&buf) {
-                Ok(packet) => {
-                    self.stats.record_packet_received(buf.len());
-                    Ok(Some(packet))
-                }
-                Err(_) => {
-                    // 如果解析失败，创建基本数据包
-                    let packet = Packet::data(0, &buf[..]);
-                    self.stats.record_packet_received(buf.len());
-                    Ok(Some(packet))
-                }
-            }
-        } else {
-            Err(QuicError::ConnectionClosed)
-        }
+        // 事件驱动模式下，不直接调用receive，而是通过事件流
+        Err(QuicError::Config("Use event stream for receiving messages".to_string()))
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
-        if self.is_connected {
-            tracing::debug!("🔌 关闭QUIC连接");
-            self.is_connected = false;
+        tracing::debug!("🔌 关闭QUIC客户端连接");
+        
+        // 发送关闭信号
+        if let Err(e) = self.shutdown_sender.send(()) {
+            tracing::warn!("发送关闭信号失败: {:?}", e);
         }
+        
+        // 等待事件循环结束
+        if let Some(handle) = self.event_loop_handle.take() {
+            if let Err(e) = handle.await {
+                tracing::warn!("等待事件循环结束失败: {:?}", e);
+            }
+        }
+        
         Ok(())
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        ConnectionInfo::default()
+        let mut info = ConnectionInfo::default();
+        info.protocol = "quic".to_string();
+        info.session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
+        info
     }
     
     fn is_connected(&self) -> bool {
-        self.is_connected
+        self.event_loop_handle.is_some()
     }
     
     fn stats(&self) -> AdapterStats {
@@ -322,18 +426,20 @@ impl ProtocolAdapter for QuicAdapter<QuicClientConfig> {
     }
     
     fn session_id(&self) -> SessionId {
-        self.session_id
+        SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst))
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        self.session_id = session_id;
+        self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
     }
     
     async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        Ok(false)
+        // 事件驱动模式下总是可读的
+        Ok(true)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
+        // QUIC流会自动刷新
         Ok(())
     }
 }
@@ -345,59 +451,43 @@ impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
     type Error = QuicError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        if let Some(ref connection) = self.connection {
-            // 每次发送都创建新的单向流
-            let mut send_stream = connection.open_uni().await?;
-            let data = packet.to_bytes();
-            send_stream.write_all(&data).await?;
-            send_stream.finish()?;
-            
-            // 更新统计信息
-            self.stats.record_packet_sent(packet.payload.len());
-            Ok(())
-        } else {
-            Err(QuicError::ConnectionClosed)
-        }
+        self.send_queue.send(packet).map_err(|_| QuicError::ConnectionClosed)?;
+        Ok(())
     }
     
     async fn receive(&mut self) -> Result<Option<Packet>, Self::Error> {
-        if let Some(ref connection) = self.connection {
-            // 等待接收流
-            let mut recv_stream = connection.accept_uni().await?;
-            let buf = recv_stream.read_to_end(1024 * 1024).await?; // 1MB limit
-            
-            // 尝试解析数据包
-            match Packet::from_bytes(&buf) {
-                Ok(packet) => {
-                    self.stats.record_packet_received(buf.len());
-                    Ok(Some(packet))
-                }
-                Err(_) => {
-                    // 如果解析失败，创建基本数据包
-                    let packet = Packet::data(0, &buf[..]);
-                    self.stats.record_packet_received(buf.len());
-                    Ok(Some(packet))
-                }
-            }
-        } else {
-            Err(QuicError::ConnectionClosed)
-        }
+        // 事件驱动模式下，不直接调用receive，而是通过事件流
+        Err(QuicError::Config("Use event stream for receiving messages".to_string()))
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
-        if self.is_connected {
-            tracing::debug!("🔌 关闭QUIC服务端连接");
-            self.is_connected = false;
+        tracing::debug!("🔌 关闭QUIC服务端连接");
+        
+        // 发送关闭信号
+        if let Err(e) = self.shutdown_sender.send(()) {
+            tracing::warn!("发送关闭信号失败: {:?}", e);
         }
+        
+        // 等待事件循环结束
+        if let Some(handle) = self.event_loop_handle.take() {
+            if let Err(e) = handle.await {
+                tracing::warn!("等待事件循环结束失败: {:?}", e);
+            }
+        }
+        
         Ok(())
     }
     
     fn connection_info(&self) -> ConnectionInfo {
-        ConnectionInfo::default()
+        let mut info = ConnectionInfo::default();
+        info.protocol = "quic".to_string();
+        info.session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
+        
+        info
     }
     
     fn is_connected(&self) -> bool {
-        self.is_connected
+        self.event_loop_handle.is_some()
     }
     
     fn stats(&self) -> AdapterStats {
@@ -405,23 +495,25 @@ impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
     }
     
     fn session_id(&self) -> SessionId {
-        self.session_id
+        SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst))
     }
     
     fn set_session_id(&mut self, session_id: SessionId) {
-        self.session_id = session_id;
+        self.session_id.store(session_id.0, std::sync::atomic::Ordering::SeqCst);
     }
     
     async fn poll_readable(&mut self) -> Result<bool, Self::Error> {
-        Ok(false)
+        // 事件驱动模式下总是可读的
+        Ok(true)
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
+        // QUIC流会自动刷新
         Ok(())
     }
 }
 
-/// QUIC服务器构建器
+// 服务器构建器和相关结构体保持不变...
 pub(crate) struct QuicServerBuilder {
     config: QuicServerConfig,
     bind_address: Option<SocketAddr>,
@@ -446,17 +538,14 @@ impl QuicServerBuilder {
     }
     
     pub(crate) async fn build(self) -> Result<QuicServer, QuicError> {
-        let bind_addr = self.bind_address.unwrap_or(self.config.bind_address);
+        let bind_addr = self.bind_address.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
         
-        tracing::debug!("🚀 QUIC服务器启动在: {}", bind_addr);
-        
-        // 配置服务器
         let (server_config, _cert) = configure_server_insecure();
         let endpoint = Endpoint::server(server_config, bind_addr)?;
         
-        tracing::debug!("✅ QUIC服务器已启动在: {}", bind_addr);
+        tracing::debug!("🚀 QUIC服务器启动在: {}", endpoint.local_addr()?);
         
-        Ok(QuicServer { 
+        Ok(QuicServer {
             config: self.config,
             endpoint,
         })
@@ -469,7 +558,6 @@ impl Default for QuicServerBuilder {
     }
 }
 
-/// QUIC服务器
 pub(crate) struct QuicServer {
     config: QuicServerConfig,
     endpoint: Endpoint,
@@ -481,44 +569,19 @@ impl QuicServer {
     }
     
     pub(crate) async fn accept(&mut self) -> Result<QuicAdapter<QuicServerConfig>, QuicError> {
-        tracing::debug!("🔗 QUIC等待连接...");
-        
-        // 等待新连接
-        let incoming = self.endpoint.accept().await
-            .ok_or_else(|| QuicError::Config("No incoming connections".to_string()))?;
-        
+        let incoming = self.endpoint.accept().await.ok_or(QuicError::ConnectionClosed)?;
         let connection = incoming.await?;
-        tracing::debug!("✅ QUIC新连接来自: {}", connection.remote_address());
         
-        let adapter = QuicAdapter::new_with_connection(self.config.clone(), connection);
-        Ok(adapter)
+        tracing::debug!("✅ QUIC服务器接受连接: {}", connection.remote_address());
+        
+        QuicAdapter::new_with_connection(connection, self.config.clone(), broadcast::channel(16).0).await
     }
     
     pub(crate) fn local_addr(&self) -> Result<SocketAddr, QuicError> {
-        Ok(self.endpoint.local_addr()?)
+        self.endpoint.local_addr().map_err(QuicError::Io)
     }
 }
 
-// 为示例提供的公共接口
-#[cfg(any(test, feature = "examples"))]
-impl QuicServer {
-    /// 为示例创建服务器构建器
-    pub fn example_builder() -> QuicServerBuilder {
-        QuicServerBuilder::new()
-    }
-    
-    /// 为示例接受连接
-    pub async fn example_accept(&mut self) -> Result<QuicAdapter<QuicServerConfig>, QuicError> {
-        self.accept().await
-    }
-    
-    /// 为示例获取本地地址
-    pub fn example_local_addr(&self) -> Result<SocketAddr, QuicError> {
-        self.local_addr()
-    }
-}
-
-/// QUIC客户端构建器
 pub(crate) struct QuicClientBuilder {
     config: QuicClientConfig,
     target_address: Option<std::net::SocketAddr>,
@@ -543,8 +606,8 @@ impl QuicClientBuilder {
     }
     
     pub(crate) async fn connect(self) -> Result<QuicAdapter<QuicClientConfig>, QuicError> {
-        let target_addr = self.target_address.unwrap_or(self.config.target_address);
-        QuicAdapter::connect(target_addr, self.config).await
+        let addr = self.target_address.ok_or_else(|| QuicError::Config("Target address not set".to_string()))?;
+        QuicAdapter::connect(addr, self.config).await
     }
 }
 
@@ -552,4 +615,4 @@ impl Default for QuicClientBuilder {
     fn default() -> Self {
         Self::new()
     }
-}
+} 
