@@ -227,7 +227,7 @@ impl<C> QuicAdapter<C> {
         // 创建一个临时的广播通道
         let (sender, receiver) = tokio::sync::broadcast::channel(16);
         // 丢弃发送器，这样接收器会立即关闭
-        drop(sender);
+        if let Some(ref sender) = self.event_stream { return sender.subscribe(); } drop(sender);
         receiver
     }
 }
