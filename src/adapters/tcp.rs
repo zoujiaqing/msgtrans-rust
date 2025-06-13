@@ -208,7 +208,7 @@ impl<C> TcpAdapter<C> {
             };
             
             if let Err(e) = event_sender.send(close_event) {
-                tracing::warn!("🔗 发送关闭事件失败: {:?}", e);
+                tracing::debug!("🔗 连接关闭事件未发送（接收器已关闭，正常情况）: 会话 {}", final_session_id);
             }
             
             tracing::debug!("✅ TCP事件循环已结束 (会话: {})", final_session_id);

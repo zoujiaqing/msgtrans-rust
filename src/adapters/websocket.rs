@@ -247,7 +247,7 @@ impl<C> WebSocketAdapter<C> {
             };
             
             if let Err(e) = event_sender.send(close_event) {
-                tracing::warn!("🔗 发送关闭事件失败: {:?}", e);
+                tracing::debug!("🔗 连接关闭事件未发送（接收器已关闭，正常情况）: 会话 {}", final_session_id);
             } else {
                 tracing::debug!("✅ 关闭事件发送成功 (会话: {})", final_session_id);
             }
