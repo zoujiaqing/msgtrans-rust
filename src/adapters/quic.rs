@@ -373,7 +373,7 @@ impl QuicAdapter<QuicClientConfig> {
         let connection = endpoint.connect(addr, "localhost")?.await?;
         tracing::debug!("✅ QUIC客户端已连接到: {}", addr);
         
-        Self::new_with_connection(connection, config, broadcast::channel(16).0).await
+        Self::new_with_connection(connection, config, (broadcast::channel(1000).0)).await
     }
 }
 
@@ -482,7 +482,6 @@ impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
         let mut info = ConnectionInfo::default();
         info.protocol = "quic".to_string();
         info.session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
-        
         info
     }
     
@@ -574,7 +573,7 @@ impl QuicServer {
         
         tracing::debug!("✅ QUIC服务器接受连接: {}", connection.remote_address());
         
-        QuicAdapter::new_with_connection(connection, self.config.clone(), broadcast::channel(16).0).await
+        QuicAdapter::new_with_connection(connection, self.config.clone(), (broadcast::channel(1000).0)).await
     }
     
     pub(crate) fn local_addr(&self) -> Result<SocketAddr, QuicError> {
