@@ -218,7 +218,7 @@ fn configure_client_with_config(config: &QuicClientConfig) -> Result<ClientConfi
 }
 
 /// Configure server with self-signed certificate
-fn configure_server_insecure() -> (ServerConfig, CertificateDer<'static>) {
+fn configure_server_insecure_with_config(config: &QuicServerConfig) -> (ServerConfig, CertificateDer<'static>) {
     let (cert, key) = generate_self_signed_cert();
     
     let mut server_config = ServerConfig::with_single_cert(
@@ -228,13 +228,19 @@ fn configure_server_insecure() -> (ServerConfig, CertificateDer<'static>) {
 
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.receive_window((1500u32 * 100).into());
-    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+    transport_config.max_idle_timeout(Some(config.max_idle_timeout.try_into().unwrap()));
 
     (server_config, cert)
 }
 
+/// Configure server with self-signed certificate (legacy function for backward compatibility)
+fn configure_server_insecure() -> (ServerConfig, CertificateDer<'static>) {
+    let default_config = QuicServerConfig::default();
+    configure_server_insecure_with_config(&default_config)
+}
+
 /// Configure server with PEM certificate and key
-fn configure_server_with_pem(cert_pem: &str, key_pem: &str) -> Result<(ServerConfig, CertificateDer<'static>), QuicError> {
+fn configure_server_with_pem(cert_pem: &str, key_pem: &str, config: &QuicServerConfig) -> Result<(ServerConfig, CertificateDer<'static>), QuicError> {
     // Parse private key from PEM string
     let key_bytes = key_pem.as_bytes();
     let key = rustls_pemfile::private_key(&mut std::io::Cursor::new(key_bytes))
@@ -269,7 +275,7 @@ fn configure_server_with_pem(cert_pem: &str, key_pem: &str) -> Result<(ServerCon
     // Configure transport parameters
     let transport_config = Arc::get_mut(&mut server_config.transport).unwrap();
     transport_config.receive_window((1500u32 * 100).into());
-    transport_config.max_idle_timeout(Some(Duration::from_secs(20).try_into().unwrap()));
+    transport_config.max_idle_timeout(Some(config.max_idle_timeout.try_into().unwrap()));
     
     Ok((server_config, first_cert))
 }
@@ -386,13 +392,32 @@ impl<C> QuicAdapter<C> {
                                         }
                                     }
                                     Err(e) => {
-                                        tracing::error!("📥 QUIC读取错误: {:?} (会话: {})", e, current_session_id);
+                                        // 检查是否是正常的连接关闭或超时
+                                        match e {
+                                            quinn::ReadToEndError::Read(quinn::ReadError::ConnectionLost(_)) => {
+                                                tracing::debug!("📥 QUIC连接正常关闭 (会话: {})", current_session_id);
+                                            }
+                                            _ => {
+                                                tracing::debug!("📥 QUIC读取结束: {:?} (会话: {})", e, current_session_id);
+                                            }
+                                        }
                                         break;
                                     }
                                 }
                             }
                             Err(e) => {
-                                tracing::error!("📥 QUIC接收流错误: {:?} (会话: {})", e, current_session_id);
+                                // 检查是否是正常的连接关闭或超时
+                                match e {
+                                    quinn::ConnectionError::TimedOut => {
+                                        tracing::debug!("📥 QUIC连接空闲超时，正常关闭 (会话: {})", current_session_id);
+                                    }
+                                    quinn::ConnectionError::ConnectionClosed(_) => {
+                                        tracing::debug!("📥 QUIC连接被对端关闭 (会话: {})", current_session_id);
+                                    }
+                                    _ => {
+                                        tracing::error!("📥 QUIC接收流错误: {:?} (会话: {})", e, current_session_id);
+                                    }
+                                }
                                 break;
                             }
                         }
@@ -633,13 +658,13 @@ impl QuicServerBuilder {
             (Some(cert_pem), Some(key_pem)) if !cert_pem.is_empty() && !key_pem.is_empty() => {
                 // 使用传入的 PEM 证书和私钥
                 tracing::debug!("🔐 使用传入的 PEM 证书启动 QUIC 服务器");
-                let (server_config, _cert) = configure_server_with_pem(cert_pem, key_pem)?;
+                let (server_config, _cert) = configure_server_with_pem(cert_pem, key_pem, &self.config)?;
                 server_config
             }
             _ => {
                 // 使用自签名证书
                 tracing::debug!("🔓 使用自签名证书启动 QUIC 服务器");
-                let (server_config, _cert) = configure_server_insecure();
+                let (server_config, _cert) = configure_server_insecure_with_config(&self.config);
                 server_config
             }
         };
