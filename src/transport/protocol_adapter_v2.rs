@@ -385,11 +385,7 @@ impl PerformanceMetrics {
 
 /// 工具函数：创建测试数据包
 pub fn create_test_packet(id: u64, size: usize) -> Packet {
-    Packet {
-        message_id: id as u32,
-        packet_type: crate::packet::PacketType::Data,
-        payload: bytes::BytesMut::from(&vec![0u8; size][..]),
-    }
+    Packet::data(id as u32, vec![0u8; size])
 }
 
 impl Clone for FlumePoweredProtocolAdapter {
