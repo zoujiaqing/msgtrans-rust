@@ -267,11 +267,12 @@ impl<C> WebSocketAdapter<C> {
                         }
                     }
                     
-                    // 📤 处理发送数据
+                    // 📤 处理发送数据 - 零拷贝优化
                     packet = send_queue.recv() => {
                         if let Some(packet) = packet {
                             let serialized_data = packet.to_bytes();
-                            let message = Message::Binary(serialized_data.to_vec());
+                            // ✅ 优化：使用into()转换避免额外拷贝（如果可能）
+                            let message = Message::Binary(serialized_data.into());
                             
                             match stream.send(message).await {
                                 Ok(_) => {
@@ -332,34 +333,49 @@ impl<C> WebSocketAdapter<C> {
         })
     }
     
-    /// 处理WebSocket消息
+    /// 处理WebSocket消息 - 优化版本
     fn process_websocket_message(message: Message) -> MessageProcessResult {
         match message {
             Message::Binary(data) => {
-                // 尝试从二进制数据解析Packet
+                // ✅ 优化：WebSocket保证消息完整性，直接解析即可
+                // 预先检查最小长度，避免不必要的解析尝试
+                if data.len() < 16 {
+                    // 数据太短，不可能是有效的Packet，直接创建基本数据包
+                    let packet = Packet::data(0, data.clone());
+                    return MessageProcessResult::Packet(packet);
+                }
+                
+                // 尝试解析为完整的Packet
                 match Packet::from_bytes(&data) {
-                    Ok(packet) => MessageProcessResult::Packet(packet),
-                    Err(_) => {
+                    Ok(packet) => {
+                        tracing::debug!("📥 WebSocket解析数据包成功: {} bytes", packet.payload.len());
+                        MessageProcessResult::Packet(packet)
+                    }
+                    Err(e) => {
+                        tracing::debug!("📥 WebSocket数据包解析失败: {:?}, 创建基本数据包", e);
                         // 如果解析失败，创建一个基本的数据包
-                        let packet = Packet::data(0, &data[..]);
+                        let packet = Packet::data(0, data.clone());
                         MessageProcessResult::Packet(packet)
                     }
                 }
             }
             Message::Text(text) => {
-                // 文本消息直接创建数据包
+                // ✅ 文本消息直接创建数据包（通常用于调试）
+                tracing::debug!("📥 WebSocket收到文本消息: {} bytes", text.len());
                 let packet = Packet::data(0, text.as_bytes());
                 MessageProcessResult::Packet(packet)
             }
             Message::Close(_) => {
                 // Close 消息表示对端正常关闭
+                tracing::debug!("📥 WebSocket收到Close消息");
                 MessageProcessResult::PeerClosed
             }
             Message::Ping(_) | Message::Pong(_) => {
-                // 心跳消息
+                // 心跳消息，静默处理
                 MessageProcessResult::Heartbeat
             }
             Message::Frame(_) => {
+                tracing::warn!("📥 WebSocket收到不支持的Frame消息");
                 MessageProcessResult::Error(WebSocketError::InvalidMessageType)
             }
         }

@@ -74,6 +74,12 @@ name = "modern_transport_benchmarks"
 harness = false
 path = "benches/modern_transport_benchmarks.rs"
 
+# Packet parsing performance benchmarks
+[[bench]]
+name = "packet_parsing_benchmarks"
+harness = false
+path = "benches/packet_parsing_benchmarks.rs"
+
 [[example]]
 name = "quic_event_test"
 path = "examples/quic_event_test.rs"
