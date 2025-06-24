@@ -179,7 +179,14 @@ impl Transport {
     /// 处理接收到的响应包（内部方法）
     fn handle_response(&self, packet: Packet) {
         if packet.packet_type() == PacketType::Response {
-            self.request_manager.complete(packet.message_id(), packet);
+            let message_id = packet.message_id();
+            let handled = self.request_manager.complete(message_id, packet);
+            if !handled {
+                tracing::warn!(
+                    "⚠️ 收到迟到的响应包 (message_id: {}), 对应请求可能已超时", 
+                    message_id
+                );
+            }
         }
     }
     
