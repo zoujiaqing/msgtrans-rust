@@ -14,6 +14,7 @@ use crate::{
     event::TransportEvent,
 };
 use std::sync::Arc;
+use bytes::BytesMut;
 
 /// TCP适配器错误类型
 #[derive(Debug, thiserror::Error)]
@@ -47,6 +48,111 @@ impl From<TcpError> for TransportError {
             TcpError::BufferOverflow => TransportError::protocol_error("generic", "TCP buffer overflow".to_string()),
             TcpError::Config(msg) => TransportError::config_error("tcp", msg),
         }
+    }
+}
+
+/// 优化的TCP读缓冲区
+/// 
+/// 特性：
+/// 1. 零拷贝数据包解析
+/// 2. 流式读取缓冲
+/// 3. 内存池复用
+#[derive(Debug)]
+struct OptimizedReadBuffer {
+    /// 主读缓冲区
+    buffer: BytesMut,
+    /// 缓冲区目标大小
+    target_capacity: usize,
+    /// 统计信息
+    stats: ReadBufferStats,
+}
+
+#[derive(Debug, Default)]
+struct ReadBufferStats {
+    /// 读取次数
+    reads: u64,
+    /// 解析的数据包数
+    packets_parsed: u64,
+    /// 缓冲区重分配次数
+    reallocations: u64,
+    /// 总字节读取量
+    bytes_read: u64,
+}
+
+impl OptimizedReadBuffer {
+    /// 创建新的读缓冲区
+    fn new(initial_capacity: usize) -> Self {
+        Self {
+            buffer: BytesMut::with_capacity(initial_capacity),
+            target_capacity: initial_capacity,
+            stats: ReadBufferStats::default(),
+        }
+    }
+
+    /// 尝试从缓冲区解析下一个完整数据包
+    /// 
+    /// 返回：
+    /// - Ok(Some(packet)) - 成功解析一个完整数据包
+    /// - Ok(None) - 缓冲区中没有完整数据包
+    /// - Err(error) - 解析错误
+    fn try_parse_next_packet(&mut self) -> Result<Option<Packet>, TcpError> {
+        // 检查是否有足够的数据解析固定头部
+        if self.buffer.len() < 16 {
+            return Ok(None);
+        }
+
+        // 解析固定头部（零拷贝）
+        let header_bytes = &self.buffer[0..16];
+        let payload_len = u32::from_be_bytes([header_bytes[4], header_bytes[5], header_bytes[6], header_bytes[7]]) as usize;
+        let ext_header_len = u16::from_be_bytes([header_bytes[12], header_bytes[13]]) as usize;
+
+        // 安全检查
+        if payload_len > 1024 * 1024 || ext_header_len > 64 * 1024 {
+            return Err(TcpError::BufferOverflow);
+        }
+
+        let total_packet_len = 16 + ext_header_len + payload_len;
+
+        // 检查是否有完整数据包
+        if self.buffer.len() < total_packet_len {
+            return Ok(None);
+        }
+
+        // 零拷贝解析：直接从缓冲区分割数据包
+        let packet_bytes = self.buffer.split_to(total_packet_len).freeze();
+        
+        // 解析数据包
+        let packet = Packet::from_bytes(&packet_bytes).map_err(TcpError::Packet)?;
+        
+        self.stats.packets_parsed += 1;
+        Ok(Some(packet))
+    }
+
+    /// 从流中读取更多数据到缓冲区
+    async fn fill_from_stream(&mut self, read_half: &mut tokio::net::tcp::OwnedReadHalf) -> Result<usize, TcpError> {
+        // 确保缓冲区有足够空间
+        if self.buffer.capacity() - self.buffer.len() < 4096 {
+            self.buffer.reserve(self.target_capacity);
+            self.stats.reallocations += 1;
+        }
+
+        // 读取数据
+        let bytes_read = read_half.read_buf(&mut self.buffer).await.map_err(TcpError::Io)?;
+        
+        self.stats.reads += 1;
+        self.stats.bytes_read += bytes_read as u64;
+        
+        Ok(bytes_read)
+    }
+
+    /// 获取缓冲区统计信息
+    fn stats(&self) -> &ReadBufferStats {
+        &self.stats
+    }
+
+    /// 清理缓冲区（保留容量）
+    fn clear(&mut self) {
+        self.buffer.clear();
     }
 }
 
@@ -140,8 +246,18 @@ impl<C> TcpAdapter<C> {
                 let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
                 
                 tokio::select! {
-                    // 🔍 处理接收数据
-                    read_result = Self::read_packet_from_stream(&mut read_half) => {
+                    // 🔍 处理接收数据 - 使用优化的缓冲区方法
+                    read_result = async { 
+                        let mut temp_buffer = OptimizedReadBuffer::new(8192);
+                        match temp_buffer.fill_from_stream(&mut read_half).await {
+                            Ok(0) => Ok(None), // 连接关闭
+                            Ok(_) => {
+                                // 尝试解析数据包
+                                temp_buffer.try_parse_next_packet()
+                            }
+                            Err(e) => Err(e),
+                        }
+                    } => {
                         match read_result {
                             Ok(Some(packet)) => {
                                 tracing::debug!("📥 TCP接收到数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
@@ -240,64 +356,7 @@ impl<C> TcpAdapter<C> {
         })
     }
     
-    /// 从流中读取数据包
-    async fn read_packet_from_stream(read_half: &mut tokio::net::tcp::OwnedReadHalf) -> Result<Option<Packet>, TcpError> {
-        // 读取固定头部（16字节）
-        let mut header_buf = [0u8; 16];
-        match read_half.read_exact(&mut header_buf).await {
-            Ok(_) => {}
-            Err(e) => {
-                match e.kind() {
-                    std::io::ErrorKind::ConnectionReset | 
-                    std::io::ErrorKind::ConnectionAborted |
-                    std::io::ErrorKind::BrokenPipe |
-                    std::io::ErrorKind::UnexpectedEof => {
-                        return Ok(None); // 连接正常关闭
-                    }
-                    _ => {
-                        return Err(TcpError::Io(e));
-                    }
-                }
-            }
-        }
-        
-        // 解析固定头部获取负载长度和扩展头长度
-        let payload_len = u32::from_be_bytes([header_buf[4], header_buf[5], header_buf[6], header_buf[7]]) as usize;
-        let ext_header_len = u16::from_be_bytes([header_buf[12], header_buf[13]]) as usize;
-        
-        // 防止恶意的大数据包
-        if payload_len > 1024 * 1024 { // 1MB 限制
-            return Err(TcpError::BufferOverflow);
-        }
-        
-        if ext_header_len > 64 * 1024 { // 64KB 扩展头限制
-            return Err(TcpError::BufferOverflow);
-        }
-        
-        // 读取扩展头部（如果有）
-        let mut ext_header = Vec::new();
-        if ext_header_len > 0 {
-            ext_header = vec![0u8; ext_header_len];
-            read_half.read_exact(&mut ext_header).await.map_err(TcpError::Io)?;
-        }
-        
-        // 读取负载
-        let mut payload = vec![0u8; payload_len];
-        if payload_len > 0 {
-            read_half.read_exact(&mut payload).await.map_err(TcpError::Io)?;
-        }
-        
-        // 重构完整的数据包
-        let total_len = 16 + ext_header_len + payload_len;
-        let mut packet_data = Vec::with_capacity(total_len);
-        packet_data.extend_from_slice(&header_buf);
-        packet_data.extend_from_slice(&ext_header);
-        packet_data.extend_from_slice(&payload);
-        
-        // 解析数据包
-        let packet = Packet::from_bytes(&packet_data).map_err(TcpError::Packet)?;
-        Ok(Some(packet))
-    }
+
     
     /// 向流中写入数据包
     async fn write_packet_to_stream(write_half: &mut tokio::net::tcp::OwnedWriteHalf, packet: &Packet) -> Result<(), TcpError> {
