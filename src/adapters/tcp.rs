@@ -242,8 +242,8 @@ impl<C> TcpAdapter<C> {
     
     /// 从流中读取数据包
     async fn read_packet_from_stream(read_half: &mut tokio::net::tcp::OwnedReadHalf) -> Result<Option<Packet>, TcpError> {
-        // 读取包头（9字节）
-        let mut header_buf = [0u8; 9];
+        // 读取固定头部（16字节）
+        let mut header_buf = [0u8; 16];
         match read_half.read_exact(&mut header_buf).await {
             Ok(_) => {}
             Err(e) => {
@@ -261,21 +261,37 @@ impl<C> TcpAdapter<C> {
             }
         }
         
-        // 解析包头获取负载长度
-        let payload_len = u32::from_be_bytes([header_buf[5], header_buf[6], header_buf[7], header_buf[8]]) as usize;
+        // 解析固定头部获取负载长度和扩展头长度
+        let payload_len = u32::from_be_bytes([header_buf[4], header_buf[5], header_buf[6], header_buf[7]]) as usize;
+        let ext_header_len = u16::from_be_bytes([header_buf[12], header_buf[13]]) as usize;
         
         // 防止恶意的大数据包
         if payload_len > 1024 * 1024 { // 1MB 限制
             return Err(TcpError::BufferOverflow);
         }
         
+        if ext_header_len > 64 * 1024 { // 64KB 扩展头限制
+            return Err(TcpError::BufferOverflow);
+        }
+        
+        // 读取扩展头部（如果有）
+        let mut ext_header = Vec::new();
+        if ext_header_len > 0 {
+            ext_header = vec![0u8; ext_header_len];
+            read_half.read_exact(&mut ext_header).await.map_err(TcpError::Io)?;
+        }
+        
         // 读取负载
         let mut payload = vec![0u8; payload_len];
-        read_half.read_exact(&mut payload).await.map_err(TcpError::Io)?;
+        if payload_len > 0 {
+            read_half.read_exact(&mut payload).await.map_err(TcpError::Io)?;
+        }
         
         // 重构完整的数据包
-        let mut packet_data = Vec::with_capacity(9 + payload_len);
+        let total_len = 16 + ext_header_len + payload_len;
+        let mut packet_data = Vec::with_capacity(total_len);
         packet_data.extend_from_slice(&header_buf);
+        packet_data.extend_from_slice(&ext_header);
         packet_data.extend_from_slice(&payload);
         
         // 解析数据包

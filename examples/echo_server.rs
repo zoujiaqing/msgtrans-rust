@@ -1,10 +1,13 @@
-/// 简化 Echo 服务器 - 基于全新统一API设计
+/// Echo服务器 - 新API设计演示
+/// 🎯 使用推荐的模式A：先定义事件处理，后启动服务器
 /// 
-/// 展示多协议并行服务的正确实现模式
+/// 专注于TCP协议，展示事件流的完整功能
 
 use msgtrans::{
     transport::TransportServerBuilder,
-    protocol::{TcpServerConfig, WebSocketServerConfig, QuicServerConfig},
+    protocol::TcpServerConfig,
+    protocol::WebSocketServerConfig,
+    protocol::QuicServerConfig,
     event::TransportEvent,
     packet::Packet,
 };
@@ -12,15 +15,18 @@ use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 初始化日志
+    // 启用详细日志以观察事件流
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_max_level(tracing::Level::DEBUG)
         .init();
     
-    println!("🌟 简化 Echo 服务器 - 全新API设计");
-    println!("===============================");
-
-    let tcp_server_config = TcpServerConfig::new()
+    println!("🎯 Echo服务器 - 新API设计演示");
+    println!("=============================");
+    println!("📋 使用模式A：先定义事件处理，后启动服务器");
+    println!();
+    
+    // 创建TCP服务器配置
+    let tcp_config = TcpServerConfig::new()
         .with_bind_address("127.0.0.1:8001".parse::<std::net::SocketAddr>()?);
     let web_socket_server_config = WebSocketServerConfig::new()
         .with_bind_address("127.0.0.1:8002".parse::<std::net::SocketAddr>()?);
@@ -28,67 +34,121 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_bind_address("127.0.0.1:8003".parse::<std::net::SocketAddr>()?);
     
     let transport = TransportServerBuilder::new()
-        .max_connections(100)
-        .with_protocol(tcp_server_config)
+        .max_connections(10)  // 限制连接数便于测试
+        .with_protocol(tcp_config)
         .with_protocol(web_socket_server_config)
         .with_protocol(quic_server_config)
         .build()
         .await?;
-
-    println!("✅ 传输实例创建完成");
-    println!("📡 TCP 服务器: 127.0.0.1:8001");
-    println!("🌐 WebSocket 服务器: 127.0.0.1:8002");
-    println!("🔒 QUIC 服务器: 127.0.0.1:8004");
-    println!();
-    println!("🎯 测试方法:");
-    println!("   TCP:       telnet 127.0.0.1 8001");
-    println!("   WebSocket: 使用WebSocket客户端连接 ws://127.0.0.1:8002");
-    println!("   QUIC:      使用QUIC客户端连接 127.0.0.1:8004");
-    println!();
     
-    // 获取事件流
+    println!("✅ TCP服务器创建完成: 127.0.0.1:8001");
+    
+    // 🎯 核心：立即创建事件流（此时服务器还未启动）
     let mut events = transport.events();
+    println!("📡 事件流创建完成 - 服务器尚未启动");
     
-    // ✅ 克隆transport引用用于echo消息回复
+    // 克隆transport用于在事件处理中发送回显
     let transport_for_echo = transport.clone();
     
-    // 🚀 启动事件处理任务
-    tokio::spawn(async move {
+    // 🎯 模式A：先定义完整的事件处理逻辑
+    let event_task = tokio::spawn(async move {
+        println!("🎧 开始监听事件...");
+        let mut event_count = 0u64;
+        let mut connections = std::collections::HashSet::new();
+        
         while let Some(event) = events.next().await {
+            event_count += 1;
+            println!("📥 事件 #{}: {:?}", event_count, event);
+            
             match event {
                 TransportEvent::ConnectionEstablished { session_id, info } => {
-                    println!("🔗 新连接: {} [{:?}]", session_id, info.protocol);
+                    connections.insert(session_id);
+                    println!("🔗 新连接建立: {} <- {} (协议: {:?})", 
+                        session_id, info.peer_addr, info.protocol);
+                    println!("   当前连接数: {}", connections.len());
                 }
+                
                 TransportEvent::MessageReceived { session_id, packet } => {
-                    println!("📨 收到消息 ({}): {} bytes", session_id, packet.payload.len());
-                    if let Some(text) = packet.payload_as_string() {
-                        println!("   内容: \"{}\"", text);
-                    }
+                    let message_text = String::from_utf8_lossy(&packet.payload);
+                    println!("📨 收到消息:");
+                    println!("   会话: {}", session_id);
+                    println!("   消息ID: {}", packet.message_id);
+                    println!("   大小: {} bytes", packet.payload.len());
+                    println!("   内容: \"{}\"", message_text);
                     
-                    // ✅ 实现真正的Echo功能
-                    println!("🔄 准备Echo回复到会话 {}", session_id);
-                    let echo_packet = Packet::echo(packet.message_id, packet.payload.clone());
-                    println!("🔄 创建Echo数据包: ID={}, 大小={}bytes", echo_packet.message_id, echo_packet.payload.len());
+                    // 🔄 生成回显响应
+                    let echo_message = format!("Echo: {}", message_text);
+                    let echo_packet = Packet::data(
+                        packet.message_id + 1000,  // 使用不同的ID避免冲突
+                        echo_message.as_bytes()
+                    );
+                    
+                    println!("🔄 准备发送回显:");
+                    println!("   目标会话: {}", session_id);
+                    println!("   回显ID: {}", echo_packet.message_id);
+                    println!("   回显内容: \"{}\"", echo_message);
                     
                     match transport_for_echo.send_to_session(session_id, echo_packet).await {
                         Ok(()) => {
-                            println!("✅ Echo成功: 消息已回复到会话 {}", session_id);
+                            println!("✅ 回显发送成功 -> 会话 {}", session_id);
                         }
                         Err(e) => {
-                            println!("❌ Echo失败 (会话 {}): {:?}", session_id, e);
+                            println!("❌ 回显发送失败: {:?}", e);
                         }
                     }
                 }
-                TransportEvent::ConnectionClosed { session_id, .. } => {
-                    println!("❌ 连接关闭: {}", session_id);
+                
+                TransportEvent::MessageSent { session_id, packet_id } => {
+                    println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, packet_id);
                 }
-                _ => {}
+                
+                TransportEvent::ConnectionClosed { session_id, reason } => {
+                    connections.remove(&session_id);
+                    println!("🔌 连接关闭: {} (原因: {:?})", session_id, reason);
+                    println!("   剩余连接数: {}", connections.len());
+                }
+                
+                TransportEvent::TransportError { session_id, error } => {
+                    println!("⚠️ 传输错误: {:?} (会话: {:?})", error, session_id);
+                }
+                
+                TransportEvent::ServerStarted { address } => {
+                    println!("🌟 服务器启动通知: {}", address);
+                }
+                
+                TransportEvent::ServerStopped => {
+                    println!("🛑 服务器停止通知");
+                }
+                
+                _ => {
+                    println!("ℹ️ 其他事件: {:?}", event);
+                }
             }
         }
+        
+        println!("⚠️ 事件流已结束 (共处理 {} 个事件)", event_count);
+        println!("   最终连接数: {}", connections.len());
     });
-
-    // 🚀 启动服务器 - 这是主要的服务监听循环
-    transport.serve().await?;
+    
+    println!("🚀 事件处理任务已启动");
+    println!("🌐 现在启动服务器...");
+    println!();
+    println!("🎯 测试方法:");
+    println!("   在另一个终端运行: cargo run --example echo_client_tcp_new");
+    println!("   或使用: telnet 127.0.0.1 8001");
+    println!();
+    
+    // 🎯 模式A的关键：现在才启动服务器，但事件流已经在监听了
+    let server_result = transport.serve().await;
+    
+    println!("🏁 服务器已停止");
+    
+    // 等待事件处理完成
+    let _ = event_task.await;
+    
+    if let Err(e) = server_result {
+        println!("💥 服务器错误: {:?}", e);
+    }
     
     Ok(())
-}
+} 
