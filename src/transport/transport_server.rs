@@ -461,14 +461,73 @@ impl TransportServer {
                                 
                                 let mut receiver = event_receiver;
                                 while let Ok(event) = receiver.recv().await {
-                                    // 转发事件到服务器的事件流
-                                    if let Err(e) = event_sender.send(event.clone()) {
+                                    // 🚀 处理和转发事件：根据包类型决定发送哪种事件
+                                    let processed_event = match event {
+                                        TransportEvent::MessageReceived { session_id, packet } => {
+                                            // 检查包类型，决定发送 MessageReceived 还是 RequestReceived
+                                            match packet.packet_type() {
+                                                crate::packet::PacketType::Request => {
+                                                    // 为请求包创建 RequestContext
+                                                    let request_session_id = session_id;
+                                                    let sender_for_response = event_sender.clone();
+                                                    
+                                                                                                         let server_for_send = server_for_cleanup.clone();
+                                                     let responder = move |response_packet: crate::packet::Packet| {
+                                                         // 🎯 实际发送响应包到网络连接
+                                                         let server_clone = server_for_send.clone();
+                                                         let packet = response_packet.clone();
+                                                         
+                                                         tokio::spawn(async move {
+                                                             match server_clone.send_to_session(request_session_id, packet.clone()).await {
+                                                                 Ok(_) => {
+                                                                     // 发送响应成功事件
+                                                                     let sent_event = TransportEvent::MessageSent {
+                                                                         session_id: request_session_id,
+                                                                         packet_id: packet.message_id,
+                                                                     };
+                                                                     
+                                                                     if let Err(e) = sender_for_response.send(sent_event) {
+                                                                         tracing::error!("📤 发送响应事件失败: {:?} (会话: {})", e, request_session_id);
+                                                                     } else {
+                                                                         tracing::debug!("📤 响应已发送: message_id={} (会话: {})", packet.message_id, request_session_id);
+                                                                     }
+                                                                 }
+                                                                 Err(e) => {
+                                                                     tracing::error!("❌ 发送响应失败: {:?} (会话: {})", e, request_session_id);
+                                                                     // 发送错误事件
+                                                                     let error_event = TransportEvent::TransportError {
+                                                                         session_id: Some(request_session_id),
+                                                                         error: e,
+                                                                     };
+                                                                     let _ = sender_for_response.send(error_event);
+                                                                 }
+                                                             }
+                                                         });
+                                                     };
+                                                    
+                                                                                                         let request_context = crate::event::RequestContext::new(packet, responder);
+                                                     TransportEvent::RequestReceived { 
+                                                         session_id,
+                                                         context: request_context 
+                                                     }
+                                                }
+                                                _ => {
+                                                    // 其他类型的包继续作为 MessageReceived 事件
+                                                    TransportEvent::MessageReceived { session_id, packet }
+                                                }
+                                            }
+                                        }
+                                        other_event => other_event // 其他事件直接转发
+                                    };
+                                    
+                                    // 转发处理后的事件到服务器的事件流
+                                    if let Err(e) = event_sender.send(processed_event.clone()) {
                                         tracing::warn!("⚠️ 转发事件失败: {:?}", e);
                                         break;
                                     }
                                     
                                     // 如果是连接关闭事件，清理会话
-                                    if matches!(event, TransportEvent::ConnectionClosed { .. }) {
+                                    if matches!(processed_event, TransportEvent::ConnectionClosed { .. }) {
                                         tracing::info!("🔗 检测到连接关闭事件，清理会话: {}", actual_session_id);
                                         let _ = server_for_cleanup.remove_session(actual_session_id).await;
                                         break;
