@@ -38,6 +38,7 @@ pub mod server;
 pub mod transport;
 pub mod transport_server;
 pub mod connection_state;
+pub mod request_manager;
 
 // 🚀 Phase 3: 核心高性能组件 (默认启用)
 pub mod lockfree_enhanced;

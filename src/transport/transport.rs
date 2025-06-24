@@ -7,7 +7,9 @@
 /// - 由 TransportClient(单连接) 和 TransportServer(多连接管理) 使用
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::timeout;
 use crate::{
     SessionId, TransportError, Packet,
     transport::{
@@ -15,11 +17,13 @@ use crate::{
         pool::ConnectionPool,
         memory_pool_v2::OptimizedMemoryPool,
         connection_state::ConnectionStateManager,
+        request_manager::RequestManager,
     },
 
     protocol::{ProtocolRegistry, ProtocolAdapter},
     connection::Connection,
     adapters::create_standard_registry,
+    packet::PacketType,
 };
 
 /// 🎯 单连接传输抽象 - 真正符合架构设计的 Transport
@@ -38,6 +42,8 @@ pub struct Transport {
     session_id: Option<SessionId>,
     /// 连接状态管理器
     state_manager: ConnectionStateManager,
+    /// 🎯 请求响应管理器
+    request_manager: Arc<RequestManager>,
 }
 
 impl Transport {
@@ -63,6 +69,7 @@ impl Transport {
             connection_adapter: None,
             session_id: None,
             state_manager: ConnectionStateManager::new(),
+            request_manager: Arc::new(RequestManager::new()),
         })
     }
     
@@ -122,6 +129,59 @@ impl Transport {
             Err(TransportError::connection_error("Not connected", false))
         }
     }
+
+    /// 🎯 核心方法：发送请求并等待响应（默认10秒超时）
+    pub async fn request(&self, packet: Packet) -> Result<Packet, TransportError> {
+        self.request_with_timeout(packet, Duration::from_secs(10)).await
+    }
+
+    /// 🎯 核心方法：发送请求并等待响应（自定义超时）
+    pub async fn request_with_timeout(&self, mut packet: Packet, timeout_duration: Duration) -> Result<Packet, TransportError> {
+        // 1. 验证包类型
+        if packet.packet_type() != PacketType::Request {
+            return Err(TransportError::connection_error(
+                &format!("Expected Request packet, got {:?}", packet.packet_type()),
+                false
+            ));
+        }
+
+        // 2. 注册请求
+        let (message_id, rx) = self.request_manager.register();
+        packet.set_message_id(message_id);
+
+        // 3. 发送请求
+        self.send(packet).await?;
+
+        // 4. 等待响应（使用传入的超时时间）
+        match timeout(timeout_duration, rx).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => Err(TransportError::connection_error("Connection closed while waiting for response", false)),
+            Err(_) => Err(TransportError::connection_error(
+                &format!("Request timeout after {:?}", timeout_duration),
+                false
+            )),
+        }
+    }
+
+    /// 🎯 核心方法：处理接收到的数据包（由上层调用）
+    /// 
+    /// 这个方法应该在接收循环中被调用，用于自动处理响应包
+    pub fn handle_incoming_packet(&self, packet: Packet) -> Option<Packet> {
+        // 自动处理响应包
+        if packet.packet_type() == PacketType::Response {
+            self.handle_response(packet);
+            None // 响应包被消费，不返回给上层
+        } else {
+            Some(packet) // 非响应包返回给上层处理
+        }
+    }
+
+    /// 处理接收到的响应包（内部方法）
+    fn handle_response(&self, packet: Packet) {
+        if packet.packet_type() == PacketType::Response {
+            self.request_manager.complete(packet.message_id(), packet);
+        }
+    }
     
     /// 🎯 核心方法：断开连接（优雅关闭）
     pub async fn disconnect(&mut self) -> Result<(), TransportError> {
@@ -152,6 +212,8 @@ impl Transport {
         if self.session_id == Some(session_id) {
             self.session_id = None;
             self.connection_adapter = None;
+            // 清理所有 pending requests
+            self.request_manager.clear();
         }
         
         tracing::info!("✅ 会话 {} 关闭完成", session_id);
@@ -181,6 +243,8 @@ impl Transport {
         if self.session_id == Some(session_id) {
             self.session_id = None;
             self.connection_adapter = None;
+            // 清理所有 pending requests
+            self.request_manager.clear();
         }
         
         tracing::info!("✅ 会话 {} 强制关闭完成", session_id);
@@ -304,6 +368,7 @@ impl Clone for Transport {
             connection_adapter: None,  // 克隆时不复制连接
             session_id: None,
             state_manager: ConnectionStateManager::new(),
+            request_manager: Arc::new(RequestManager::new()),
         }
     }
 }
