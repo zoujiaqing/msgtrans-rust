@@ -79,13 +79,3 @@ path = "benches/modern_transport_benchmarks.rs"
 name = "packet_parsing_benchmarks"
 harness = false
 path = "benches/packet_parsing_benchmarks.rs"
-
-[[example]]
-name = "quic_event_test"
-path = "examples/quic_event_test.rs"
-
-[[example]]
-name = "event_driven_demo"
-path = "examples/event_driven_demo.rs"
-
-# Phase 2 benchmarks

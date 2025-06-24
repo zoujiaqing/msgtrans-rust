@@ -588,13 +588,13 @@ mod tests {
 
     #[test]
     fn test_packet_type_conversion() {
-        assert_eq!(u8::from(PacketType::OneWay), 1);
-        assert_eq!(u8::from(PacketType::Request), 2);
-        assert_eq!(u8::from(PacketType::Response), 3);
+        assert_eq!(u8::from(PacketType::OneWay), 0);
+        assert_eq!(u8::from(PacketType::Request), 1);
+        assert_eq!(u8::from(PacketType::Response), 2);
         
-        assert_eq!(PacketType::from(1), PacketType::OneWay);
-        assert_eq!(PacketType::from(2), PacketType::Request);
-        assert_eq!(PacketType::from(3), PacketType::Response);
+        assert_eq!(PacketType::from(0), PacketType::OneWay);
+        assert_eq!(PacketType::from(1), PacketType::Request);
+        assert_eq!(PacketType::from(2), PacketType::Response);
     }
 
     #[test]

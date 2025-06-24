@@ -9,7 +9,7 @@ use msgtrans::{
     protocol::WebSocketServerConfig,
     protocol::QuicServerConfig,
     event::TransportEvent,
-    packet::Packet,
+    packet::{Packet, PacketType},
 };
 use futures::StreamExt;
 
@@ -70,9 +70,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 
                 TransportEvent::MessageReceived { session_id, packet } => {
                     let message_text = String::from_utf8_lossy(&packet.payload);
-                    println!("📨 收到消息:");
+                    println!("📨 收到普通消息:");
                     println!("   会话: {}", session_id);
                     println!("   消息ID: {}", packet.message_id);
+                    println!("   包类型: {:?}", packet.packet_type());
                     println!("   大小: {} bytes", packet.payload.len());
                     println!("   内容: \"{}\"", message_text);
                     
@@ -95,6 +96,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Err(e) => {
                             println!("❌ 回显发送失败: {:?}", e);
                         }
+                    }
+                }
+                
+                // 🚀 新增：处理 RPC 请求
+                TransportEvent::RequestReceived { session_id, context: ctx } => {
+                    let request_text = String::from_utf8_lossy(&ctx.request.payload);
+                    println!("🎯 收到 RPC 请求:");
+                    println!("   会话: {}", session_id);
+                    println!("   请求ID: {}", ctx.request.message_id);
+                    println!("   包类型: {:?}", ctx.request.packet_type());
+                    println!("   大小: {} bytes", ctx.request.payload.len());
+                    println!("   内容: \"{}\"", request_text);
+                    
+                    // 🎯 处理不同类型的 RPC 请求
+                    if request_text.starts_with("ping") {
+                        // Ping-Pong 类型的请求
+                        let response_message = format!("pong: {}", &request_text[4..]);
+                        let mut response = Packet::new(PacketType::Response, 0);
+                        response.set_payload(response_message.as_bytes());
+                        
+                        println!("🏓 发送 Pong 响应: \"{}\"", response_message);
+                        ctx.respond(response);
+                        
+                    } else if request_text.starts_with("time") {
+                        // 时间查询请求
+                        let current_time = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs();
+                        let current_time = format!("Timestamp: {}", current_time);
+                        let response_message = format!("Current time: {}", current_time);
+                        let mut response = Packet::new(PacketType::Response, 0);
+                        response.set_payload(response_message.as_bytes());
+                        
+                        println!("⏰ 发送时间响应: \"{}\"", response_message);
+                        ctx.respond(response);
+                        
+                    } else if request_text.starts_with("reverse") {
+                        // 字符串反转请求
+                        let text_to_reverse = &request_text[7..]; // 去掉 "reverse" 前缀
+                        let reversed: String = text_to_reverse.chars().rev().collect();
+                        let response_message = format!("Reversed: {}", reversed);
+                        let mut response = Packet::new(PacketType::Response, 0);
+                        response.set_payload(response_message.as_bytes());
+                        
+                        println!("🔄 发送反转响应: \"{}\"", response_message);
+                        ctx.respond(response);
+                        
+                    } else {
+                        // 默认的 RPC Echo 响应
+                        let response_message = format!("RPC Echo: {}", request_text);
+                        let mut response = Packet::new(PacketType::Response, 0);
+                        response.set_payload(response_message.as_bytes());
+                        
+                        println!("🔄 发送 RPC Echo 响应: \"{}\"", response_message);
+                        ctx.respond(response);
                     }
                 }
                 

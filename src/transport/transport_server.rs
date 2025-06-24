@@ -520,14 +520,17 @@ impl TransportServer {
                                         other_event => other_event // 其他事件直接转发
                                     };
                                     
+                                    // 检查连接关闭事件（在发送之前，因为事件可能不可克隆）
+                                    let is_connection_closed = matches!(processed_event, TransportEvent::ConnectionClosed { .. });
+                                    
                                     // 转发处理后的事件到服务器的事件流
-                                    if let Err(e) = event_sender.send(processed_event.clone()) {
+                                    if let Err(e) = event_sender.send(processed_event) {
                                         tracing::warn!("⚠️ 转发事件失败: {:?}", e);
                                         break;
                                     }
                                     
                                     // 如果是连接关闭事件，清理会话
-                                    if matches!(processed_event, TransportEvent::ConnectionClosed { .. }) {
+                                    if is_connection_closed {
                                         tracing::info!("🔗 检测到连接关闭事件，清理会话: {}", actual_session_id);
                                         let _ = server_for_cleanup.remove_session(actual_session_id).await;
                                         break;

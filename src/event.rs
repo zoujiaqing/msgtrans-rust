@@ -8,14 +8,16 @@ use crate::packet::Packet;
 /// 
 /// 🎯 设计目标：
 /// - 简洁的响应接口：ctx.respond(response_packet)
-/// - 类型安全：move 语义防止重复响应
+/// - 类型安全：共享状态防止重复响应
 /// - 自动填充：自动设置 response packet 的 message_id 和 packet_type
 /// - 防御性设计：Drop 检测可以发现忘记响应的情况
+/// - 支持克隆：允许在事件广播中使用
+#[derive(Clone)]
 pub struct RequestContext {
     /// 原始请求包
     pub request: Packet,
-    /// 响应发送器（一次性使用）
-    responder: Option<Box<dyn FnOnce(Packet) + Send + 'static>>,
+    /// 响应发送器（支持克隆，但只能使用一次）
+    responder: std::sync::Arc<std::sync::Mutex<Option<Box<dyn FnOnce(Packet) + Send + 'static>>>>,
 }
 
 impl std::fmt::Debug for RequestContext {
@@ -35,7 +37,7 @@ impl RequestContext {
     {
         Self {
             request,
-            responder: Some(Box::new(responder)),
+            responder: std::sync::Arc::new(std::sync::Mutex::new(Some(Box::new(responder)))),
         }
     }
     
@@ -45,8 +47,8 @@ impl RequestContext {
     /// - 自动设置 response.packet_type = PacketType::Response
     /// - 自动设置 response.message_id = self.request.message_id
     /// - 发送响应到对端
-    /// - 消费 self，防止重复响应
-    pub fn respond(mut self, mut response: Packet) {
+    /// - 确保只能响应一次（通过互斥锁保护）
+    pub fn respond(self, mut response: Packet) {
         use crate::packet::PacketType;
         
         // 自动填充响应头
@@ -55,17 +57,21 @@ impl RequestContext {
         response.set_packet_type(PacketType::Response);
         response.set_message_id(self.request.message_id);
         
-        match self.responder.take() {
-            Some(responder) => {
+        if let Ok(mut responder_guard) = self.responder.lock() {
+            if let Some(responder) = responder_guard.take() {
                 tracing::debug!("📤 响应请求: message_id={}", self.request.message_id);
                 responder(response);
-            }
-            None => {
-                tracing::error!(
+            } else {
+                tracing::warn!(
                     "⚠️ 尝试重复响应请求: message_id={}",
                     self.request.message_id
                 );
             }
+        } else {
+            tracing::error!(
+                "❌ 无法获取响应器锁: message_id={}",
+                self.request.message_id
+            );
         }
     }
     
@@ -99,11 +105,16 @@ impl RequestContext {
 
 impl Drop for RequestContext {
     fn drop(&mut self) {
-        if self.responder.is_some() {
-            tracing::warn!(
-                "⚠️ RequestContext dropped without responding to message_id={}. This indicates a missing ctx.respond() call in your business logic.",
-                self.request.message_id
-            );
+        // 只有当这是最后一个引用且没有响应时才警告
+        if std::sync::Arc::strong_count(&self.responder) == 1 {
+            if let Ok(responder_guard) = self.responder.lock() {
+                if responder_guard.is_some() {
+                    tracing::warn!(
+                        "⚠️ RequestContext dropped without responding to message_id={}. This indicates a missing ctx.respond() call in your business logic.",
+                        self.request.message_id
+                    );
+                }
+            }
         }
     }
 }
@@ -187,10 +198,11 @@ impl Clone for TransportEvent {
                     packet_id: *packet_id 
                 }
             }
-            TransportEvent::RequestReceived { .. } => {
-                // RequestContext 不能被克隆，因为它包含一次性的 responder
-                // 如果真的需要克隆包含 RequestReceived 的事件，考虑重新设计
-                panic!("RequestReceived event cannot be cloned")
+            TransportEvent::RequestReceived { session_id, context } => {
+                TransportEvent::RequestReceived {
+                    session_id: *session_id,
+                    context: context.clone()
+                }
             }
             TransportEvent::TransportError { session_id, error } => {
                 TransportEvent::TransportError { 

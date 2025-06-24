@@ -49,17 +49,23 @@ impl RequestManager {
         // 如果插入失败，直接 panic（底层库，不应该发生）
         self.pending.insert(message_id, SenderWrapper::new(tx)).expect("Failed to register request");
         
+        tracing::debug!("🔖 注册 RPC 请求: message_id={}", message_id);
         (message_id, rx)
     }
     
     /// 完成请求
     pub fn complete(&self, message_id: u32, packet: Packet) -> bool {
+        tracing::debug!("📥 尝试完成 RPC 请求: message_id={}", message_id);
         match self.pending.remove(&message_id) {
             Ok(Some(sender)) => {
+                tracing::debug!("✅ 找到对应的 RPC 请求，发送响应: message_id={}", message_id);
                 let _ = sender.send(packet);
                 true
             }
-            _ => false,
+            _ => {
+                tracing::warn!("⚠️ 未找到对应的 RPC 请求: message_id={}", message_id);
+                false
+            }
         }
     }
     

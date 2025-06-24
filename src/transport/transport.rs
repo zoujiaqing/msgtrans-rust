@@ -152,7 +152,7 @@ impl Transport {
         // 3. 发送请求
         self.send(packet).await?;
 
-        // 4. 等待响应（使用传入的超时时间）
+        // 4. 等待响应（内部消息循环会自动处理 Response 包）
         match timeout(timeout_duration, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => Err(TransportError::connection_error("Connection closed while waiting for response", false)),
@@ -163,31 +163,13 @@ impl Transport {
         }
     }
 
-    /// 🎯 核心方法：处理接收到的数据包（由上层调用）
+    /// 🎯 已弃用：处理接收到的数据包（现在由内部消息循环处理）
     /// 
-    /// 这个方法应该在接收循环中被调用，用于自动处理响应包
+    /// 这个方法已被内部消息处理循环替代，不再需要外部调用
+    #[deprecated(note = "消息处理现在由 Transport 内部循环自动完成")]
     pub fn handle_incoming_packet(&self, packet: Packet) -> Option<Packet> {
-        // 自动处理响应包
-        if packet.packet_type() == PacketType::Response {
-            self.handle_response(packet);
-            None // 响应包被消费，不返回给上层
-        } else {
-            Some(packet) // 非响应包返回给上层处理
-        }
-    }
-
-    /// 处理接收到的响应包（内部方法）
-    fn handle_response(&self, packet: Packet) {
-        if packet.packet_type() == PacketType::Response {
-            let message_id = packet.message_id();
-            let handled = self.request_manager.complete(message_id, packet);
-            if !handled {
-                tracing::warn!(
-                    "⚠️ 收到迟到的响应包 (message_id: {}), 对应请求可能已超时", 
-                    message_id
-                );
-            }
-        }
+        tracing::warn!("⚠️ handle_incoming_packet 已弃用，消息处理由内部循环自动完成");
+        Some(packet) // 直接返回，不处理
     }
     
     /// 🎯 核心方法：断开连接（优雅关闭）
@@ -316,11 +298,15 @@ impl Transport {
     where
         C: Connection + 'static,
     {
-        self.connection_adapter = Some(Arc::new(Mutex::new(connection)));
+        let connection_adapter = Arc::new(Mutex::new(connection));
+        self.connection_adapter = Some(connection_adapter.clone());
         self.session_id = Some(session_id);
         
         // 添加连接状态管理
         self.state_manager.add_connection(session_id);
+        
+        // 🎯 启动内部消息处理循环
+        self.start_internal_message_loop(connection_adapter, session_id);
         
         tracing::debug!("✅ Transport 连接设置完成: {}", session_id);
     }
@@ -362,6 +348,61 @@ impl Transport {
         }
         
         None
+    }
+
+    /// 🎯 启动内部消息处理循环（正确的架构设计）
+    /// 
+    /// 在 Transport 内部处理所有接收到的消息，根据 PacketType 进行分发：
+    /// - Response 包：直接调用 RequestManager::complete 
+    /// - Request 包：转发到上层作为 RequestReceived 事件
+    /// - OneWay 包：转发到上层作为 MessageReceived 事件
+    fn start_internal_message_loop(&self, connection_adapter: Arc<Mutex<dyn Connection>>, session_id: SessionId) {
+        let request_manager = self.request_manager.clone();
+        
+        tokio::spawn(async move {
+            let conn = connection_adapter.lock().await;
+            if let Some(mut event_receiver) = conn.event_stream() {
+                drop(conn); // 释放锁
+                
+                tracing::debug!("🔄 Transport 内部消息处理循环启动: {}", session_id);
+                
+                while let Ok(event) = event_receiver.recv().await {
+                    if let crate::event::TransportEvent::MessageReceived { packet, session_id: _ } = event {
+                        tracing::debug!("📥 Transport 收到消息: message_id={}, packet_type={:?}", 
+                            packet.message_id(), packet.packet_type());
+                        
+                        match packet.packet_type() {
+                            crate::packet::PacketType::Response => {
+                                // 🎯 Response 包：直接在 Transport 内部处理
+                                let message_id = packet.message_id();
+                                if request_manager.complete(message_id, packet) {
+                                    tracing::debug!("✅ Response 包处理完成: message_id={}", message_id);
+                                } else {
+                                    tracing::warn!("⚠️ 收到迟到的 Response 包: message_id={}", message_id);
+                                }
+                            }
+                            
+                            crate::packet::PacketType::Request => {
+                                // 🎯 Request 包：需要向上层发送 RequestReceived 事件
+                                // 这里暂时记录，具体的上层事件发送由 TransportServer 处理
+                                tracing::debug!("📨 收到 Request 包，等待上层处理: message_id={}", packet.message_id());
+                                // TODO: 发送 RequestReceived 事件到上层
+                            }
+                            
+                            crate::packet::PacketType::OneWay => {
+                                // 🎯 OneWay 包：向上层发送 MessageReceived 事件
+                                tracing::debug!("📨 收到 OneWay 包，转发到上层: message_id={}", packet.message_id());
+                                // TODO: 转发 MessageReceived 事件到上层
+                            }
+                        }
+                    }
+                }
+                
+                tracing::debug!("🔄 Transport 内部消息处理循环结束: {}", session_id);
+            } else {
+                tracing::debug!("🔄 连接不支持事件流，跳过内部消息处理: {}", session_id);
+            }
+        });
     }
 }
 

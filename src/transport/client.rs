@@ -225,7 +225,7 @@ impl Default for TransportClientBuilder {
 
 /// 🎯 传输层客户端 - 使用 Transport 进行单连接管理
 pub struct TransportClient {
-    inner: Transport,
+    inner: Arc<tokio::sync::Mutex<Transport>>,
     retry_config: RetryConfig,
     // 客户端协议配置
     protocol_config: Option<Box<dyn DynClientConfig>>,
@@ -240,11 +240,68 @@ impl TransportClient {
         protocol_config: Option<Box<dyn DynClientConfig>>,
     ) -> Self {
         Self {
-            inner: transport,
+            inner: Arc::new(tokio::sync::Mutex::new(transport)),
             retry_config,
             protocol_config,
             current_session_id: Arc::new(RwLock::new(None)),
         }
+    }
+    
+    /// 启动内部事件处理任务，自动处理响应包
+    fn start_internal_event_handler(&self) {
+        let transport = self.inner.clone();
+        
+        tokio::spawn(async move {
+            // 等待连接建立完成
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            
+            // 获取连接适配器并尝试获取事件接收器
+            let transport_guard = transport.lock().await;
+            if let Some(connection_adapter) = transport_guard.connection_adapter() {
+                let conn = connection_adapter.lock().await;
+                if let Some(mut event_receiver) = conn.event_stream() {
+                    drop(conn); // 释放连接锁
+                    drop(transport_guard); // 释放transport锁
+                    tracing::debug!("🔄 TransportClient 内部事件处理器启动");
+                    
+                    while let Ok(event) = event_receiver.recv().await {
+                        match event {
+                            crate::event::TransportEvent::MessageReceived { packet, .. } => {
+                                // 添加详细的包类型调试信息
+                                tracing::debug!("📦 收到数据包: message_id={}, packet_type={:?} (u8={})", 
+                                    packet.message_id(), packet.packet_type(), u8::from(packet.packet_type()));
+                                
+                                // 重新获取transport来处理包
+                                let transport_guard = transport.lock().await;
+                                // 自动处理接收到的包，如果是响应包则会被消费
+                                if let Some(unhandled_packet) = transport_guard.handle_incoming_packet(packet) {
+                                    // 如果不是响应包，则继续保留在事件流中
+                                    // 这里可以选择忽略或记录日志
+                                    tracing::debug!("📦 收到非响应包: message_id={}, packet_type={:?}", 
+                                        unhandled_packet.message_id(), unhandled_packet.packet_type());
+                                } else {
+                                    tracing::debug!("✅ 响应包已被消费: packet_type={:?}", crate::packet::PacketType::Response);
+                                }
+                                drop(transport_guard);
+                            }
+                            crate::event::TransportEvent::ConnectionClosed { .. } => {
+                                tracing::debug!("🔗 TransportClient 检测到连接关闭，停止内部事件处理");
+                                break;
+                            }
+                            _ => {
+                                // 其他事件不处理
+                            }
+                        }
+                    }
+                    
+                    tracing::debug!("🔄 TransportClient 内部事件处理器结束");
+                } else {
+                    tracing::debug!("🔄 TransportClient 连接不支持事件流，跳过内部事件处理");
+                }
+            } else {
+                tracing::debug!("🔄 TransportClient 无连接适配器，跳过内部事件处理");
+            }
+        });
     }
     
     /// 🔌 使用构建时指定的协议配置进行连接 - 框架唯一连接方式
@@ -264,6 +321,9 @@ impl TransportClient {
         // 更新当前会话ID (内部使用)
         let mut current_session = self.current_session_id.write().await;
         *current_session = Some(session_id);
+        drop(current_session);
+        
+        // RPC 响应包现在直接在 Transport::request_with_timeout 中处理
         
         tracing::info!("✅ TransportClient 连接成功");
         Ok(())
@@ -285,7 +345,7 @@ impl TransportClient {
             match protocol_config.protocol_name() {
                 "tcp" => {
                     if let Some(tcp_config) = protocol_config.as_any().downcast_ref::<crate::protocol::TcpClientConfig>() {
-                        match self.inner.connect_with_config(tcp_config).await {
+                        match self.inner.lock().await.connect_with_config(tcp_config).await {
                             Ok(session_id) => return Ok(session_id),
                             Err(e) => {
                                 last_error = Some(e);
@@ -298,7 +358,7 @@ impl TransportClient {
                 }
                 "websocket" => {
                     if let Some(ws_config) = protocol_config.as_any().downcast_ref::<crate::protocol::WebSocketClientConfig>() {
-                        match self.inner.connect_with_config(ws_config).await {
+                        match self.inner.lock().await.connect_with_config(ws_config).await {
                             Ok(session_id) => return Ok(session_id),
                             Err(e) => {
                                 last_error = Some(e);
@@ -311,7 +371,7 @@ impl TransportClient {
                 }
                 "quic" => {
                     if let Some(quic_config) = protocol_config.as_any().downcast_ref::<crate::protocol::QuicClientConfig>() {
-                        match self.inner.connect_with_config(quic_config).await {
+                        match self.inner.lock().await.connect_with_config(quic_config).await {
                             Ok(session_id) => return Ok(session_id),
                             Err(e) => {
                                 last_error = Some(e);
@@ -349,7 +409,7 @@ impl TransportClient {
             tracing::info!("TransportClient 断开连接");
             
             // 使用 Transport 的统一关闭方法
-            self.inner.close_session(session_id).await?;
+            self.inner.lock().await.close_session(session_id).await?;
             
             Ok(())
         } else {
@@ -367,7 +427,7 @@ impl TransportClient {
             tracing::info!("TransportClient 强制断开连接");
             
             // 使用 Transport 的强制关闭方法
-            self.inner.force_close_session(session_id).await?;
+            self.inner.lock().await.force_close_session(session_id).await?;
             
             Ok(())
         } else {
@@ -379,7 +439,27 @@ impl TransportClient {
     pub async fn send(&self, packet: crate::packet::Packet) -> Result<(), TransportError> {
         if self.is_connected().await {
             tracing::debug!("TransportClient 发送数据包到当前连接");
-            self.inner.send(packet).await
+            self.inner.lock().await.send(packet).await
+        } else {
+            Err(TransportError::connection_error("Not connected - call connect() first", false))
+        }
+    }
+    
+    /// 🚀 发送请求并等待响应 - 默认10秒超时
+    pub async fn request(&self, packet: crate::packet::Packet) -> Result<crate::packet::Packet, TransportError> {
+        if self.is_connected().await {
+            tracing::debug!("TransportClient 发送 RPC 请求到当前连接");
+            self.inner.lock().await.request(packet).await
+        } else {
+            Err(TransportError::connection_error("Not connected - call connect() first", false))
+        }
+    }
+    
+    /// 🚀 发送请求并等待响应 - 自定义超时
+    pub async fn request_with_timeout(&self, packet: crate::packet::Packet, timeout: std::time::Duration) -> Result<crate::packet::Packet, TransportError> {
+        if self.is_connected().await {
+            tracing::debug!("TransportClient 发送 RPC 请求到当前连接（超时: {:?}）", timeout);
+            self.inner.lock().await.request_with_timeout(packet, timeout).await
         } else {
             Err(TransportError::connection_error("Not connected - call connect() first", false))
         }
@@ -387,7 +467,7 @@ impl TransportClient {
     
     /// 📊 检查连接状态
     pub async fn is_connected(&self) -> bool {
-        self.inner.is_connected()
+        self.inner.lock().await.is_connected()
     }
     
     /// 获取客户端事件流 - 返回当前连接的事件流（隐藏会话ID）
@@ -400,7 +480,7 @@ impl TransportClient {
         }
         
         // 🔧 修复：直接使用Transport的事件流，不再依赖会话ID
-        if let Some(event_receiver) = self.inner.get_event_stream().await {
+        if let Some(event_receiver) = self.inner.lock().await.get_event_stream().await {
             tracing::debug!("✅ TransportClient 获取到连接适配器的事件流");
             tracing::debug!("📡 TransportClient 客户端事件流创建完成");
             return Ok(StreamFactory::client_event_stream(event_receiver));
@@ -412,7 +492,7 @@ impl TransportClient {
     
     /// 🔍 内部方法：获取当前会话ID (仅用于内部调试)
     async fn current_session(&self) -> Option<SessionId> {
-        self.inner.current_session_id()
+        self.inner.lock().await.current_session_id()
     }
     
     /// 获取客户端连接统计
