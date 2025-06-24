@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ClientEvent::MessageReceived { packet } => {
                             received_count += 1;
                             let message = String::from_utf8_lossy(&packet.payload);
-                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.message_id);
+                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.header.message_id);
                             println!("   内容: \"{}\"", message);
                             if message.contains("Message #4") {
                                 println!("🎯 收到最后一条回显，准备结束");
@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         ClientEvent::RequestReceived { ctx } => {
-                            println!("🔄 客户端收到请求: ID: {}", ctx.request.message_id);
+                            println!("🔄 客户端收到请求: ID: {}", ctx.request.header.message_id);
                             ctx.respond_with(|req| {
                                 let mut resp = req.clone();
                                 resp.payload = format!("Client Echo: {}", String::from_utf8_lossy(&req.payload)).into_bytes();
@@ -122,7 +122,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match transport.request(packet).await {
             Ok(response) => {
                 let resp_msg = String::from_utf8_lossy(&response.payload);
-                println!("✅ 收到响应: ID {}, 内容: {}", response.message_id, resp_msg);
+                println!("✅ 收到响应: ID {}, 内容: {}", response.header.message_id, resp_msg);
             }
             Err(e) => {
                 println!("❌ 请求失败: {:?}", e);

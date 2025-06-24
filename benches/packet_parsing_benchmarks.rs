@@ -108,7 +108,7 @@ fn generate_test_packets(count: usize, payload_size: usize) -> Vec<Vec<u8>> {
     
     for i in 0..count {
         let payload = vec![0u8; payload_size];
-        let packet = Packet::data(i as u32, payload);
+        let packet = Packet::one_way(i as u32, payload);
         packets.push(packet.to_bytes());
     }
     

@@ -348,7 +348,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                                         
                                         // 发送全局事件（兼容现有系统）
                                         let transport_event = crate::TransportEvent::MessageSent {
-                                            packet_id: packet.message_id,
+                                            packet_id: packet.header.message_id,
                                         };
                                         let _ = global_event_sender.send(transport_event);
                                     }

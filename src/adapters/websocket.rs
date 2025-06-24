@@ -264,7 +264,7 @@ impl<C> WebSocketAdapter<C> {
                                     tracing::debug!("📤 WebSocket发送成功: {} bytes (会话: {})", packet.payload.len(), current_session_id);
                                     
                                     // 发送发送事件
-                                    let event = TransportEvent::MessageSent { packet_id: packet.message_id };
+                                    let event = TransportEvent::MessageSent { packet_id: packet.header.message_id };
                                     
                                     if let Err(e) = event_sender.send(event) {
                                         tracing::warn!("📤 发送发送事件失败: {:?}", e);
@@ -320,7 +320,7 @@ impl<C> WebSocketAdapter<C> {
                 // 预先检查最小长度，避免不必要的解析尝试
                 if data.len() < 16 {
                     // 数据太短，不可能是有效的Packet，直接创建基本数据包
-                    let packet = Packet::data(0, data.clone());
+                    let packet = Packet::one_way(0, data.clone());
                     return MessageProcessResult::Packet(packet);
                 }
                 
@@ -333,7 +333,7 @@ impl<C> WebSocketAdapter<C> {
                     Err(e) => {
                         tracing::debug!("📥 WebSocket数据包解析失败: {:?}, 创建基本数据包", e);
                         // 如果解析失败，创建一个基本的数据包
-                        let packet = Packet::data(0, data.clone());
+                        let packet = Packet::one_way(0, data.clone());
                         MessageProcessResult::Packet(packet)
                     }
                 }
@@ -341,7 +341,7 @@ impl<C> WebSocketAdapter<C> {
             Message::Text(text) => {
                 // ✅ 文本消息直接创建数据包（通常用于调试）
                 tracing::debug!("📥 WebSocket收到文本消息: {} bytes", text.len());
-                let packet = Packet::data(0, text.as_bytes());
+                let packet = Packet::one_way(0, text.as_bytes());
                 MessageProcessResult::Packet(packet)
             }
             Message::Close(_) => {

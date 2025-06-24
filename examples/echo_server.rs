@@ -73,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 ServerEvent::MessageReceived { session_id, packet } => {
                     let message_text = String::from_utf8_lossy(&packet.payload);
-                    println!("📩 收到消息: 会话: {}, ID: {}, 内容: {}", session_id, packet.message_id, message_text);
+                    println!("📩 收到消息: 会话: {}, ID: {}, 内容: {}", session_id, packet.header.message_id, message_text);
                 }
                 ServerEvent::MessageSent { session_id, packet_id } => {
                     println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, packet_id);
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("🛑 服务器停止通知");
                 }
                 ServerEvent::RequestReceived { session_id, ctx } => {
-                    println!("🔄 收到请求: 会话: {}, ID: {}", session_id, ctx.request.message_id);
+                    println!("🔄 收到请求: 会话: {}, ID: {}", session_id, ctx.request.header.message_id);
                     ctx.respond_with(|req| {
                         let mut resp = req.clone();
                         resp.payload = format!("Echo: {}", String::from_utf8_lossy(&req.payload)).into_bytes();

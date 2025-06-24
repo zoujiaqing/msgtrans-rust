@@ -261,7 +261,7 @@ impl<C> TcpAdapter<C> {
                         match read_result {
                             Ok(Some(packet)) => {
                                 tracing::debug!("📥 TCP接收到数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
-                                tracing::debug!("🔍 数据包详情: ID={}, 类型={:?}, 负载长度={}", packet.message_id, packet.packet_type, packet.payload.len());
+                                tracing::debug!("🔍 数据包详情: ID={}, 类型={:?}, 负载长度={}", packet.header.message_id, packet.header.packet_type, packet.payload.len());
                                 
                                 // 发送接收事件
                                 let event = TransportEvent::MessageReceived(packet);
@@ -305,7 +305,7 @@ impl<C> TcpAdapter<C> {
                                     tracing::debug!("📤 TCP发送成功: {} bytes (会话: {})", packet.payload.len(), current_session_id);
                                     
                                     // 发送发送事件
-                                    let event = TransportEvent::MessageSent { packet_id: packet.message_id };
+                                    let event = TransportEvent::MessageSent { packet_id: packet.header.message_id };
                                     
                                     if let Err(e) = event_sender.send(event) {
                                         tracing::warn!("📤 发送发送事件失败: {:?}", e);

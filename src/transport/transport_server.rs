@@ -82,7 +82,7 @@ impl TransportServer {
     /// 向指定会话发送数据包
     pub async fn send_to_session(&self, session_id: SessionId, packet: Packet) -> Result<(), TransportError> {
         tracing::debug!("📤 TransportServer 向会话 {} 发送数据包 (ID: {}, 大小: {} bytes)", 
-            session_id, packet.message_id, packet.payload.len());
+            session_id, packet.header.message_id, packet.payload.len());
         
         if let Some(connection) = self.connections.get(&session_id) {
             let mut conn = connection.lock().await;
@@ -487,7 +487,7 @@ impl TransportServer {
     async fn handle_transport_event(&self, session_id: SessionId, transport_event: crate::event::TransportEvent) {
         match transport_event {
             crate::event::TransportEvent::MessageReceived(packet) => {
-                match packet.packet_type() {
+                match packet.header.packet_type {
                     crate::packet::PacketType::Request => {
                         // 创建 RequestContext 并发送 RequestReceived 事件
                         let server_clone = self.clone();

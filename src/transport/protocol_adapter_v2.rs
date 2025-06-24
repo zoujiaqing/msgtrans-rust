@@ -385,7 +385,7 @@ impl PerformanceMetrics {
 
 /// 工具函数：创建测试数据包
 pub fn create_test_packet(id: u64, size: usize) -> Packet {
-    Packet::data(id as u32, vec![0u8; size])
+    Packet::one_way(id as u32, vec![0u8; size])
 }
 
 impl Clone for FlumePoweredProtocolAdapter {

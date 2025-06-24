@@ -376,7 +376,7 @@ impl<C> QuicAdapter<C> {
                                         let packet = if buf.len() < 16 {
                                             // 数据太短，不可能是有效的Packet，直接创建基本数据包
                                             tracing::debug!("📥 QUIC数据太短，创建基本数据包: {} bytes", buf.len());
-                                            Packet::data(0, buf)
+                                            Packet::one_way(0, buf)
                                         } else {
                                             // 尝试解析为完整的Packet
                                             match Packet::from_bytes(&buf) {
@@ -387,7 +387,7 @@ impl<C> QuicAdapter<C> {
                                                 Err(e) => {
                                                     tracing::debug!("📥 QUIC数据包解析失败: {:?}, 创建基本数据包", e);
                                                     // ✅ 优化：避免切片拷贝，直接使用buf
-                                                    Packet::data(0, buf)
+                                                    Packet::one_way(0, buf)
                                                 }
                                             }
                                         };
@@ -496,7 +496,7 @@ impl<C> QuicAdapter<C> {
                                     // ✅ 优化：准备发送数据
                                     let data = packet.to_bytes();
                                     let packet_size = packet.payload.len();
-                                    let packet_id = packet.message_id;
+                                    let packet_id = packet.header.message_id;
                                     
                                     match send_stream.write_all(&data).await {
                                         Ok(_) => {

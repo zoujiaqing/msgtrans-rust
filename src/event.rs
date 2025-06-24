@@ -434,20 +434,18 @@ impl RequestContext {
             log::warn!("Request already responded");
             return;
         }
-        tracing::debug!("🔄 RequestContext::respond called: 原类型={:?}, ID={}", response.packet_type, response.message_id);
+        tracing::debug!("🔄 RequestContext::respond called: 原类型={:?}, ID={}", response.header.packet_type, response.header.message_id);
         
-        // 🔧 修复：同时设置两个包类型字段
-        response.packet_type = PacketType::Response;
+        // 🔧 只设置header中的标准字段
         response.header.packet_type = PacketType::Response;
-        response.message_id = self.request.message_id;
-        response.header.message_id = self.request.message_id;
+        response.header.message_id = self.request.header.message_id;
         
-        tracing::debug!("🔄 RequestContext::respond 设置后: 新类型={:?}, header类型={:?}, ID={}", 
-            response.packet_type, response.header.packet_type, response.message_id);
+        tracing::debug!("🔄 RequestContext::respond 设置后: 新类型={:?}, ID={}", 
+            response.header.packet_type, response.header.message_id);
         
         if let Some(responder) = self.responder.lock().unwrap().take() {
-            tracing::debug!("🔄 RequestContext::respond 调用发送回调，包类型={:?}, header类型={:?}, ID={}", 
-                response.packet_type, response.header.packet_type, response.message_id);
+            tracing::debug!("🔄 RequestContext::respond 调用发送回调，包类型={:?}, ID={}", 
+                response.header.packet_type, response.header.message_id);
             responder(response);
         } else {
             tracing::warn!("⚠️ RequestContext::respond 没有发送回调可用");

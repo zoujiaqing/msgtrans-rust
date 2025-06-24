@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("📤 发送消息 #{}: \"{}\"", i + 1, message);
         
         // 🔧 使用标准的客户端发送方法
-        let packet = Packet::data((i as u32) + 1, message.as_bytes());
+                    let packet = Packet::one_way((i as u32) + 1, message.as_bytes());
         
         match transport.send(packet).await {
             Ok(_) => {

@@ -342,11 +342,11 @@ impl Transport {
 
     /// 🚀 发送数据包并等待响应
     pub async fn request(&self, mut packet: Packet) -> Result<Packet, TransportError> {
-        if packet.packet_type() != crate::packet::PacketType::Request {
+        if packet.header.packet_type != crate::packet::PacketType::Request {
             return Err(TransportError::connection_error("Not a Request packet", false));
         }
         let (id, rx) = self.request_tracker.register();
-        packet.message_id = id;
+        packet.header.message_id = id;
         self.send(packet).await?;
         match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
             Ok(Ok(resp)) => Ok(resp),
@@ -359,10 +359,10 @@ impl Transport {
     pub async fn on_event(&self, event: crate::event::TransportEvent) {
         match event {
             crate::event::TransportEvent::MessageReceived(packet) => {
-                match packet.packet_type() {
+                match packet.header.packet_type {
                     crate::packet::PacketType::Response => {
-                        let id = packet.message_id();
-                        tracing::debug!("📥 处理响应包: ID={}, type={:?}", id, packet.packet_type());
+                        let id = packet.header.message_id;
+                        tracing::debug!("📥 处理响应包: ID={}, type={:?}", id, packet.header.packet_type);
                         let completed = self.request_tracker.complete(id, packet);
                         tracing::debug!("🔄 响应包处理结果: ID={}, completed={}", id, completed);
                     }
