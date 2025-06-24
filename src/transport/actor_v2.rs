@@ -348,7 +348,6 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                                         
                                         // 发送全局事件（兼容现有系统）
                                         let transport_event = crate::TransportEvent::MessageSent {
-                                            session_id,
                                             packet_id: packet.message_id,
                                         };
                                         let _ = global_event_sender.send(transport_event);
@@ -366,8 +365,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                                         }
                                         
                                         // 发送错误事件
-                                        let transport_event = crate::TransportEvent::TransportError {
-                                            session_id: Some(session_id),
+                                            let transport_event = crate::TransportEvent::TransportError {
                                             error: TransportError::connection_error(format!("{:?}", e), false),
                                         };
                                         let _ = global_event_sender.send(transport_event);
@@ -460,7 +458,6 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                         
                         // 发送全局关闭事件
                         let transport_event = crate::TransportEvent::ConnectionClosed {
-                            session_id,
                             reason: crate::CloseReason::Normal,
                         };
                         let _ = global_event_sender.send(transport_event);

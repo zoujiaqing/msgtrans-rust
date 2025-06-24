@@ -54,6 +54,12 @@ webpki-roots = "0.26"
 flate2 = { version = "1", optional = true }
 zstd = { version = "0.13", optional = true }
 
+# Added for dashmap
+dashmap = "^5.5"
+
+# Added for log
+log = "^0.4"
+
 [dev-dependencies]
 tracing-subscriber = "0.3"
 toml = "0.8"

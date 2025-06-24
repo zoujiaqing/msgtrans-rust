@@ -225,12 +225,13 @@ impl Default for TransportClientBuilder {
 
 /// 🎯 传输层客户端 - 使用 Transport 进行单连接管理
 pub struct TransportClient {
-    inner: Transport,
+    inner: Arc<Transport>,
     retry_config: RetryConfig,
     // 客户端协议配置
     protocol_config: Option<Box<dyn DynClientConfig>>,
     // 🎯 当前连接的会话ID - 使用 Arc<RwLock> 以便修改
     current_session_id: Arc<RwLock<Option<SessionId>>>,
+    event_sender: tokio::sync::broadcast::Sender<crate::event::ClientEvent>,
 }
 
 impl TransportClient {
@@ -240,10 +241,11 @@ impl TransportClient {
         protocol_config: Option<Box<dyn DynClientConfig>>,
     ) -> Self {
         Self {
-            inner: transport,
+            inner: Arc::new(transport),
             retry_config,
             protocol_config,
             current_session_id: Arc::new(RwLock::new(None)),
+            event_sender: tokio::sync::broadcast::channel(16).0,
         }
     }
     
@@ -265,6 +267,9 @@ impl TransportClient {
         let mut current_session = self.current_session_id.write().await;
         *current_session = Some(session_id);
         
+        // ⭐️ 启动事件转发任务，将Transport事件转换为ClientEvent
+        self.start_event_forwarding().await?;
+        
         tracing::info!("✅ TransportClient 连接成功");
         Ok(())
     }
@@ -285,7 +290,7 @@ impl TransportClient {
             match protocol_config.protocol_name() {
                 "tcp" => {
                     if let Some(tcp_config) = protocol_config.as_any().downcast_ref::<crate::protocol::TcpClientConfig>() {
-                        match self.inner.connect_with_config(tcp_config).await {
+                        match self.inner.connect_with_config(tcp_config.clone()).await {
                             Ok(session_id) => return Ok(session_id),
                             Err(e) => {
                                 last_error = Some(e);
@@ -298,7 +303,7 @@ impl TransportClient {
                 }
                 "websocket" => {
                     if let Some(ws_config) = protocol_config.as_any().downcast_ref::<crate::protocol::WebSocketClientConfig>() {
-                        match self.inner.connect_with_config(ws_config).await {
+                        match self.inner.connect_with_config(ws_config.clone()).await {
                             Ok(session_id) => return Ok(session_id),
                             Err(e) => {
                                 last_error = Some(e);
@@ -311,7 +316,7 @@ impl TransportClient {
                 }
                 "quic" => {
                     if let Some(quic_config) = protocol_config.as_any().downcast_ref::<crate::protocol::QuicClientConfig>() {
-                        match self.inner.connect_with_config(quic_config).await {
+                        match self.inner.connect_with_config(quic_config.clone()).await {
                             Ok(session_id) => return Ok(session_id),
                             Err(e) => {
                                 last_error = Some(e);
@@ -340,7 +345,7 @@ impl TransportClient {
     }
     
     /// 📡 断开连接（优雅关闭）
-    pub async fn disconnect(&mut self) -> Result<(), TransportError> {
+    pub async fn disconnect(&self) -> Result<(), TransportError> {
         // 检查是否已连接
         let mut current_session = self.current_session_id.write().await;
         if let Some(session_id) = current_session.take() {
@@ -358,7 +363,7 @@ impl TransportClient {
     }
     
     /// 🔌 强制断开连接
-    pub async fn force_disconnect(&mut self) -> Result<(), TransportError> {
+    pub async fn force_disconnect(&self) -> Result<(), TransportError> {
         // 检查是否已连接
         let mut current_session = self.current_session_id.write().await;
         if let Some(session_id) = current_session.take() {
@@ -387,7 +392,18 @@ impl TransportClient {
     
     /// 📊 检查连接状态
     pub async fn is_connected(&self) -> bool {
-        self.inner.is_connected()
+        self.inner.is_connected().await
+    }
+
+    /// 获取连接状态信息
+    pub async fn connection_info(&self) -> Option<crate::command::ConnectionInfo> {
+        // TODO: 实现连接信息获取
+        None
+    }
+
+    /// 获取当前会话ID
+    pub async fn current_session_id(&self) -> Option<SessionId> {
+        self.inner.current_session_id().await
     }
     
     /// 获取客户端事件流 - 返回当前连接的事件流（隐藏会话ID）
@@ -412,7 +428,7 @@ impl TransportClient {
     
     /// 🔍 内部方法：获取当前会话ID (仅用于内部调试)
     async fn current_session(&self) -> Option<SessionId> {
-        self.inner.current_session_id()
+        self.inner.current_session_id().await
     }
     
     /// 获取客户端连接统计
@@ -420,6 +436,50 @@ impl TransportClient {
     pub async fn stats(&self) -> Result<crate::command::TransportStats, TransportError> {
         // 暂时返回错误，等待 Transport 实现统计
         Err(TransportError::connection_error("Stats not implemented for Transport yet", false))
+    }
+
+    /// 客户端 request 方法，直接转发到内部 Transport
+    pub async fn request(&self, packet: crate::packet::Packet) -> Result<crate::packet::Packet, crate::error::TransportError> {
+        self.inner.request(packet).await
+    }
+
+    /// 业务层订阅 ClientEvent
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::ClientEvent> {
+        self.event_sender.subscribe()
+    }
+
+    /// ⭐️ 启动事件转发任务
+    async fn start_event_forwarding(&self) -> Result<(), TransportError> {
+        // 获取Transport的事件流
+        if let Some(mut transport_events) = self.inner.get_event_stream().await {
+            let client_event_sender = self.event_sender.clone();
+            
+            // 启动转发任务
+            tokio::spawn(async move {
+                tracing::debug!("🔄 TransportClient 事件转发任务启动");
+                
+                while let Ok(transport_event) = transport_events.recv().await {
+                    tracing::trace!("📥 TransportClient 收到Transport事件: {:?}", transport_event);
+                    
+                    // 转换为ClientEvent并转发
+                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
+                        tracing::trace!("📤 TransportClient 转发ClientEvent: {:?}", client_event);
+                        
+                        if let Err(e) = client_event_sender.send(client_event) {
+                            tracing::warn!("⚠️ TransportClient 事件转发失败: {:?}", e);
+                            // 如果没有接收者，继续运行
+                        }
+                    }
+                }
+                
+                tracing::debug!("📡 TransportClient 事件转发任务结束");
+            });
+            
+            tracing::debug!("✅ TransportClient 事件转发任务已启动");
+            Ok(())
+        } else {
+            Err(TransportError::connection_error("Connection does not support event streams", false))
+        }
     }
 }
 

@@ -8,7 +8,7 @@ use msgtrans::{
     protocol::TcpServerConfig,
     protocol::WebSocketServerConfig,
     protocol::QuicServerConfig,
-    event::TransportEvent,
+    event::{ServerEvent, RequestContext},
     packet::Packet,
 };
 use futures::StreamExt;
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ TCP服务器创建完成: 127.0.0.1:8001");
     
     // 🎯 核心：立即创建事件流（此时服务器还未启动）
-    let mut events = transport.events();
+    let mut events = transport.subscribe_events();
     println!("📡 事件流创建完成 - 服务器尚未启动");
     
     // 克隆transport用于在事件处理中发送回显
@@ -56,72 +56,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut event_count = 0u64;
         let mut connections = std::collections::HashSet::new();
         
-        while let Some(event) = events.next().await {
+        while let Ok(event) = events.recv().await {
             event_count += 1;
             println!("📥 事件 #{}: {:?}", event_count, event);
             
             match event {
-                TransportEvent::ConnectionEstablished { session_id, info } => {
+                ServerEvent::ConnectionEstablished { session_id, info } => {
                     connections.insert(session_id);
-                    println!("🔗 新连接建立: {} <- {} (协议: {:?})", 
-                        session_id, info.peer_addr, info.protocol);
+                    println!("🔗 新连接建立: {} <- {} (协议: {:?})", session_id, info.peer_addr, info.protocol);
                     println!("   当前连接数: {}", connections.len());
                 }
-                
-                TransportEvent::MessageReceived { session_id, packet } => {
-                    let message_text = String::from_utf8_lossy(&packet.payload);
-                    println!("📨 收到消息:");
-                    println!("   会话: {}", session_id);
-                    println!("   消息ID: {}", packet.message_id);
-                    println!("   大小: {} bytes", packet.payload.len());
-                    println!("   内容: \"{}\"", message_text);
-                    
-                    // 🔄 生成回显响应
-                    let echo_message = format!("Echo: {}", message_text);
-                    let echo_packet = Packet::data(
-                        packet.message_id + 1000,  // 使用不同的ID避免冲突
-                        echo_message.as_bytes()
-                    );
-                    
-                    println!("🔄 准备发送回显:");
-                    println!("   目标会话: {}", session_id);
-                    println!("   回显ID: {}", echo_packet.message_id);
-                    println!("   回显内容: \"{}\"", echo_message);
-                    
-                    match transport_for_echo.send_to_session(session_id, echo_packet).await {
-                        Ok(()) => {
-                            println!("✅ 回显发送成功 -> 会话 {}", session_id);
-                        }
-                        Err(e) => {
-                            println!("❌ 回显发送失败: {:?}", e);
-                        }
-                    }
-                }
-                
-                TransportEvent::MessageSent { session_id, packet_id } => {
-                    println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, packet_id);
-                }
-                
-                TransportEvent::ConnectionClosed { session_id, reason } => {
+                ServerEvent::ConnectionClosed { session_id, reason } => {
                     connections.remove(&session_id);
                     println!("🔌 连接关闭: {} (原因: {:?})", session_id, reason);
                     println!("   剩余连接数: {}", connections.len());
                 }
-                
-                TransportEvent::TransportError { session_id, error } => {
+                ServerEvent::MessageReceived { session_id, packet } => {
+                    let message_text = String::from_utf8_lossy(&packet.payload);
+                    println!("📩 收到消息: 会话: {}, ID: {}, 内容: {}", session_id, packet.message_id, message_text);
+                }
+                ServerEvent::MessageSent { session_id, packet_id } => {
+                    println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, packet_id);
+                }
+                ServerEvent::TransportError { session_id, error } => {
                     println!("⚠️ 传输错误: {:?} (会话: {:?})", error, session_id);
                 }
-                
-                TransportEvent::ServerStarted { address } => {
+                ServerEvent::ServerStarted { address } => {
                     println!("🌟 服务器启动通知: {}", address);
                 }
-                
-                TransportEvent::ServerStopped => {
+                ServerEvent::ServerStopped => {
                     println!("🛑 服务器停止通知");
                 }
-                
-                _ => {
-                    println!("ℹ️ 其他事件: {:?}", event);
+                ServerEvent::RequestReceived { session_id, ctx } => {
+                    println!("🔄 收到请求: 会话: {}, ID: {}", session_id, ctx.request.message_id);
+                    ctx.respond_with(|req| {
+                        let mut resp = req.clone();
+                        resp.payload = format!("Echo: {}", String::from_utf8_lossy(&req.payload)).into_bytes();
+                        resp
+                    });
                 }
             }
         }

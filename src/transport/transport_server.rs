@@ -4,13 +4,16 @@
 
 use std::sync::Arc;
 use crate::{
-    SessionId, TransportError, Packet, EventStream, TransportEvent,
+    SessionId, TransportError, Packet, EventStream,
     transport::{
         config::TransportConfig,
         lockfree_enhanced::LockFreeHashMap,
         connection_state::ConnectionStateManager,
     },
-    command::TransportStats,
+    error::CloseReason,
+    command::{ConnectionInfo, TransportStats},
+    Connection, Server,
+    event::ServerEvent,
     protocol::adapter::DynServerConfig,
 };
 use tokio::sync::broadcast;
@@ -31,7 +34,7 @@ pub struct TransportServer {
     /// 服务端统计信息 (使用 lockfree)
     stats: Arc<LockFreeHashMap<SessionId, TransportStats>>,
     /// 事件广播器
-    event_sender: broadcast::Sender<TransportEvent>,
+    event_sender: broadcast::Sender<ServerEvent>,
     /// 是否正在运行
     is_running: Arc<std::sync::atomic::AtomicBool>,
     /// 🔧 协议配置 - 改为服务端专用配置
@@ -136,11 +139,29 @@ impl TransportServer {
         // 🔧 修复：使用连接已有的会话ID，而不是生成新的
         let session_id = connection.session_id();
         let wrapped_connection = Arc::new(tokio::sync::Mutex::new(connection));
-        self.connections.insert(session_id, wrapped_connection);
+        self.connections.insert(session_id, wrapped_connection.clone());
         self.stats.insert(session_id, TransportStats::new());
         
         // 注册连接状态
         self.state_manager.add_connection(session_id);
+        
+        // ⭐️ 启动事件消费循环，将 TransportEvent 转换为 ServerEvent
+        let server_clone = self.clone();
+        let conn_for_events = wrapped_connection.clone();
+        tokio::spawn(async move {
+            let conn = conn_for_events.lock().await;
+            if let Some(mut event_receiver) = conn.event_stream() {
+                drop(conn);
+                tracing::debug!("🎧 TransportServer 启动会话 {} 的事件消费循环", session_id);
+                while let Ok(transport_event) = event_receiver.recv().await {
+                    tracing::trace!("📥 TransportServer 收到会话 {} 的事件: {:?}", session_id, transport_event);
+                    server_clone.handle_transport_event(session_id, transport_event).await;
+                }
+                tracing::debug!("📡 TransportServer 会话 {} 的事件消费循环结束", session_id);
+            } else {
+                tracing::warn!("⚠️ 会话 {} 的连接不支持事件流", session_id);
+            }
+        });
         
         tracing::info!("✅ TransportServer 添加会话: {}", session_id);
         session_id
@@ -166,7 +187,7 @@ impl TransportServer {
         tracing::info!("🔌 开始优雅关闭会话: {}", session_id);
         
         // 2. 发送连接关闭事件（在资源清理前）
-        let close_event = TransportEvent::ConnectionClosed {
+        let close_event = ServerEvent::ConnectionClosed {
             session_id,
             reason: crate::error::CloseReason::Normal,
         };
@@ -196,7 +217,7 @@ impl TransportServer {
         tracing::info!("🔌 强制关闭会话: {}", session_id);
         
         // 2. 发送连接关闭事件
-        let close_event = TransportEvent::ConnectionClosed {
+        let close_event = ServerEvent::ConnectionClosed {
             session_id,
             reason: crate::error::CloseReason::Forced,
         };
@@ -343,9 +364,9 @@ impl TransportServer {
         SessionId(id)
     }
 
-    /// 获取事件流
-    pub fn events(&self) -> EventStream {
-        EventStream::new(self.event_sender.subscribe())
+    /// 业务层订阅 ServerEvent
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::ServerEvent> {
+        self.event_sender.subscribe()
     }
 
     /// 启动服务端
@@ -433,63 +454,16 @@ impl TransportServer {
                         connection.set_session_id(session_id);
                         tracing::info!("🆔 为 {} 连接生成会话ID: {}", protocol_name, session_id);
                         
-                        // 🔧 修复：在移动connection之前获取事件流
-                        let event_receiver = connection.event_stream();
-                        
                         // 添加到会话管理
                         let actual_session_id = server_clone.add_session(connection).await;
                         
                         // 发送连接建立事件
-                        let connect_event = TransportEvent::ConnectionEstablished { 
+                        let connect_event = ServerEvent::ConnectionEstablished { 
                             session_id: actual_session_id,
                             info: connection_info,
                         };
                         let _ = server_clone.event_sender.send(connect_event);
                         tracing::info!("📨 {} 连接事件已发送", protocol_name);
-                        
-                        // 🔧 修复：不再启动错误的消息接收循环
-                        // TCP适配器已经有自己的事件循环来处理消息接收和事件发送
-                        // TransportServer只需要管理连接的生命周期
-                        
-                        // 如果连接支持事件流，订阅其事件并转发
-                        if let Some(event_receiver) = event_receiver {
-                            let event_sender = server_clone.event_sender.clone();
-                            let server_for_cleanup = server_clone.clone();
-                            
-                            tokio::spawn(async move {
-                                tracing::info!("📡 开始监听连接事件: {}", actual_session_id);
-                                
-                                let mut receiver = event_receiver;
-                                while let Ok(event) = receiver.recv().await {
-                                    // 转发事件到服务器的事件流
-                                    if let Err(e) = event_sender.send(event.clone()) {
-                                        tracing::warn!("⚠️ 转发事件失败: {:?}", e);
-                                        break;
-                                    }
-                                    
-                                    // 如果是连接关闭事件，清理会话
-                                    if matches!(event, TransportEvent::ConnectionClosed { .. }) {
-                                        tracing::info!("🔗 检测到连接关闭事件，清理会话: {}", actual_session_id);
-                                        let _ = server_for_cleanup.remove_session(actual_session_id).await;
-                                        break;
-                                    }
-                                }
-                                
-                                tracing::info!("📡 连接事件监听结束: {}", actual_session_id);
-                            });
-                        } else {
-                            tracing::warn!("⚠️ 连接不支持事件流，这在完全事件驱动架构中不应该发生: {}", actual_session_id);
-                            
-                            // 在完全事件驱动架构中，所有连接都应该支持事件流
-                            // 如果不支持，我们直接关闭连接并清理会话
-                            let _ = server_clone.remove_session(actual_session_id).await;
-                            
-                            let close_event = TransportEvent::ConnectionClosed { 
-                                session_id: actual_session_id,
-                                reason: crate::error::CloseReason::Error("Connection does not support event streams".to_string()),
-                            };
-                            let _ = server_clone.event_sender.send(close_event);
-                        }
                     }
                     Err(e) => {
                         tracing::error!("❌ {} 接受连接失败: {:?}", protocol_name, e);
@@ -507,6 +481,61 @@ impl TransportServer {
     /// 🔧 内部方法：从协议配置中提取监听地址
     fn get_protocol_bind_address(&self, protocol_config: &Box<dyn crate::protocol::adapter::DynServerConfig>) -> std::net::SocketAddr {
         protocol_config.get_bind_address()
+    }
+
+    /// 🎯 处理连接的 TransportEvent，转换为 ServerEvent
+    async fn handle_transport_event(&self, session_id: SessionId, transport_event: crate::event::TransportEvent) {
+        match transport_event {
+            crate::event::TransportEvent::MessageReceived(packet) => {
+                match packet.packet_type() {
+                    crate::packet::PacketType::Request => {
+                        // 创建 RequestContext 并发送 RequestReceived 事件
+                        let server_clone = self.clone();
+                        let ctx = crate::event::RequestContext::new(
+                            session_id,
+                            packet.clone(),
+                            Box::new(move |response| {
+                                let server = server_clone.clone();
+                                tokio::spawn(async move {
+                                    let _ = server.send_to_session(session_id, response).await;
+                                });
+                            }),
+                        );
+                        let event = crate::event::ServerEvent::RequestReceived { 
+                            session_id, 
+                            ctx: std::sync::Arc::new(ctx) 
+                        };
+                        let _ = self.event_sender.send(event);
+                    }
+                    _ => {
+                        // 其他类型的数据包作为普通消息处理
+                        let event = crate::event::ServerEvent::MessageReceived { session_id, packet };
+                        let _ = self.event_sender.send(event);
+                    }
+                }
+            }
+            crate::event::TransportEvent::MessageSent { packet_id } => {
+                let event = crate::event::ServerEvent::MessageSent { session_id, packet_id };
+                let _ = self.event_sender.send(event);
+            }
+            crate::event::TransportEvent::ConnectionClosed { reason } => {
+                let event = crate::event::ServerEvent::ConnectionClosed { session_id, reason };
+                let _ = self.event_sender.send(event);
+                // 清理会话
+                let _ = self.remove_session(session_id).await;
+            }
+            crate::event::TransportEvent::TransportError { error } => {
+                let event = crate::event::ServerEvent::TransportError { 
+                    session_id: Some(session_id), 
+                    error 
+                };
+                let _ = self.event_sender.send(event);
+            }
+            // 其他事件暂时忽略或记录
+            _ => {
+                tracing::trace!("📝 TransportServer 忽略事件: {:?}", transport_event);
+            }
+        }
     }
 
     /// 🎯 停止服务端
