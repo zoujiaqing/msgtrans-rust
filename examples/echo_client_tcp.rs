@@ -73,12 +73,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         ClientEvent::RequestReceived { ctx } => {
-                            println!("🔄 客户端收到请求: ID: {}", ctx.request.header.message_id);
+                            let request_text = String::from_utf8_lossy(&ctx.request.payload);
+                            println!("🔄 客户端收到服务端请求: ID: {}", ctx.request.header.message_id);
+                            println!("   请求内容: \"{}\"", request_text);
+                            
+                            // 🎯 智能响应服务端的不同请求
+                            let response_text = if request_text.contains("status") {
+                                "Client status: All systems operational!"
+                            } else {
+                                "Client received your request successfully"
+                            };
+                            
                             ctx.respond_with(|req| {
                                 let mut resp = req.clone();
-                                resp.payload = format!("Client Echo: {}", String::from_utf8_lossy(&req.payload)).into_bytes();
+                                resp.payload = response_text.as_bytes().to_vec();
                                 resp
                             });
+                            
+                            println!("✅ 已响应服务端请求: \"{}\"", response_text);
                         }
                         ClientEvent::Disconnected { reason } => {
                             println!("🔌 连接已关闭: {:?}", reason);

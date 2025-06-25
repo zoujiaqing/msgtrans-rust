@@ -459,16 +459,18 @@ impl TransportClient {
                 tracing::debug!("🔄 TransportClient 事件转发任务启动");
                 
                 while let Ok(transport_event) = transport_events.recv().await {
-                    tracing::trace!("📥 TransportClient 收到Transport事件: {:?}", transport_event);
+                    tracing::debug!("📥 TransportClient 收到Transport事件: {:?}", transport_event);
                     
                     // 转换为ClientEvent并转发
-                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
-                        tracing::trace!("📤 TransportClient 转发ClientEvent: {:?}", client_event);
+                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event.clone()) {
+                        tracing::debug!("📤 TransportClient 转发ClientEvent: {:?}", client_event);
                         
                         if let Err(e) = client_event_sender.send(client_event) {
                             tracing::warn!("⚠️ TransportClient 事件转发失败: {:?}", e);
                             // 如果没有接收者，继续运行
                         }
+                    } else {
+                        tracing::debug!("🚫 TransportClient 跳过不支持的事件: {:?}", transport_event);
                     }
                 }
                 

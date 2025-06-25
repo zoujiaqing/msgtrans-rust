@@ -58,6 +58,14 @@ impl RequestTracker {
             next_id: AtomicU32::new(1),
         }
     }
+    
+    /// 创建带自定义起始ID的RequestTracker
+    pub fn new_with_start_id(start_id: u32) -> Self {
+        Self {
+            pending: DashMap::new(),
+            next_id: AtomicU32::new(start_id),
+        }
+    }
     pub fn register(&self) -> (u32, oneshot::Receiver<Packet>) {
         let (tx, rx) = oneshot::channel();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -328,16 +336,16 @@ impl Transport {
     
     /// 获取连接的事件流（如果支持）
     /// 
-    /// 这个方法尝试将连接转换为支持事件流的类型
+    /// 🔧 修复：返回Transport的高级事件流，而不是Connection的原始事件流
+    /// 这样才能接收到RequestReceived等Transport处理后的事件
     pub async fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        if let Some(connection_adapter) = &self.connection_adapter.lock().await.as_ref() {
-            let conn = connection_adapter.lock().await;
-            
-            // 直接调用Connection的get_event_stream方法
-            return conn.event_stream();
+        // 检查是否有连接
+        if self.connection_adapter.lock().await.is_some() {
+            // 返回Transport的事件发送器订阅
+            Some(self.event_sender.subscribe())
+        } else {
+            None
         }
-        
-        None
     }
 
     /// 🚀 发送数据包并等待响应
@@ -359,6 +367,7 @@ impl Transport {
     pub async fn on_event(&self, event: crate::event::TransportEvent) {
         match event {
             crate::event::TransportEvent::MessageReceived(packet) => {
+                tracing::debug!("🎯 Transport::on_event 处理消息包: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
                 match packet.header.packet_type {
                     crate::packet::PacketType::Response => {
                         let id = packet.header.message_id;
@@ -367,6 +376,8 @@ impl Transport {
                         tracing::debug!("🔄 响应包处理结果: ID={}, completed={}", id, completed);
                     }
                     crate::packet::PacketType::Request => {
+                        let id = packet.header.message_id;
+                        tracing::debug!("🔄 收到请求包，创建 RequestContext: ID={}, type={:?}", id, packet.header.packet_type);
                         let transport = self.clone();
                         let session_id = *self.session_id.lock().await.as_ref().expect("session_id 必须存在");
                         let ctx = crate::event::RequestContext::new(
@@ -379,15 +390,18 @@ impl Transport {
                                 });
                             }),
                         );
+                        tracing::debug!("📤 发送 RequestReceived 事件: ID={}", id);
                         let _ = self.event_sender.send(crate::event::TransportEvent::RequestReceived(Arc::new(ctx)));
                     }
                     crate::packet::PacketType::OneWay => {
+                        tracing::debug!("📥 处理单向消息包: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
                         let _ = self.event_sender.send(crate::event::TransportEvent::MessageReceived(packet));
                     }
                 }
             }
             // 其它事件直接转发
             _ => {
+                tracing::trace!("📤 转发其他事件: {:?}", event);
                 let _ = self.event_sender.send(event);
             }
         }
@@ -405,8 +419,9 @@ impl Clone for Transport {
             protocol_registry: self.protocol_registry.clone(),
             connection_pool: self.connection_pool.clone(),
             memory_pool: self.memory_pool.clone(),
-            connection_adapter: Arc::new(Mutex::new(None)),
-            session_id: Arc::new(Mutex::new(None)),
+            // 🔧 修复：Clone应该共享连接状态，而不是重置
+            connection_adapter: self.connection_adapter.clone(),
+            session_id: self.session_id.clone(),
             state_manager: self.state_manager.clone(),
             event_sender: self.event_sender.clone(),
             request_tracker: self.request_tracker.clone(),

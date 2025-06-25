@@ -49,12 +49,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     // 克隆transport用于在事件处理中发送回显
     let transport_for_echo = transport.clone();
+    // 再克隆一个用于最后启动服务器
+    let transport_for_serve = transport.clone();
     
     // 🎯 模式A：先定义完整的事件处理逻辑
     let event_task = tokio::spawn(async move {
+        let transport = transport_for_echo; // 将克隆的transport移动到闭包中
         println!("🎧 开始监听事件...");
         let mut event_count = 0u64;
-        let mut connections = std::collections::HashSet::new();
+        let mut connections = std::collections::HashMap::new();
         
         while let Ok(event) = events.recv().await {
             event_count += 1;
@@ -62,18 +65,67 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             match event {
                 ServerEvent::ConnectionEstablished { session_id, info } => {
-                    connections.insert(session_id);
-                    println!("🔗 新连接建立: {} <- {} (协议: {:?})", session_id, info.peer_addr, info.protocol);
-                    println!("   当前连接数: {}", connections.len());
+                    event_count += 1;
+                    println!("📥 事件 #{}: 新连接建立", event_count);
+                    println!("   会话ID: {}", session_id);
+                    println!("   地址: {} ↔ {}", info.local_addr, info.peer_addr);
+                    
+                    // 发送欢迎消息
+                    let welcome = Packet::one_way(1002, b"Welcome to Echo Server!".to_vec());
+                    match transport.send_to_session(session_id, welcome).await {
+                        Ok(()) => {
+                            println!("✅ 欢迎消息发送成功 -> 会话 {}", session_id);
+                        }
+                        Err(e) => {
+                            println!("❌ 欢迎消息发送失败: {:?}", e);
+                        }
+                    }
+                    
+                    // 🎯 演示服务端向客户端发送请求
+                    // 等待100ms确保客户端完全准备好
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    println!("🔄 服务端向客户端发送请求...");
+                    let server_request = Packet::request(9001, b"Server asks: What is your status?".to_vec());
+                    match transport.request_to_session(session_id, server_request).await {
+                        Ok(response) => {
+                            let response_text = String::from_utf8_lossy(&response.payload);
+                            println!("✅ 收到客户端响应: \"{}\"", response_text);
+                        }
+                        Err(e) => {
+                            println!("❌ 服务端请求失败: {:?}", e);
+                        }
+                    }
+                    
+                    connections.insert(session_id, info);
                 }
                 ServerEvent::ConnectionClosed { session_id, reason } => {
+                    event_count += 1;
+                    println!("📥 事件 #{}: 连接关闭", event_count);
+                    println!("   会话ID: {}", session_id);
+                    println!("   原因: {:?}", reason);
                     connections.remove(&session_id);
-                    println!("🔌 连接关闭: {} (原因: {:?})", session_id, reason);
-                    println!("   剩余连接数: {}", connections.len());
                 }
                 ServerEvent::MessageReceived { session_id, packet } => {
-                    let message_text = String::from_utf8_lossy(&packet.payload);
-                    println!("📩 收到消息: 会话: {}, ID: {}, 内容: {}", session_id, packet.header.message_id, message_text);
+                    event_count += 1;
+                    let message = String::from_utf8_lossy(&packet.payload);
+                    println!("📥 事件 #{}: 收到消息", event_count);
+                    println!("   会话: {}", session_id);
+                    println!("   包ID: {}", packet.header.message_id);
+                    println!("   包类型: {:?}", packet.header.packet_type);
+                    println!("   大小: {} bytes", packet.payload.len());
+                    println!("   内容: \"{}\"", message);
+                    
+                    // 发送回显
+                    let echo_message = format!("Echo: {}", message);
+                    let echo_packet = Packet::one_way(packet.header.message_id + 1000, echo_message.as_bytes());
+                    match transport.send_to_session(session_id, echo_packet).await {
+                        Ok(()) => {
+                            println!("✅ 回显发送成功 -> 会话 {}", session_id);
+                        }
+                        Err(e) => {
+                            println!("❌ 回显发送失败: {:?}", e);
+                        }
+                    }
                 }
                 ServerEvent::MessageSent { session_id, packet_id } => {
                     println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, packet_id);
@@ -111,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     
     // 🎯 模式A的关键：现在才启动服务器，但事件流已经在监听了
-    let server_result = transport.serve().await;
+    let server_result = transport_for_serve.serve().await;
     
     println!("🏁 服务器已停止");
     

@@ -313,8 +313,19 @@ impl ClientEvent {
                 Some(ClientEvent::Connected { info }),
             TransportEvent::ConnectionClosed { reason } =>
                 Some(ClientEvent::Disconnected { reason }),
-            TransportEvent::MessageReceived(packet) =>
-                Some(ClientEvent::MessageReceived { packet }),
+            TransportEvent::MessageReceived(packet) => {
+                // 🔧 修复：Request包不应该通过这里处理，应该等待RequestReceived事件
+                match packet.header.packet_type {
+                    crate::packet::PacketType::Request => {
+                        // Request包跳过，等待Transport的on_event处理后发送RequestReceived事件
+                        None
+                    }
+                    _ => {
+                        // OneWay和Response包正常处理
+                        Some(ClientEvent::MessageReceived { packet })
+                    }
+                }
+            }
             TransportEvent::MessageSent { packet_id } =>
                 Some(ClientEvent::MessageSent { packet_id }),
             TransportEvent::TransportError { error } =>

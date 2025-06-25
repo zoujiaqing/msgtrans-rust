@@ -41,6 +41,8 @@ pub struct TransportServer {
     protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynServerConfig>>,
     /// 连接状态管理器
     state_manager: ConnectionStateManager,
+    /// 🎯 新增：请求跟踪器 - 支持服务端向客户端发送请求
+    request_tracker: Arc<crate::transport::transport::RequestTracker>,
 }
 
 impl TransportServer {
@@ -57,6 +59,7 @@ impl TransportServer {
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             protocol_configs: std::collections::HashMap::new(),
             state_manager: ConnectionStateManager::new(),
+            request_tracker: Arc::new(crate::transport::transport::RequestTracker::new_with_start_id(10000)),
         })
     }
 
@@ -76,6 +79,7 @@ impl TransportServer {
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             protocol_configs,
             state_manager: ConnectionStateManager::new(),
+            request_tracker: Arc::new(crate::transport::transport::RequestTracker::new_with_start_id(10000)),
         })
     }
 
@@ -126,6 +130,67 @@ impl TransportServer {
                         tracing::error!("❌ 会话 {} 发送失败 (非连接错误): {:?}", session_id, e);
                         return Err(e);
                     }
+                }
+            }
+        } else {
+            tracing::warn!("⚠️ 会话 {} 不存在于连接映射中", session_id);
+            Err(TransportError::connection_error("Session not found", false))
+        }
+    }
+
+    /// 🎯 新增：向指定会话发送请求并等待响应
+    pub async fn request_to_session(&self, session_id: SessionId, mut packet: Packet) -> Result<Packet, TransportError> {
+        tracing::debug!("🔄 TransportServer 向会话 {} 发送请求 (ID: {})", session_id, packet.header.message_id);
+        
+        if let Some(connection) = self.connections.get(&session_id) {
+            let mut conn = connection.lock().await;
+            
+            // 检查连接状态
+            if !conn.is_connected() {
+                tracing::warn!("⚠️ 会话 {} 连接已断开，无法发送请求", session_id);
+                drop(conn);
+                let _ = self.remove_session(session_id).await;
+                return Err(TransportError::connection_error("Connection closed", false));
+            }
+            
+            // 🎯 使用 RequestTracker 注册请求
+            let (request_id, response_rx) = self.request_tracker.register();
+            
+            // 设置包类型为 Request，并使用生成的请求ID
+            packet.header.packet_type = crate::packet::PacketType::Request;
+            packet.header.message_id = request_id;
+            
+            tracing::debug!("🔍 会话 {} 连接状态正常，发送请求包 (请求ID: {})", session_id, request_id);
+            
+            // 发送请求包
+            match conn.send(packet).await {
+                Ok(()) => {
+                    tracing::debug!("✅ 会话 {} 请求发送成功，等待响应 (请求ID: {})", session_id, request_id);
+                    
+                    // 释放连接锁，避免阻塞其他操作
+                    drop(conn);
+                    
+                    // 等待响应（带超时）
+                    let timeout = std::time::Duration::from_secs(10);
+                    match tokio::time::timeout(timeout, response_rx).await {
+                        Ok(Ok(response)) => {
+                            tracing::debug!("✅ 会话 {} 收到响应 (请求ID: {}, 响应ID: {})", 
+                                session_id, request_id, response.header.message_id);
+                            Ok(response)
+                        }
+                        Ok(Err(_)) => {
+                            tracing::error!("❌ 会话 {} 响应通道已关闭 (请求ID: {})", session_id, request_id);
+                            Err(TransportError::connection_error("Response channel closed", false))
+                        }
+                        Err(_) => {
+                            tracing::error!("⏰ 会话 {} 请求超时 (请求ID: {})", session_id, request_id);
+                            Err(TransportError::timeout_error("Request", timeout))
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("❌ 会话 {} 请求发送失败: {:?}", session_id, e);
+                    Err(e)
                 }
             }
         } else {
@@ -507,6 +572,20 @@ impl TransportServer {
                         };
                         let _ = self.event_sender.send(event);
                     }
+                    crate::packet::PacketType::Response => {
+                        // 🎯 新增：处理响应包 - 完成服务端发起的请求
+                        let message_id = packet.header.message_id;
+                        tracing::debug!("📥 TransportServer 收到会话 {} 的响应包 (ID: {})", session_id, message_id);
+                        
+                        if self.request_tracker.complete(message_id, packet.clone()) {
+                            tracing::debug!("✅ 成功完成服务端请求 (ID: {})", message_id);
+                        } else {
+                            tracing::warn!("⚠️ 收到未知响应包 (ID: {})，可能是超时或重复响应", message_id);
+                            // 作为普通消息处理
+                            let event = crate::event::ServerEvent::MessageReceived { session_id, packet };
+                            let _ = self.event_sender.send(event);
+                        }
+                    }
                     _ => {
                         // 其他类型的数据包作为普通消息处理
                         let event = crate::event::ServerEvent::MessageReceived { session_id, packet };
@@ -562,6 +641,7 @@ impl Clone for TransportServer {
             is_running: self.is_running.clone(),
             protocol_configs: cloned_configs,
             state_manager: self.state_manager.clone(),
+            request_tracker: self.request_tracker.clone(),
         }
     }
 }
