@@ -2,112 +2,95 @@
 /// 
 /// 展示msgtrans统一数据包系统的基本序列化和反序列化功能
 
-use msgtrans::Packet;
+use msgtrans::packet::{Packet, PacketType};
 
 fn main() {
-    println!("🚀 msgtrans 数据包封装解包验证");
-    println!("==============================");
-
-    // 1. 创建不同类型的数据包
-    let test_message = "Hello, this is a test message! 这是一条测试消息！";
-    let extend_data = "Extension data 扩展数据";
+    println!("🚀 数据包序列化与反序列化测试");
     
+    // 测试消息
+    let test_message = "Hello, Packet World! 你好，数据包世界！";
+    let extend_data = "Extended payload for testing serialization and deserialization";
+    
+    // 创建不同类型的数据包
     let packets = vec![
-        ("心跳包", Packet::heartbeat()),
-        ("数据包", Packet::data(101, test_message)),
-        ("控制包", Packet::control(102, extend_data)),
-        ("回显包", Packet::echo(103, "Echo test")),
-        ("错误包", Packet::error(104, "Test error message")),
-        ("二进制数据", Packet::data(105, &[0x00u8, 0x01, 0x02, 0x03, 0xFF, 0xFE][..])),
+        ("单向消息", Packet::one_way(101, test_message)),
+        ("请求消息", Packet::request(102, extend_data)),
+        ("响应消息", Packet::response(103, "Response test")),
+        ("二进制数据", Packet::one_way(105, &[0x00u8, 0x01, 0x02, 0x03, 0xFF, 0xFE][..])),
     ];
-
-    println!("\n📦 创建的数据包:");
-    for (name, packet) in &packets {
+    
+    // 测试每个数据包
+    for (name, packet) in packets {
         println!("  {} - 类型: {:?}, ID: {}, 负载: {} bytes", 
             name, 
-            packet.packet_type, 
-            packet.message_id, 
+            packet.header.packet_type, 
+            packet.header.message_id, 
             packet.payload.len()
         );
-    }
-
-    println!("\n🔄 序列化和反序列化测试:");
-    let mut success_count = 0;
-    let mut total_count = 0;
-
-    for (name, original_packet) in &packets {
-        total_count += 1;
         
-        // 序列化
-        let serialized = original_packet.to_bytes();
-        println!("  📤 {} 序列化: {} bytes", name, serialized.len());
+        // 测试序列化
+        let serialized = packet.to_bytes();
+        println!("    序列化: {} bytes", serialized.len());
         
-        // 反序列化
+        // 测试反序列化
         match Packet::from_bytes(&serialized) {
-            Ok(deserialized_packet) => {
-                // 验证数据完整性
-                if *original_packet == deserialized_packet {
-                    println!("  ✅ {} 验证通过", name);
-                    success_count += 1;
+            Ok(recovered) => {
+                println!("    反序列化成功: {} bytes", recovered.payload.len());
+                
+                // 验证数据一致性
+                if packet == recovered {
+                    println!("    ✅ 数据一致性检查通过");
                 } else {
-                    println!("  ❌ {} 数据不匹配!", name);
-                    println!("     原始: {:?}", original_packet);
-                    println!("     解包: {:?}", deserialized_packet);
+                    println!("    ❌ 数据一致性检查失败");
                 }
             }
             Err(e) => {
-                println!("  ❌ {} 反序列化失败: {}", name, e);
+                println!("    ❌ 反序列化失败: {:?}", e);
             }
         }
+        println!();
     }
-
-    println!("\n📊 测试结果:");
-    println!("  成功: {}/{}", success_count, total_count);
-    println!("  成功率: {:.1}%", (success_count as f64 / total_count as f64) * 100.0);
-
-    // 3. 详细验证一个数据包
-    println!("\n🔍 详细验证示例:");
-    let test_packet = Packet::data(999, test_message);
+    
+    // 详细的序列化测试
+    println!("📋 详细序列化测试");
+    
+    let test_packet = Packet::one_way(999, test_message);
     
     println!("  原始数据包:");
-    println!("    类型: {:?}", test_packet.packet_type);
-    println!("    消息ID: {}", test_packet.message_id);
+    println!("    类型: {:?}", test_packet.header.packet_type);
+    println!("    消息ID: {}", test_packet.header.message_id);
     println!("    负载长度: {} bytes", test_packet.payload.len());
     if let Some(text) = test_packet.payload_as_string() {
-        println!("    负载内容: {}", text);
+        println!("    负载内容: \"{}\"", text);
     }
-
-    let serialized_bytes = test_packet.to_bytes();
-    println!("  序列化后: {} bytes", serialized_bytes.len());
-    println!("  字节内容: {:02X?}", &serialized_bytes[..std::cmp::min(20, serialized_bytes.len())]);
-    if serialized_bytes.len() > 20 {
-        println!("             ... (显示前20字节)");
-    }
-
-    match Packet::from_bytes(&serialized_bytes) {
+    
+    // 序列化
+    let bytes = test_packet.to_bytes();
+    println!("  序列化后: {} bytes", bytes.len());
+    println!("    前16字节（头部）: {:02X?}", &bytes[0..16.min(bytes.len())]);
+    
+    // 反序列化
+    match Packet::from_bytes(&bytes) {
         Ok(recovered_packet) => {
             println!("  反序列化:");
-            println!("    类型: {:?}", recovered_packet.packet_type);
-            println!("    消息ID: {}", recovered_packet.message_id);
+            println!("    类型: {:?}", recovered_packet.header.packet_type);
+            println!("    消息ID: {}", recovered_packet.header.message_id);
             println!("    负载长度: {} bytes", recovered_packet.payload.len());
             if let Some(text) = recovered_packet.payload_as_string() {
-                println!("    负载内容: {}", text);
+                println!("    负载内容: \"{}\"", text);
             }
             
+            // 完整性检查
             if test_packet == recovered_packet {
-                println!("  ✅ 详细验证完全匹配!");
+                println!("  ✅ 完整性检查通过");
             } else {
-                println!("  ❌ 详细验证失败!");
+                println!("  ❌ 完整性检查失败");
             }
         }
         Err(e) => {
-            println!("  ❌ 详细验证反序列化失败: {}", e);
+            println!("  ❌ 反序列化失败: {:?}", e);
         }
     }
-
-    if success_count == total_count {
-        println!("\n🎉 所有测试通过! 数据包系统工作正常。");
-    } else {
-        println!("\n⚠️  有 {} 个测试失败，请检查数据包系统。", total_count - success_count);
-    }
+    
+    println!("🎯 数据包测试完成");
 } 

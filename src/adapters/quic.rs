@@ -376,7 +376,7 @@ impl<C> QuicAdapter<C> {
                                         let packet = if buf.len() < 16 {
                                             // 数据太短，不可能是有效的Packet，直接创建基本数据包
                                             tracing::debug!("📥 QUIC数据太短，创建基本数据包: {} bytes", buf.len());
-                                            Packet::data(0, buf)
+                                            Packet::one_way(0, buf)
                                         } else {
                                             // 尝试解析为完整的Packet
                                             match Packet::from_bytes(&buf) {
@@ -387,16 +387,13 @@ impl<C> QuicAdapter<C> {
                                                 Err(e) => {
                                                     tracing::debug!("📥 QUIC数据包解析失败: {:?}, 创建基本数据包", e);
                                                     // ✅ 优化：避免切片拷贝，直接使用buf
-                                                    Packet::data(0, buf)
+                                                    Packet::one_way(0, buf)
                                                 }
                                             }
                                         };
                                         
                                         // 发送接收事件
-                                        let event = TransportEvent::MessageReceived {
-                                            session_id: current_session_id,
-                                            packet,
-                                        };
+                                        let event = TransportEvent::MessageReceived(packet);
                                         
                                         if let Err(e) = event_sender.send(event) {
                                             tracing::warn!("📥 发送接收事件失败: {:?}", e);
@@ -429,10 +426,7 @@ impl<C> QuicAdapter<C> {
                                         
                                         // 通知上层连接关闭（网络异常或对端关闭）
                                         if should_notify {
-                                            let close_event = TransportEvent::ConnectionClosed {
-                                                session_id: current_session_id,
-                                                reason,
-                                            };
+                                            let close_event = TransportEvent::ConnectionClosed { reason };
                                             
                                             if let Err(e) = event_sender.send(close_event) {
                                                 tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
@@ -478,10 +472,7 @@ impl<C> QuicAdapter<C> {
                                 
                                 // 通知上层连接关闭（网络异常或对端关闭）
                                 if should_notify {
-                                    let close_event = TransportEvent::ConnectionClosed {
-                                        session_id: current_session_id,
-                                        reason,
-                                    };
+                                    let close_event = TransportEvent::ConnectionClosed { reason };
                                     
                                     if let Err(e) = event_sender.send(close_event) {
                                         tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
@@ -505,7 +496,7 @@ impl<C> QuicAdapter<C> {
                                     // ✅ 优化：准备发送数据
                                     let data = packet.to_bytes();
                                     let packet_size = packet.payload.len();
-                                    let packet_id = packet.message_id;
+                                    let packet_id = packet.header.message_id;
                                     
                                     match send_stream.write_all(&data).await {
                                         Ok(_) => {
@@ -516,10 +507,7 @@ impl<C> QuicAdapter<C> {
                                                         packet_size, packet_id, current_session_id);
                                                     
                                                     // 发送发送事件
-                                                    let event = TransportEvent::MessageSent {
-                                                        session_id: current_session_id,
-                                                        packet_id,
-                                                    };
+                                                    let event = TransportEvent::MessageSent { packet_id };
                                                     
                                                     if let Err(e) = event_sender.send(event) {
                                                         tracing::warn!("📤 发送发送事件失败: {:?}", e);

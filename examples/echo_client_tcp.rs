@@ -7,7 +7,7 @@ use std::time::Duration;
 use msgtrans::{
     transport::{client::TransportClientBuilder},
     protocol::TcpClientConfig,
-    packet::{Packet, PacketType},
+    packet::Packet,
     event::ClientEvent,
 };
 
@@ -53,35 +53,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ 连接建立成功");
 
     // 获取事件流来接收回显消息
-    let mut events = transport.events().await?;
-    
+    let mut events = transport.subscribe_events();
     // 启动接收任务来处理回显
     let receiver_task = tokio::spawn(async move {
         println!("🎧 开始监听回显事件...");
         let mut received_count = 0u64;
-        
         loop {
-            match events.next().await {
+            match events.recv().await {
                 Ok(event) => {
                     match event {
                         ClientEvent::MessageReceived { packet } => {
-                            let message_text = String::from_utf8_lossy(&packet.payload);
                             received_count += 1;
-                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.message_id);
-                            println!("   内容: \"{}\"", message_text);
+                            let message = String::from_utf8_lossy(&packet.payload);
+                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.header.message_id);
+                            println!("   内容: \"{}\"", message);
+                            if message.contains("Message #4") {
+                                println!("🎯 收到最后一条回显，准备结束");
+                                break;
+                            }
+                        }
+                        ClientEvent::RequestReceived { ctx } => {
+                            let request_text = String::from_utf8_lossy(&ctx.request.payload);
+                            println!("🔄 客户端收到服务端请求: ID: {}", ctx.request.header.message_id);
+                            println!("   请求内容: \"{}\"", request_text);
                             
-                            // 响应包将由内部 RPC 机制自动处理
-                            if packet.packet_type() == PacketType::Response {
-                                println!("   ✅ RPC 响应包");
+                            // 🎯 智能响应服务端的不同请求
+                            let response_text = if request_text.contains("status") {
+                                "Client status: All systems operational!"
                             } else {
-                                println!("   ℹ️ 普通消息");
-                            }
+                                "Client received your request successfully"
+                            };
                             
-                            // 检查是否是最后一条普通消息
-                            if packet.message_id == 1002 {
-                                println!("🎯 收到最后一条普通消息回显");
-                                // 继续运行，不结束，因为还有 RPC 测试
-                            }
+                            ctx.respond_with(|req| {
+                                let mut resp = req.clone();
+                                resp.payload = response_text.as_bytes().to_vec();
+                                resp
+                            });
+                            
+                            println!("✅ 已响应服务端请求: \"{}\"", response_text);
                         }
                         ClientEvent::Disconnected { reason } => {
                             println!("🔌 连接已关闭: {:?}", reason);
@@ -105,83 +114,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
         println!("📡 事件接收器已停止 (共收到 {} 条回显)", received_count);
     });
 
-    // 🎯 测试 1：普通消息发送
+    // 🎯 准备测试消息
     let test_messages = vec![
         "Hello, TransportClient!",
         "测试标准客户端协议", 
+        "Message with numbers: 12345",
+        "Message #4 - Final test",
     ];
 
-    println!("📤 开始发送普通测试消息...");
+    println!("📤 开始发送测试消息...");
     println!();
 
     for (i, message) in test_messages.iter().enumerate() {
-        println!("📤 发送普通消息 #{}: \"{}\"", i + 1, message);
-        
-        // 🔧 使用标准的客户端发送方法
-        let packet = Packet::data((i as u32) + 1, message.as_bytes());
-        
-        match transport.send(packet).await {
-            Ok(_) => {
-                println!("✅ 普通消息 #{} 发送成功", i + 1);
+        println!("📤 发送消息 #{}: \"{}\"", i + 1, message);
+        let packet = Packet::request((i as u32) + 1, message.as_bytes());
+        match transport.request(packet).await {
+            Ok(response) => {
+                let resp_msg = String::from_utf8_lossy(&response.payload);
+                println!("✅ 收到响应: ID {}, 内容: {}", response.header.message_id, resp_msg);
             }
             Err(e) => {
-                println!("❌ 普通消息 #{} 发送失败: {:?}", i + 1, e);
+                println!("❌ 请求失败: {:?}", e);
                 break;
             }
         }
-
-        // 等待一下再发送下一条
-        println!("⏳ 等待1秒后发送下一条...");
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-
-    println!();
-    println!("🚀 开始测试 RPC 请求响应功能...");
-    println!();
-
-    // 🎯 测试 2：RPC 请求发送
-    let rpc_requests = vec![
-        ("ping", "Hello from client!"),
-        ("time", ""),
-        ("reverse", " hello world!"),
-        ("echo", "This is an RPC echo test"),
-    ];
-
-    for (i, (command, param)) in rpc_requests.iter().enumerate() {
-        let request_content = if param.is_empty() {
-            command.to_string()
-        } else {
-            format!("{}{}", command, param)
-        };
-        
-        println!("🎯 发送 RPC 请求 #{}: \"{}\"", i + 1, request_content);
-        
-        // 创建请求包
-        let mut request_packet = Packet::new(PacketType::Request, (i as u32) + 100);
-        request_packet.set_payload(request_content.as_bytes());
-        
-        match transport.request(request_packet).await {
-            Ok(response) => {
-                let response_text = String::from_utf8_lossy(&response.payload);
-                println!("✅ RPC 响应 #{} 接收成功:", i + 1);
-                println!("   请求: \"{}\"", request_content);
-                println!("   响应: \"{}\"", response_text);
-                println!("   响应ID: {}", response.message_id);
-                println!("   响应类型: {:?}", response.packet_type());
-            }
-            Err(e) => {
-                println!("❌ RPC 请求 #{} 失败: {:?}", i + 1, e);
-            }
-        }
-
-        // 等待一下再发送下一个请求
-        if i < rpc_requests.len() - 1 {
-            println!("⏳ 等待1秒后发送下一个 RPC 请求...");
-            tokio::time::sleep(Duration::from_secs(1)).await;
+        if i < test_messages.len() - 1 {
+            println!("⏳ 等待2秒后发送下一条...");
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
     }
 

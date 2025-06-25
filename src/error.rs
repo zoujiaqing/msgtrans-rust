@@ -211,7 +211,6 @@ impl From<String> for TransportError {
 impl From<TransportError> for TransportEvent {
     fn from(error: TransportError) -> Self {
         TransportEvent::TransportError {
-            session_id: None,
             error,
         }
     }

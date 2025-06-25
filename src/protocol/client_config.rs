@@ -5,8 +5,14 @@
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use crate::protocol::{ConfigError, ProtocolConfig};
-use crate::protocol::adapter::{DynProtocolConfig};
+use crate::protocol::adapter::{DynProtocolConfig, ClientConfig};
 use crate::Connection;
+use std::sync::Arc;
+use crate::{
+    transport::transport::Transport,
+    SessionId,
+    TransportError,
+};
 
 /// TCP客户端配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -227,7 +233,7 @@ impl TcpClientConfig {
     
     /// 构建配置（验证并返回）
     pub fn build(self) -> Result<Self, ConfigError> {
-        self.validate()?;
+        ProtocolConfig::validate(&self)?;
         Ok(self)
     }
     
@@ -452,7 +458,7 @@ impl WebSocketClientConfig {
     
     /// 构建配置（验证并返回）
     pub fn build(self) -> Result<Self, ConfigError> {
-        self.validate()?;
+        ProtocolConfig::validate(&self)?;
         Ok(self)
     }
     
@@ -673,7 +679,7 @@ impl QuicClientConfig {
     
     /// 构建配置（验证并返回）
     pub fn build(self) -> Result<Self, ConfigError> {
-        self.validate()?;
+        ProtocolConfig::validate(&self)?;
         Ok(self)
     }
     
@@ -791,105 +797,6 @@ impl DynProtocolConfig for TcpClientConfig {
     }
 }
 
-impl crate::transport::client::ConnectableConfig for TcpClientConfig {
-    async fn connect(&self, transport: &mut crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
-        tracing::info!("🔌 TCP 客户端开始连接到 {}:{}", self.target_address.ip(), self.target_address.port());
-        
-        // 使用 ClientConfig::build_connection() 构建连接
-        let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
-        
-        // 获取会话ID
-        let session_id = connection.session_id();
-        
-        // 🔧 将连接设置到 Transport 中
-        transport.set_connection(connection, session_id);
-        
-        tracing::info!("✅ TCP 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
-        Ok(session_id)
-    }
-    
-    fn validate(&self) -> Result<(), crate::TransportError> {
-        if self.target_address.port() == 0 {
-            return Err(crate::TransportError::config_error("target_address", "Target address port cannot be zero"));
-        }
-        Ok(())
-    }
-    
-    fn protocol_name(&self) -> &'static str {
-        "tcp"
-    }
-    
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-impl crate::transport::client::ConnectableConfig for WebSocketClientConfig {
-    async fn connect(&self, transport: &mut crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
-        tracing::info!("🔌 WebSocket 客户端开始连接到 {}", self.target_url);
-        
-        // 使用 ClientConfig::build_connection() 构建连接
-        let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
-        
-        // 获取会话ID
-        let session_id = connection.session_id();
-        
-        // 🔧 将连接设置到 Transport 中
-        transport.set_connection(connection, session_id);
-        
-        tracing::info!("✅ WebSocket 客户端连接成功: {} -> 会话ID: {}", self.target_url, session_id);
-        Ok(session_id)
-    }
-    
-    fn validate(&self) -> Result<(), crate::TransportError> {
-        if self.target_url.is_empty() {
-            return Err(crate::TransportError::config_error("target_url", "Target URL cannot be empty"));
-        }
-        Ok(())
-    }
-    
-    fn protocol_name(&self) -> &'static str {
-        "tcp"
-    }
-    
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-impl crate::transport::client::ConnectableConfig for QuicClientConfig {
-    async fn connect(&self, transport: &mut crate::transport::transport::Transport) -> Result<crate::SessionId, crate::TransportError> {
-        tracing::info!("🔌 QUIC 客户端开始连接到 {}:{}", self.target_address.ip(), self.target_address.port());
-        
-        // 使用 ClientConfig::build_connection() 构建连接
-        let connection = crate::protocol::adapter::ClientConfig::build_connection(self).await?;
-        
-        // 获取会话ID
-        let session_id = connection.session_id();
-        
-        // 🔧 将连接设置到 Transport 中
-        transport.set_connection(connection, session_id);
-        
-        tracing::info!("✅ QUIC 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
-        Ok(session_id)
-    }
-    
-    fn validate(&self) -> Result<(), crate::TransportError> {
-        if self.target_address.port() == 0 {
-            return Err(crate::TransportError::config_error("target_address", "Target address cannot be unspecified"));
-        }
-        Ok(())
-    }
-    
-    fn protocol_name(&self) -> &'static str {
-        "quic"
-    }
-    
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
 impl DynProtocolConfig for WebSocketClientConfig {
     fn protocol_name(&self) -> &'static str {
         "websocket"
@@ -905,5 +812,55 @@ impl DynProtocolConfig for WebSocketClientConfig {
     
     fn clone_dyn(&self) -> Box<dyn DynProtocolConfig> {
         Box::new(self.clone())
+    }
+}
+
+/// 🔧 可连接配置的 trait
+pub trait ConnectableConfig {
+    async fn connect(self, transport: Arc<Transport>) -> Result<SessionId, TransportError>;
+}
+
+impl ConnectableConfig for TcpClientConfig {
+    async fn connect(self, transport: Arc<Transport>) -> Result<SessionId, TransportError> {
+        tracing::info!("🔌 TCP 客户端开始连接到 {}", self.target_address);
+        
+        let session_id = SessionId(1); // 客户端使用固定 session_id
+        let connection = crate::protocol::adapter::ClientConfig::build_connection(&self).await?;
+        
+        // 将连接设置到 Transport 中
+        transport.set_connection(connection, session_id).await;
+        tracing::info!("✅ TCP 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
+        
+        Ok(session_id)
+    }
+}
+
+impl ConnectableConfig for WebSocketClientConfig {
+    async fn connect(self, transport: Arc<Transport>) -> Result<SessionId, TransportError> {
+        tracing::info!("🔌 WebSocket 客户端开始连接到 {}", self.target_url);
+        
+        let session_id = SessionId(1); // 客户端使用固定 session_id
+        let connection = crate::protocol::adapter::ClientConfig::build_connection(&self).await?;
+        
+        // 将连接设置到 Transport 中
+        transport.set_connection(connection, session_id).await;
+        tracing::info!("✅ WebSocket 客户端连接成功: {} -> 会话ID: {}", self.target_url, session_id);
+        
+        Ok(session_id)
+    }
+}
+
+impl ConnectableConfig for QuicClientConfig {
+    async fn connect(self, transport: Arc<Transport>) -> Result<SessionId, TransportError> {
+        tracing::info!("🔌 QUIC 客户端开始连接到 {}", self.target_address);
+        
+        let session_id = SessionId(1); // 客户端使用固定 session_id
+        let connection = crate::protocol::adapter::ClientConfig::build_connection(&self).await?;
+        
+        // 将连接设置到 Transport 中
+        transport.set_connection(connection, session_id).await;
+        tracing::info!("✅ QUIC 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
+        
+        Ok(session_id)
     }
 } 

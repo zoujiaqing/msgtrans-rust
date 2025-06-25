@@ -189,10 +189,10 @@ impl PacketStream {
     }
     
     /// 获取下一个数据包
-    pub async fn next_packet(&mut self) -> Option<(SessionId, Packet)> {
+    pub async fn next_packet(&mut self) -> Option<Packet> {
         while let Some(event) = self.event_stream.next().await {
-            if let TransportEvent::MessageReceived { session_id, packet } = event {
-                return Some((session_id, packet));
+            if let crate::event::TransportEvent::MessageReceived(packet) = event {
+                return Some(packet);
             }
         }
         None
@@ -200,16 +200,15 @@ impl PacketStream {
 }
 
 impl Stream for PacketStream {
-    type Item = (SessionId, Packet);
+    type Item = Packet;
     
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             match Pin::new(&mut self.event_stream).poll_next(cx) {
-                Poll::Ready(Some(TransportEvent::MessageReceived { session_id, packet })) => {
-                    return Poll::Ready(Some((session_id, packet)));
+                Poll::Ready(Some(crate::event::TransportEvent::MessageReceived(packet))) => {
+                    return Poll::Ready(Some(packet));
                 }
                 Poll::Ready(Some(_)) => {
-                    // 其他事件，继续循环
                     continue;
                 }
                 Poll::Ready(None) => {
@@ -243,11 +242,11 @@ impl ConnectionStream {
     pub async fn next_connection(&mut self) -> Option<ConnectionEvent> {
         while let Some(event) = self.event_stream.next().await {
             match event {
-                TransportEvent::ConnectionEstablished { session_id, info } => {
-                    return Some(ConnectionEvent::Established { session_id, info });
+                TransportEvent::ConnectionEstablished { info } => {
+                    return Some(ConnectionEvent::Established { info });
                 }
-                TransportEvent::ConnectionClosed { session_id, reason } => {
-                    return Some(ConnectionEvent::Closed { session_id, reason });
+                TransportEvent::ConnectionClosed { reason } => {
+                    return Some(ConnectionEvent::Closed { reason });
                 }
                 _ => continue,
             }
@@ -262,11 +261,11 @@ impl Stream for ConnectionStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
             match Pin::new(&mut self.event_stream).poll_next(cx) {
-                Poll::Ready(Some(TransportEvent::ConnectionEstablished { session_id, info })) => {
-                    return Poll::Ready(Some(ConnectionEvent::Established { session_id, info }));
+                Poll::Ready(Some(TransportEvent::ConnectionEstablished { info })) => {
+                    return Poll::Ready(Some(ConnectionEvent::Established { info }));
                 }
-                Poll::Ready(Some(TransportEvent::ConnectionClosed { session_id, reason })) => {
-                    return Poll::Ready(Some(ConnectionEvent::Closed { session_id, reason }));
+                Poll::Ready(Some(TransportEvent::ConnectionClosed { reason })) => {
+                    return Poll::Ready(Some(ConnectionEvent::Closed { reason }));
                 }
                 Poll::Ready(Some(_)) => {
                     // 其他事件，继续循环
@@ -287,15 +286,9 @@ impl Stream for ConnectionStream {
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
     /// 连接建立
-    Established { 
-        session_id: SessionId, 
-        info: crate::command::ConnectionInfo 
-    },
+    Established { info: crate::command::ConnectionInfo },
     /// 连接关闭
-    Closed { 
-        session_id: SessionId, 
-        reason: crate::CloseReason 
-    },
+    Closed { reason: crate::CloseReason },
 }
 
 /// 流工厂
@@ -355,14 +348,10 @@ impl StreamCombinator {
     }
     
     /// 将事件流转换为数据包流
-    pub fn events_to_packets(
-        event_stream: EventStream
-    ) -> impl Stream<Item = (SessionId, Packet)> {
+    pub fn events_to_packets(event_stream: EventStream) -> impl Stream<Item = Packet> {
         event_stream.filter_map(|event| async move {
             match event {
-                TransportEvent::MessageReceived { session_id, packet } => {
-                    Some((session_id, packet))
-                }
+                crate::event::TransportEvent::MessageReceived(packet) => Some(packet),
                 _ => None,
             }
         })
@@ -374,11 +363,11 @@ impl StreamCombinator {
     ) -> impl Stream<Item = ConnectionEvent> {
         event_stream.filter_map(|event| async move {
             match event {
-                TransportEvent::ConnectionEstablished { session_id, info } => {
-                    Some(ConnectionEvent::Established { session_id, info })
+                TransportEvent::ConnectionEstablished { info } => {
+                    Some(ConnectionEvent::Established { info })
                 }
-                TransportEvent::ConnectionClosed { session_id, reason } => {
-                    Some(ConnectionEvent::Closed { session_id, reason })
+                TransportEvent::ConnectionClosed { reason } => {
+                    Some(ConnectionEvent::Closed { reason })
                 }
                 _ => None,
             }

@@ -4,13 +4,16 @@
 
 use std::sync::Arc;
 use crate::{
-    SessionId, TransportError, Packet, EventStream, TransportEvent,
+    SessionId, TransportError, Packet, EventStream,
     transport::{
         config::TransportConfig,
         lockfree_enhanced::LockFreeHashMap,
         connection_state::ConnectionStateManager,
     },
-    command::TransportStats,
+    error::CloseReason,
+    command::{ConnectionInfo, TransportStats},
+    Connection, Server,
+    event::ServerEvent,
     protocol::adapter::DynServerConfig,
 };
 use tokio::sync::broadcast;
@@ -31,13 +34,15 @@ pub struct TransportServer {
     /// 服务端统计信息 (使用 lockfree)
     stats: Arc<LockFreeHashMap<SessionId, TransportStats>>,
     /// 事件广播器
-    event_sender: broadcast::Sender<TransportEvent>,
+    event_sender: broadcast::Sender<ServerEvent>,
     /// 是否正在运行
     is_running: Arc<std::sync::atomic::AtomicBool>,
     /// 🔧 协议配置 - 改为服务端专用配置
     protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynServerConfig>>,
     /// 连接状态管理器
     state_manager: ConnectionStateManager,
+    /// 🎯 新增：请求跟踪器 - 支持服务端向客户端发送请求
+    request_tracker: Arc<crate::transport::transport::RequestTracker>,
 }
 
 impl TransportServer {
@@ -54,6 +59,7 @@ impl TransportServer {
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             protocol_configs: std::collections::HashMap::new(),
             state_manager: ConnectionStateManager::new(),
+            request_tracker: Arc::new(crate::transport::transport::RequestTracker::new_with_start_id(10000)),
         })
     }
 
@@ -73,13 +79,14 @@ impl TransportServer {
             is_running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             protocol_configs,
             state_manager: ConnectionStateManager::new(),
+            request_tracker: Arc::new(crate::transport::transport::RequestTracker::new_with_start_id(10000)),
         })
     }
 
     /// 向指定会话发送数据包
     pub async fn send_to_session(&self, session_id: SessionId, packet: Packet) -> Result<(), TransportError> {
         tracing::debug!("📤 TransportServer 向会话 {} 发送数据包 (ID: {}, 大小: {} bytes)", 
-            session_id, packet.message_id, packet.payload.len());
+            session_id, packet.header.message_id, packet.payload.len());
         
         if let Some(connection) = self.connections.get(&session_id) {
             let mut conn = connection.lock().await;
@@ -131,16 +138,95 @@ impl TransportServer {
         }
     }
 
+    /// 🎯 新增：向指定会话发送请求并等待响应
+    pub async fn request_to_session(&self, session_id: SessionId, mut packet: Packet) -> Result<Packet, TransportError> {
+        tracing::debug!("🔄 TransportServer 向会话 {} 发送请求 (ID: {})", session_id, packet.header.message_id);
+        
+        if let Some(connection) = self.connections.get(&session_id) {
+            let mut conn = connection.lock().await;
+            
+            // 检查连接状态
+            if !conn.is_connected() {
+                tracing::warn!("⚠️ 会话 {} 连接已断开，无法发送请求", session_id);
+                drop(conn);
+                let _ = self.remove_session(session_id).await;
+                return Err(TransportError::connection_error("Connection closed", false));
+            }
+            
+            // 🎯 使用 RequestTracker 注册请求
+            let (request_id, response_rx) = self.request_tracker.register();
+            
+            // 设置包类型为 Request，并使用生成的请求ID
+            packet.header.packet_type = crate::packet::PacketType::Request;
+            packet.header.message_id = request_id;
+            
+            tracing::debug!("🔍 会话 {} 连接状态正常，发送请求包 (请求ID: {})", session_id, request_id);
+            
+            // 发送请求包
+            match conn.send(packet).await {
+                Ok(()) => {
+                    tracing::debug!("✅ 会话 {} 请求发送成功，等待响应 (请求ID: {})", session_id, request_id);
+                    
+                    // 释放连接锁，避免阻塞其他操作
+                    drop(conn);
+                    
+                    // 等待响应（带超时）
+                    let timeout = std::time::Duration::from_secs(10);
+                    match tokio::time::timeout(timeout, response_rx).await {
+                        Ok(Ok(response)) => {
+                            tracing::debug!("✅ 会话 {} 收到响应 (请求ID: {}, 响应ID: {})", 
+                                session_id, request_id, response.header.message_id);
+                            Ok(response)
+                        }
+                        Ok(Err(_)) => {
+                            tracing::error!("❌ 会话 {} 响应通道已关闭 (请求ID: {})", session_id, request_id);
+                            Err(TransportError::connection_error("Response channel closed", false))
+                        }
+                        Err(_) => {
+                            tracing::error!("⏰ 会话 {} 请求超时 (请求ID: {})", session_id, request_id);
+                            Err(TransportError::timeout_error("Request", timeout))
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("❌ 会话 {} 请求发送失败: {:?}", session_id, e);
+                    Err(e)
+                }
+            }
+        } else {
+            tracing::warn!("⚠️ 会话 {} 不存在于连接映射中", session_id);
+            Err(TransportError::connection_error("Session not found", false))
+        }
+    }
+
     /// 添加会话 - 使用连接已有的会话ID
     pub async fn add_session(&self, connection: Box<dyn crate::Connection>) -> SessionId {
         // 🔧 修复：使用连接已有的会话ID，而不是生成新的
         let session_id = connection.session_id();
         let wrapped_connection = Arc::new(tokio::sync::Mutex::new(connection));
-        self.connections.insert(session_id, wrapped_connection);
+        self.connections.insert(session_id, wrapped_connection.clone());
         self.stats.insert(session_id, TransportStats::new());
         
         // 注册连接状态
         self.state_manager.add_connection(session_id);
+        
+        // ⭐️ 启动事件消费循环，将 TransportEvent 转换为 ServerEvent
+        let server_clone = self.clone();
+        let conn_for_events = wrapped_connection.clone();
+        tokio::spawn(async move {
+            let conn = conn_for_events.lock().await;
+            if let Some(mut event_receiver) = conn.event_stream() {
+                drop(conn);
+                tracing::debug!("🎧 TransportServer 启动会话 {} 的事件消费循环", session_id);
+                while let Ok(transport_event) = event_receiver.recv().await {
+                    tracing::trace!("📥 TransportServer 收到会话 {} 的事件: {:?}", session_id, transport_event);
+                    server_clone.handle_transport_event(session_id, transport_event).await;
+                }
+                tracing::debug!("📡 TransportServer 会话 {} 的事件消费循环结束", session_id);
+            } else {
+                tracing::warn!("⚠️ 会话 {} 的连接不支持事件流", session_id);
+            }
+        });
         
         tracing::info!("✅ TransportServer 添加会话: {}", session_id);
         session_id
@@ -166,7 +252,7 @@ impl TransportServer {
         tracing::info!("🔌 开始优雅关闭会话: {}", session_id);
         
         // 2. 发送连接关闭事件（在资源清理前）
-        let close_event = TransportEvent::ConnectionClosed {
+        let close_event = ServerEvent::ConnectionClosed {
             session_id,
             reason: crate::error::CloseReason::Normal,
         };
@@ -196,7 +282,7 @@ impl TransportServer {
         tracing::info!("🔌 强制关闭会话: {}", session_id);
         
         // 2. 发送连接关闭事件
-        let close_event = TransportEvent::ConnectionClosed {
+        let close_event = ServerEvent::ConnectionClosed {
             session_id,
             reason: crate::error::CloseReason::Forced,
         };
@@ -343,9 +429,9 @@ impl TransportServer {
         SessionId(id)
     }
 
-    /// 获取事件流
-    pub fn events(&self) -> EventStream {
-        EventStream::new(self.event_sender.subscribe())
+    /// 业务层订阅 ServerEvent
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::ServerEvent> {
+        self.event_sender.subscribe()
     }
 
     /// 启动服务端
@@ -433,125 +519,16 @@ impl TransportServer {
                         connection.set_session_id(session_id);
                         tracing::info!("🆔 为 {} 连接生成会话ID: {}", protocol_name, session_id);
                         
-                        // 🔧 修复：在移动connection之前获取事件流
-                        let event_receiver = connection.event_stream();
-                        
                         // 添加到会话管理
                         let actual_session_id = server_clone.add_session(connection).await;
                         
                         // 发送连接建立事件
-                        let connect_event = TransportEvent::ConnectionEstablished { 
+                        let connect_event = ServerEvent::ConnectionEstablished { 
                             session_id: actual_session_id,
                             info: connection_info,
                         };
                         let _ = server_clone.event_sender.send(connect_event);
                         tracing::info!("📨 {} 连接事件已发送", protocol_name);
-                        
-                        // 🔧 修复：不再启动错误的消息接收循环
-                        // TCP适配器已经有自己的事件循环来处理消息接收和事件发送
-                        // TransportServer只需要管理连接的生命周期
-                        
-                        // 如果连接支持事件流，订阅其事件并转发
-                        if let Some(event_receiver) = event_receiver {
-                            let event_sender = server_clone.event_sender.clone();
-                            let server_for_cleanup = server_clone.clone();
-                            
-                            tokio::spawn(async move {
-                                tracing::info!("📡 开始监听连接事件: {}", actual_session_id);
-                                
-                                let mut receiver = event_receiver;
-                                while let Ok(event) = receiver.recv().await {
-                                    // 🚀 处理和转发事件：根据包类型决定发送哪种事件
-                                    let processed_event = match event {
-                                        TransportEvent::MessageReceived { session_id, packet } => {
-                                            // 检查包类型，决定发送 MessageReceived 还是 RequestReceived
-                                            match packet.packet_type() {
-                                                crate::packet::PacketType::Request => {
-                                                    // 为请求包创建 RequestContext
-                                                    let request_session_id = session_id;
-                                                    let sender_for_response = event_sender.clone();
-                                                    
-                                                                                                         let server_for_send = server_for_cleanup.clone();
-                                                     let responder = move |response_packet: crate::packet::Packet| {
-                                                         // 🎯 实际发送响应包到网络连接
-                                                         let server_clone = server_for_send.clone();
-                                                         let packet = response_packet.clone();
-                                                         
-                                                         tokio::spawn(async move {
-                                                             match server_clone.send_to_session(request_session_id, packet.clone()).await {
-                                                                 Ok(_) => {
-                                                                     // 发送响应成功事件
-                                                                     let sent_event = TransportEvent::MessageSent {
-                                                                         session_id: request_session_id,
-                                                                         packet_id: packet.message_id,
-                                                                     };
-                                                                     
-                                                                     if let Err(e) = sender_for_response.send(sent_event) {
-                                                                         tracing::error!("📤 发送响应事件失败: {:?} (会话: {})", e, request_session_id);
-                                                                     } else {
-                                                                         tracing::debug!("📤 响应已发送: message_id={} (会话: {})", packet.message_id, request_session_id);
-                                                                     }
-                                                                 }
-                                                                 Err(e) => {
-                                                                     tracing::error!("❌ 发送响应失败: {:?} (会话: {})", e, request_session_id);
-                                                                     // 发送错误事件
-                                                                     let error_event = TransportEvent::TransportError {
-                                                                         session_id: Some(request_session_id),
-                                                                         error: e,
-                                                                     };
-                                                                     let _ = sender_for_response.send(error_event);
-                                                                 }
-                                                             }
-                                                         });
-                                                     };
-                                                    
-                                                                                                         let request_context = crate::event::RequestContext::new(packet, responder);
-                                                     TransportEvent::RequestReceived { 
-                                                         session_id,
-                                                         context: request_context 
-                                                     }
-                                                }
-                                                _ => {
-                                                    // 其他类型的包继续作为 MessageReceived 事件
-                                                    TransportEvent::MessageReceived { session_id, packet }
-                                                }
-                                            }
-                                        }
-                                        other_event => other_event // 其他事件直接转发
-                                    };
-                                    
-                                    // 检查连接关闭事件（在发送之前，因为事件可能不可克隆）
-                                    let is_connection_closed = matches!(processed_event, TransportEvent::ConnectionClosed { .. });
-                                    
-                                    // 转发处理后的事件到服务器的事件流
-                                    if let Err(e) = event_sender.send(processed_event) {
-                                        tracing::warn!("⚠️ 转发事件失败: {:?}", e);
-                                        break;
-                                    }
-                                    
-                                    // 如果是连接关闭事件，清理会话
-                                    if is_connection_closed {
-                                        tracing::info!("🔗 检测到连接关闭事件，清理会话: {}", actual_session_id);
-                                        let _ = server_for_cleanup.remove_session(actual_session_id).await;
-                                        break;
-                                    }
-                                }
-                                
-                                tracing::info!("📡 连接事件监听结束: {}", actual_session_id);
-                            });
-                        } else {
-                            tracing::warn!("⚠️ 连接不支持事件流，这在完全事件驱动架构中不应该发生: {}", actual_session_id);
-                            
-                            // 在完全事件驱动架构中，所有连接都应该支持事件流
-                            // 如果不支持，我们直接关闭连接并清理会话
-                            let _ = server_clone.remove_session(actual_session_id).await;
-                            
-                            let close_event = TransportEvent::ConnectionClosed { 
-                                session_id: actual_session_id,
-                                reason: crate::error::CloseReason::Error("Connection does not support event streams".to_string()),
-                            };
-                            let _ = server_clone.event_sender.send(close_event);
-                        }
                     }
                     Err(e) => {
                         tracing::error!("❌ {} 接受连接失败: {:?}", protocol_name, e);
@@ -569,6 +546,75 @@ impl TransportServer {
     /// 🔧 内部方法：从协议配置中提取监听地址
     fn get_protocol_bind_address(&self, protocol_config: &Box<dyn crate::protocol::adapter::DynServerConfig>) -> std::net::SocketAddr {
         protocol_config.get_bind_address()
+    }
+
+    /// 🎯 处理连接的 TransportEvent，转换为 ServerEvent
+    async fn handle_transport_event(&self, session_id: SessionId, transport_event: crate::event::TransportEvent) {
+        match transport_event {
+            crate::event::TransportEvent::MessageReceived(packet) => {
+                match packet.header.packet_type {
+                    crate::packet::PacketType::Request => {
+                        // 创建 RequestContext 并发送 RequestReceived 事件
+                        let server_clone = self.clone();
+                        let ctx = crate::event::RequestContext::new(
+                            session_id,
+                            packet.clone(),
+                            Box::new(move |response| {
+                                let server = server_clone.clone();
+                                tokio::spawn(async move {
+                                    let _ = server.send_to_session(session_id, response).await;
+                                });
+                            }),
+                        );
+                        let event = crate::event::ServerEvent::RequestReceived { 
+                            session_id, 
+                            ctx: std::sync::Arc::new(ctx) 
+                        };
+                        let _ = self.event_sender.send(event);
+                    }
+                    crate::packet::PacketType::Response => {
+                        // 🎯 新增：处理响应包 - 完成服务端发起的请求
+                        let message_id = packet.header.message_id;
+                        tracing::debug!("📥 TransportServer 收到会话 {} 的响应包 (ID: {})", session_id, message_id);
+                        
+                        if self.request_tracker.complete(message_id, packet.clone()) {
+                            tracing::debug!("✅ 成功完成服务端请求 (ID: {})", message_id);
+                        } else {
+                            tracing::warn!("⚠️ 收到未知响应包 (ID: {})，可能是超时或重复响应", message_id);
+                            // 作为普通消息处理
+                            let event = crate::event::ServerEvent::MessageReceived { session_id, packet };
+                            let _ = self.event_sender.send(event);
+                        }
+                    }
+                    _ => {
+                        // 其他类型的数据包作为普通消息处理
+                        let event = crate::event::ServerEvent::MessageReceived { session_id, packet };
+                        let _ = self.event_sender.send(event);
+                    }
+                }
+            }
+            crate::event::TransportEvent::MessageSent { packet_id } => {
+                let event = crate::event::ServerEvent::MessageSent { session_id, packet_id };
+                let _ = self.event_sender.send(event);
+            }
+            crate::event::TransportEvent::ConnectionClosed { reason } => {
+                let event = crate::event::ServerEvent::ConnectionClosed { session_id, reason };
+                let _ = self.event_sender.send(event);
+                // 清理会话
+                let _ = self.remove_session(session_id).await;
+            }
+            crate::event::TransportEvent::TransportError { error } => {
+                let event = crate::event::ServerEvent::TransportError { 
+                    session_id: Some(session_id), 
+                    error 
+                };
+                let _ = self.event_sender.send(event);
+            }
+            // 其他事件暂时忽略或记录
+            _ => {
+                tracing::trace!("📝 TransportServer 忽略事件: {:?}", transport_event);
+            }
+        }
     }
 
     /// 🎯 停止服务端
@@ -595,6 +641,7 @@ impl Clone for TransportServer {
             is_running: self.is_running.clone(),
             protocol_configs: cloned_configs,
             state_manager: self.state_manager.clone(),
+            request_tracker: self.request_tracker.clone(),
         }
     }
 }

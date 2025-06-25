@@ -8,8 +8,8 @@ use msgtrans::{
     protocol::TcpServerConfig,
     protocol::WebSocketServerConfig,
     protocol::QuicServerConfig,
-    event::TransportEvent,
-    packet::{Packet, PacketType},
+    event::{ServerEvent, RequestContext},
+    packet::Packet,
 };
 use futures::StreamExt;
 
@@ -44,52 +44,81 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ TCP服务器创建完成: 127.0.0.1:8001");
     
     // 🎯 核心：立即创建事件流（此时服务器还未启动）
-    let mut events = transport.events();
+    let mut events = transport.subscribe_events();
     println!("📡 事件流创建完成 - 服务器尚未启动");
     
     // 克隆transport用于在事件处理中发送回显
     let transport_for_echo = transport.clone();
+    // 再克隆一个用于最后启动服务器
+    let transport_for_serve = transport.clone();
     
     // 🎯 模式A：先定义完整的事件处理逻辑
     let event_task = tokio::spawn(async move {
+        let transport = transport_for_echo; // 将克隆的transport移动到闭包中
         println!("🎧 开始监听事件...");
         let mut event_count = 0u64;
-        let mut connections = std::collections::HashSet::new();
+        let mut connections = std::collections::HashMap::new();
         
-        while let Some(event) = events.next().await {
+        while let Ok(event) = events.recv().await {
             event_count += 1;
             println!("📥 事件 #{}: {:?}", event_count, event);
             
             match event {
-                TransportEvent::ConnectionEstablished { session_id, info } => {
-                    connections.insert(session_id);
-                    println!("🔗 新连接建立: {} <- {} (协议: {:?})", 
-                        session_id, info.peer_addr, info.protocol);
-                    println!("   当前连接数: {}", connections.len());
+                ServerEvent::ConnectionEstablished { session_id, info } => {
+                    event_count += 1;
+                    println!("📥 事件 #{}: 新连接建立", event_count);
+                    println!("   会话ID: {}", session_id);
+                    println!("   地址: {} ↔ {}", info.local_addr, info.peer_addr);
+                    
+                    // 发送欢迎消息
+                    let welcome = Packet::one_way(1002, b"Welcome to Echo Server!".to_vec());
+                    match transport.send_to_session(session_id, welcome).await {
+                        Ok(()) => {
+                            println!("✅ 欢迎消息发送成功 -> 会话 {}", session_id);
+                        }
+                        Err(e) => {
+                            println!("❌ 欢迎消息发送失败: {:?}", e);
+                        }
+                    }
+                    
+                    // 🎯 演示服务端向客户端发送请求
+                    // 等待100ms确保客户端完全准备好
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    println!("🔄 服务端向客户端发送请求...");
+                    let server_request = Packet::request(9001, b"Server asks: What is your status?".to_vec());
+                    match transport.request_to_session(session_id, server_request).await {
+                        Ok(response) => {
+                            let response_text = String::from_utf8_lossy(&response.payload);
+                            println!("✅ 收到客户端响应: \"{}\"", response_text);
+                        }
+                        Err(e) => {
+                            println!("❌ 服务端请求失败: {:?}", e);
+                        }
+                    }
+                    
+                    connections.insert(session_id, info);
                 }
-                
-                TransportEvent::MessageReceived { session_id, packet } => {
-                    let message_text = String::from_utf8_lossy(&packet.payload);
-                    println!("📨 收到普通消息:");
+                ServerEvent::ConnectionClosed { session_id, reason } => {
+                    event_count += 1;
+                    println!("📥 事件 #{}: 连接关闭", event_count);
+                    println!("   会话ID: {}", session_id);
+                    println!("   原因: {:?}", reason);
+                    connections.remove(&session_id);
+                }
+                ServerEvent::MessageReceived { session_id, packet } => {
+                    event_count += 1;
+                    let message = String::from_utf8_lossy(&packet.payload);
+                    println!("📥 事件 #{}: 收到消息", event_count);
                     println!("   会话: {}", session_id);
-                    println!("   消息ID: {}", packet.message_id);
-                    println!("   包类型: {:?}", packet.packet_type());
+                    println!("   包ID: {}", packet.header.message_id);
+                    println!("   包类型: {:?}", packet.header.packet_type);
                     println!("   大小: {} bytes", packet.payload.len());
-                    println!("   内容: \"{}\"", message_text);
+                    println!("   内容: \"{}\"", message);
                     
-                    // 🔄 生成回显响应
-                    let echo_message = format!("Echo: {}", message_text);
-                    let echo_packet = Packet::data(
-                        packet.message_id + 1000,  // 使用不同的ID避免冲突
-                        echo_message.as_bytes()
-                    );
-                    
-                    println!("🔄 准备发送回显:");
-                    println!("   目标会话: {}", session_id);
-                    println!("   回显ID: {}", echo_packet.message_id);
-                    println!("   回显内容: \"{}\"", echo_message);
-                    
-                    match transport_for_echo.send_to_session(session_id, echo_packet).await {
+                    // 发送回显
+                    let echo_message = format!("Echo: {}", message);
+                    let echo_packet = Packet::one_way(packet.header.message_id + 1000, echo_message.as_bytes());
+                    match transport.send_to_session(session_id, echo_packet).await {
                         Ok(()) => {
                             println!("✅ 回显发送成功 -> 会话 {}", session_id);
                         }
@@ -98,87 +127,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                
-                // 🚀 新增：处理 RPC 请求
-                TransportEvent::RequestReceived { session_id, context: ctx } => {
-                    let request_text = String::from_utf8_lossy(&ctx.request.payload);
-                    println!("🎯 收到 RPC 请求:");
-                    println!("   会话: {}", session_id);
-                    println!("   请求ID: {}", ctx.request.message_id);
-                    println!("   包类型: {:?}", ctx.request.packet_type());
-                    println!("   大小: {} bytes", ctx.request.payload.len());
-                    println!("   内容: \"{}\"", request_text);
-                    
-                    // 🎯 处理不同类型的 RPC 请求
-                    if request_text.starts_with("ping") {
-                        // Ping-Pong 类型的请求
-                        let response_message = format!("pong: {}", &request_text[4..]);
-                        let mut response = Packet::new(PacketType::Response, 0);
-                        response.set_payload(response_message.as_bytes());
-                        
-                        println!("🏓 发送 Pong 响应: \"{}\"", response_message);
-                        ctx.respond(response);
-                        
-                    } else if request_text.starts_with("time") {
-                        // 时间查询请求
-                        let current_time = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
-                        let current_time = format!("Timestamp: {}", current_time);
-                        let response_message = format!("Current time: {}", current_time);
-                        let mut response = Packet::new(PacketType::Response, 0);
-                        response.set_payload(response_message.as_bytes());
-                        
-                        println!("⏰ 发送时间响应: \"{}\"", response_message);
-                        ctx.respond(response);
-                        
-                    } else if request_text.starts_with("reverse") {
-                        // 字符串反转请求
-                        let text_to_reverse = &request_text[7..]; // 去掉 "reverse" 前缀
-                        let reversed: String = text_to_reverse.chars().rev().collect();
-                        let response_message = format!("Reversed: {}", reversed);
-                        let mut response = Packet::new(PacketType::Response, 0);
-                        response.set_payload(response_message.as_bytes());
-                        
-                        println!("🔄 发送反转响应: \"{}\"", response_message);
-                        ctx.respond(response);
-                        
-                    } else {
-                        // 默认的 RPC Echo 响应
-                        let response_message = format!("RPC Echo: {}", request_text);
-                        let mut response = Packet::new(PacketType::Response, 0);
-                        response.set_payload(response_message.as_bytes());
-                        
-                        println!("🔄 发送 RPC Echo 响应: \"{}\"", response_message);
-                        ctx.respond(response);
-                    }
-                }
-                
-                TransportEvent::MessageSent { session_id, packet_id } => {
+                ServerEvent::MessageSent { session_id, packet_id } => {
                     println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, packet_id);
                 }
-                
-                TransportEvent::ConnectionClosed { session_id, reason } => {
-                    connections.remove(&session_id);
-                    println!("🔌 连接关闭: {} (原因: {:?})", session_id, reason);
-                    println!("   剩余连接数: {}", connections.len());
-                }
-                
-                TransportEvent::TransportError { session_id, error } => {
+                ServerEvent::TransportError { session_id, error } => {
                     println!("⚠️ 传输错误: {:?} (会话: {:?})", error, session_id);
                 }
-                
-                TransportEvent::ServerStarted { address } => {
+                ServerEvent::ServerStarted { address } => {
                     println!("🌟 服务器启动通知: {}", address);
                 }
-                
-                TransportEvent::ServerStopped => {
+                ServerEvent::ServerStopped => {
                     println!("🛑 服务器停止通知");
                 }
-                
-                _ => {
-                    println!("ℹ️ 其他事件: {:?}", event);
+                ServerEvent::RequestReceived { session_id, ctx } => {
+                    println!("🔄 收到请求: 会话: {}, ID: {}", session_id, ctx.request.header.message_id);
+                    ctx.respond_with(|req| {
+                        let mut resp = req.clone();
+                        resp.payload = format!("Echo: {}", String::from_utf8_lossy(&req.payload)).into_bytes();
+                        resp
+                    });
                 }
             }
         }
@@ -196,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     
     // 🎯 模式A的关键：现在才启动服务器，但事件流已经在监听了
-    let server_result = transport.serve().await;
+    let server_result = transport_for_serve.serve().await;
     
     println!("🏁 服务器已停止");
     

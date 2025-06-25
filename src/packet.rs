@@ -267,10 +267,6 @@ pub struct Packet {
     pub ext_header: Vec<u8>,
     /// 负载数据
     pub payload: Vec<u8>,
-    /// 向后兼容的 message_id 字段
-    pub message_id: u32,
-    /// 向后兼容的 packet_type 字段
-    pub packet_type: PacketType,
 }
 
 impl Packet {
@@ -280,8 +276,6 @@ impl Packet {
             header: FixedHeader::new(packet_type, message_id),
             ext_header: Vec::new(),
             payload: Vec::new(),
-            message_id,
-            packet_type,
         }
     }
     
@@ -314,13 +308,11 @@ impl Packet {
     
     /// 设置消息ID
     pub fn set_message_id(&mut self, message_id: u32) {
-        self.message_id = message_id;
         self.header.message_id = message_id;
     }
     
     /// 设置数据包类型
     pub fn set_packet_type(&mut self, packet_type: PacketType) {
-        self.packet_type = packet_type;
         self.header.packet_type = packet_type;
     }
     
@@ -423,8 +415,6 @@ impl Packet {
         };
         
         Ok(Self {
-            message_id: header.message_id,
-            packet_type: header.packet_type,
             header,
             ext_header,
             payload,
@@ -451,55 +441,9 @@ impl Packet {
         16 + self.ext_header.len() + self.payload.len()
     }
     
-    // 向后兼容的方法
-    /// 创建数据消息包（向后兼容）
-    pub fn data(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
-        Self::one_way(message_id, payload)
-    }
-    
-    /// 创建控制消息包（向后兼容）
-    pub fn control(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
-        Self::request(message_id, payload)
-    }
-    
-    /// 创建心跳包（向后兼容）
-    pub fn heartbeat() -> Self {
-        Self::one_way(0, Vec::new())
-    }
-    
-    /// 创建回显包（向后兼容）
-    pub fn echo(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
-        Self::request(message_id, payload)
-    }
-    
-    /// 创建错误包（向后兼容）
-    pub fn error(message_id: u32, error_msg: &str) -> Self {
-        Self::response(message_id, error_msg.as_bytes())
-    }
-    
     /// 获取负载的字符串表示（如果是有效UTF-8）
     pub fn payload_as_string(&self) -> Option<String> {
         String::from_utf8(self.payload.clone()).ok()
-    }
-    
-    /// 检查是否为心跳包
-    pub fn is_heartbeat(&self) -> bool {
-        self.header.packet_type == PacketType::OneWay && self.header.message_id == 0
-    }
-    
-    /// 检查是否为控制包
-    pub fn is_control(&self) -> bool {
-        self.header.packet_type == PacketType::Request
-    }
-    
-    /// 检查是否为数据包
-    pub fn is_data(&self) -> bool {
-        self.header.packet_type == PacketType::OneWay
-    }
-    
-    /// 检查是否为错误包
-    pub fn is_error(&self) -> bool {
-        self.header.packet_type == PacketType::Response
     }
     
     /// 压缩数据
@@ -663,8 +607,8 @@ mod tests {
         packet.set_compression(CompressionType::Zstd);
         packet.set_fragmented(true);
         
-        assert_eq!(packet.packet_type(), PacketType::OneWay);
-        assert_eq!(packet.message_id(), 123);
+        assert_eq!(packet.header.packet_type, PacketType::OneWay);
+        assert_eq!(packet.header.message_id, 123);
         assert_eq!(packet.payload_len(), 11);
         assert_eq!(packet.header.flags.compression(), CompressionType::Zstd);
         assert!(packet.header.flags.is_fragmented());
