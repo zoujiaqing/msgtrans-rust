@@ -376,24 +376,19 @@ impl Transport {
 
     /// 🎯 解压和解包 Packet payload，隐藏协议复杂性
     fn decode_payload(&self, packet: &Packet) -> Result<Vec<u8>, TransportError> {
-        let payload = &packet.payload;
-        
-        // 🔧 处理压缩（如果实现了压缩）
-        let data = match packet.header.compression {
-            crate::packet::CompressionType::None => payload.clone(), // 无压缩
-            crate::packet::CompressionType::Zlib => {
-                // TODO: 解压缩 zlib
-                tracing::warn!("⚠️ zlib 解压缩未实现，使用原始数据");
-                payload.clone()
+        // 🔧 如果数据包有压缩，则解压
+        if packet.header.compression != crate::packet::CompressionType::None {
+            let mut packet_copy = packet.clone();
+            match packet_copy.decompress_payload() {
+                Ok(_) => Ok(packet_copy.payload),
+                Err(e) => {
+                    tracing::warn!("⚠️ 解压缩数据包失败: {}, 使用原始数据", e);
+                    Ok(packet.payload.clone())
+                }
             }
-            crate::packet::CompressionType::Zstd => {
-                // TODO: 解压缩 zstd  
-                tracing::warn!("⚠️ zstd 解压缩未实现，使用原始数据");
-                payload.clone()
-            }
-        };
-        
-        Ok(data)
+        } else {
+            Ok(packet.payload.clone())
+        }
     }
 
     /// 🎯 统一事件处理入口 - 在此层完成解包并发送用户友好事件
@@ -480,6 +475,13 @@ impl Transport {
             payload: data.to_vec(),
         };
         
+        // 🔧 如果需要压缩，则压缩数据包
+        if options.compression.is_some() && options.compression != Some(crate::packet::CompressionType::None) {
+            if let Err(e) = packet.compress_payload() {
+                tracing::warn!("⚠️ 压缩数据包失败: {}, 使用原始数据", e);
+            }
+        }
+        
         // 注册请求跟踪
         let (_id, rx) = self.request_tracker.register_with_id(message_id);
         
@@ -489,7 +491,16 @@ impl Transport {
         // 等待响应（使用自定义超时）
         let timeout_duration = options.timeout.unwrap_or(std::time::Duration::from_secs(10));
         match tokio::time::timeout(timeout_duration, rx).await {
-            Ok(Ok(resp)) => Ok(Bytes::from(resp.payload)),
+            Ok(Ok(resp)) => {
+                // 🔧 解压响应数据
+                match self.decode_payload(&resp) {
+                    Ok(decoded_data) => Ok(Bytes::from(decoded_data)),
+                    Err(e) => {
+                        tracing::warn!("⚠️ 解压响应数据失败: {}, 使用原始数据", e);
+                        Ok(Bytes::from(resp.payload))
+                    }
+                }
+            }
             Ok(Err(_)) => Err(TransportError::connection_error("Connection closed", false)),
             Err(_) => Err(TransportError::connection_error("Request timeout", false)),
         }
@@ -503,7 +514,7 @@ impl Transport {
         });
         
         // 创建单向消息包
-        let packet = crate::packet::Packet {
+        let mut packet = crate::packet::Packet {
             header: crate::packet::FixedHeader {
                 version: 1,
                 compression: options.compression.unwrap_or(crate::packet::CompressionType::None),
@@ -517,6 +528,13 @@ impl Transport {
             ext_header: options.ext_header.unwrap_or_default().to_vec(),
             payload: data.to_vec(),
         };
+        
+        // 🔧 如果需要压缩，则压缩数据包
+        if options.compression.is_some() && options.compression != Some(crate::packet::CompressionType::None) {
+            if let Err(e) = packet.compress_payload() {
+                tracing::warn!("⚠️ 压缩数据包失败: {}, 使用原始数据", e);
+            }
+        }
         
         // 发送数据包
         self.send(packet).await?;
