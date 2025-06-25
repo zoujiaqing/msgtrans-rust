@@ -603,8 +603,10 @@ impl TransportServer {
                         let context = crate::event::TransportContext::new_request(
                             Some(session_id),
                             packet.header.message_id,
+                            packet.header.biz_type,
+                            if packet.ext_header.is_empty() { None } else { Some(packet.ext_header.clone()) },
                             packet.payload.clone(),
-                            std::sync::Arc::new(move |response_data| {
+                            std::sync::Arc::new(move |response_data: Vec<u8>| {
                                 let server = server_clone.clone();
                                 tokio::spawn(async move {
                                     let response_packet = crate::packet::Packet {
@@ -644,6 +646,8 @@ impl TransportServer {
                             let context = crate::event::TransportContext::new_oneway(
                                 Some(session_id),
                                 packet.header.message_id,
+                                packet.header.biz_type,
+                                if packet.ext_header.is_empty() { None } else { Some(packet.ext_header.clone()) },
                                 packet.payload.clone(),
                             );
                             let event = crate::event::ServerEvent::MessageReceived { session_id, context };
@@ -655,6 +659,8 @@ impl TransportServer {
                         let context = crate::event::TransportContext::new_oneway(
                             Some(session_id),
                             packet.header.message_id,
+                            packet.header.biz_type,
+                            if packet.ext_header.is_empty() { None } else { Some(packet.ext_header.clone()) },
                             packet.payload.clone(),
                         );
                         let event = crate::event::ServerEvent::MessageReceived { session_id, context };

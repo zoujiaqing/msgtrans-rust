@@ -12,6 +12,7 @@ use std::{
 };
 use tokio::sync::{Mutex, broadcast, oneshot};
 use dashmap::DashMap;
+use bytes::Bytes;
 use crate::{
     SessionId, TransportError, Packet,
     transport::{
@@ -454,6 +455,72 @@ impl Transport {
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<TransportEvent> {
         self.event_sender.subscribe()
+    }
+
+    /// 🚀 发送数据包并等待响应（带选项）
+    pub async fn request_with_options(&self, data: Bytes, options: super::TransportOptions) -> Result<Bytes, TransportError> {
+        // 使用用户提供的 message_id 或生成新的
+        let message_id = options.message_id.unwrap_or_else(|| {
+            self.request_tracker.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        });
+        
+        // 创建请求包
+        let mut packet = crate::packet::Packet {
+            header: crate::packet::FixedHeader {
+                version: 1,
+                compression: options.compression.unwrap_or(crate::packet::CompressionType::None),
+                packet_type: crate::packet::PacketType::Request,
+                biz_type: options.biz_type.unwrap_or(0),
+                message_id,
+                ext_header_len: options.ext_header.as_ref().map_or(0, |h| h.len() as u16),
+                payload_len: data.len() as u32,
+                reserved: crate::packet::ReservedFlags::new(),
+            },
+            ext_header: options.ext_header.unwrap_or_default().to_vec(),
+            payload: data.to_vec(),
+        };
+        
+        // 注册请求跟踪
+        let (_id, rx) = self.request_tracker.register_with_id(message_id);
+        
+        // 发送数据包
+        self.send(packet).await?;
+        
+        // 等待响应（使用自定义超时）
+        let timeout_duration = options.timeout.unwrap_or(std::time::Duration::from_secs(10));
+        match tokio::time::timeout(timeout_duration, rx).await {
+            Ok(Ok(resp)) => Ok(Bytes::from(resp.payload)),
+            Ok(Err(_)) => Err(TransportError::connection_error("Connection closed", false)),
+            Err(_) => Err(TransportError::connection_error("Request timeout", false)),
+        }
+    }
+
+    /// 🚀 发送单向消息（带选项）
+    pub async fn send_with_options(&self, data: Bytes, options: super::TransportOptions) -> Result<(), TransportError> {
+        // 使用用户提供的 message_id 或生成新的
+        let message_id = options.message_id.unwrap_or_else(|| {
+            self.request_tracker.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        });
+        
+        // 创建单向消息包
+        let packet = crate::packet::Packet {
+            header: crate::packet::FixedHeader {
+                version: 1,
+                compression: options.compression.unwrap_or(crate::packet::CompressionType::None),
+                packet_type: crate::packet::PacketType::OneWay,
+                biz_type: options.biz_type.unwrap_or(0),
+                message_id,
+                ext_header_len: options.ext_header.as_ref().map_or(0, |h| h.len() as u16),
+                payload_len: data.len() as u32,
+                reserved: crate::packet::ReservedFlags::new(),
+            },
+            ext_header: options.ext_header.unwrap_or_default().to_vec(),
+            payload: data.to_vec(),
+        };
+        
+        // 发送数据包
+        self.send(packet).await?;
+        Ok(())
     }
 }
 

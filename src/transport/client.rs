@@ -5,6 +5,7 @@
 use std::time::Duration;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use bytes::Bytes;
 
 use crate::{
     SessionId,
@@ -509,9 +510,11 @@ impl TransportClient {
                             let transport = transport_for_response.clone();
                             let message_id = packet.header.message_id;
                             
-                            let context = crate::event::TransportContext::new_request(
-                                None, 
-                                message_id, 
+                                                        let context = crate::event::TransportContext::new_request(
+                                None,
+                                message_id,
+                                packet.header.biz_type,
+                                if packet.ext_header.is_empty() { None } else { Some(packet.ext_header.clone()) },
                                 packet.payload.clone(),
                                 Arc::new(move |response_data: Vec<u8>| {
                                     let transport = transport.clone();
@@ -569,6 +572,16 @@ impl TransportClient {
         } else {
             Err(TransportError::connection_error("Connection does not support event streams", false))
         }
+    }
+
+    /// 🚀 发送请求并等待响应（带选项）
+    pub async fn request_with_options(&self, data: Bytes, options: super::TransportOptions) -> Result<Bytes, TransportError> {
+        self.inner.request_with_options(data, options).await
+    }
+
+    /// 🚀 发送单向消息（带选项）
+    pub async fn send_with_options(&self, data: Bytes, options: super::TransportOptions) -> Result<(), TransportError> {
+        self.inner.send_with_options(data, options).await
     }
 }
 

@@ -494,7 +494,9 @@ impl ServerEvent {
                  // 转换为统一的TransportContext
                  let context = TransportContext::new_oneway(
                      Some(session_id), 
-                     packet.header.message_id, 
+                     packet.header.message_id,
+                     packet.header.biz_type,
+                     if packet.ext_header.is_empty() { None } else { Some(packet.ext_header.clone()) },
                      packet.payload.clone()
                  );
                  Some(ServerEvent::MessageReceived { session_id, context })
@@ -508,6 +510,8 @@ impl ServerEvent {
                  let transport_ctx = TransportContext::new_request(
                      Some(session_id),
                      ctx.request_id,
+                     0, // 默认业务类型，需要从RequestContext中传递
+                     None, // 默认无扩展头，需要从RequestContext中传递
                      ctx.data.clone(),
                      ctx.responder.clone()
                  );
@@ -540,7 +544,9 @@ impl ClientEvent {
                         // OneWay和Response包正常处理
                         let context = TransportContext::new_oneway(
                             None, 
-                            packet.header.message_id, 
+                            packet.header.message_id,
+                            packet.header.biz_type,
+                            if packet.ext_header.is_empty() { None } else { Some(packet.ext_header.clone()) },
                             packet.payload.clone()
                         );
                         Some(ClientEvent::MessageReceived(context))
@@ -585,6 +591,10 @@ pub struct TransportContext {
     pub peer: Option<SessionId>,
     /// 系统分配的消息ID
     pub message_id: u32,
+    /// 业务类型
+    pub biz_type: u8,
+    /// 扩展头内容
+    pub ext_header: Option<Vec<u8>>,
     /// 解压后的纯数据
     pub data: Vec<u8>,
     /// 接收时间戳
@@ -611,11 +621,15 @@ impl TransportContext {
     pub fn new_oneway(
         peer: Option<SessionId>,
         message_id: u32,
+        biz_type: u8,
+        ext_header: Option<Vec<u8>>,
         data: Vec<u8>,
     ) -> Self {
         Self {
             peer,
             message_id,
+            biz_type,
+            ext_header,
             data,
             timestamp: Instant::now(),
             kind: TransportContextKind::OneWay,
@@ -626,12 +640,16 @@ impl TransportContext {
     pub fn new_request(
         peer: Option<SessionId>,
         message_id: u32,
+        biz_type: u8,
+        ext_header: Option<Vec<u8>>,
         data: Vec<u8>,
         responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
     ) -> Self {
         Self {
             peer,
             message_id,
+            biz_type,
+            ext_header,
             data,
             timestamp: Instant::now(),
             kind: TransportContextKind::Request {

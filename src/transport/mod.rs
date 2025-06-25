@@ -116,3 +116,63 @@ pub use lockfree_enhanced::{
 pub use connection_state::{
     ConnectionState, ConnectionStateManager
 };
+
+use bytes::Bytes;
+use std::time::Duration;
+use crate::packet::CompressionType;
+
+/// 传输选项 - 用于自定义发送/请求行为
+#[derive(Default, Clone, Debug)]
+pub struct TransportOptions {
+    /// 超时时间（仅对 request 有效）
+    pub timeout: Option<Duration>,
+    /// 压缩算法
+    pub compression: Option<CompressionType>,
+    /// 应用层业务类型 ID
+    pub biz_type: Option<u8>,
+    /// 扩展头内容（业务层自己编码）
+    pub ext_header: Option<Bytes>,
+    /// 消息 ID（可选，默认自动生成）
+    pub message_id: Option<u32>,
+}
+
+impl TransportOptions {
+    /// 创建新的传输选项
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    /// 设置超时时间
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = Some(timeout);
+        self
+    }
+    
+    /// 设置压缩算法
+    pub fn with_compression(mut self, compression: CompressionType) -> Self {
+        self.compression = Some(compression);
+        self
+    }
+    
+    /// 设置业务类型
+    pub fn with_biz_type(mut self, biz_type: u8) -> Self {
+        self.biz_type = Some(biz_type);
+        self
+    }
+    
+    /// 设置扩展头
+    pub fn with_ext_header(mut self, ext_header: Bytes) -> Self {
+        self.ext_header = Some(ext_header);
+        self
+    }
+    
+    /// 设置消息 ID
+    pub fn with_message_id(mut self, message_id: u32) -> Self {
+        self.message_id = Some(message_id);
+        self
+    }
+    
+
+}
+
+
