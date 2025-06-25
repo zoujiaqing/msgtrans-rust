@@ -29,7 +29,7 @@ pub enum TransportEvent {
     ClientConnected { address: SocketAddr },
     ClientDisconnected,
 
-    RequestReceived(Arc<RequestContext>),
+    RequestReceived(RequestContext),
 }
 
 /// 协议特定事件trait
@@ -289,86 +289,180 @@ impl ProtocolEvent for QuicEvent {
     }
 }
 
-/// 客户端专用事件 - 隐藏会话ID概念
+/// 🎯 用户友好的消息结构 - 已解包的纯数据
 #[derive(Debug, Clone)]
-pub enum ClientEvent {
-    /// 连接建立
-    Connected { info: crate::command::ConnectionInfo },
-    /// 连接关闭
-    Disconnected { reason: crate::error::CloseReason },
-    /// 收到消息
-    MessageReceived { packet: crate::packet::Packet },
-    /// 消息发送成功
-    MessageSent { packet_id: crate::PacketId },
-    /// 传输错误
-    Error { error: crate::error::TransportError },
-    RequestReceived { ctx: Arc<RequestContext> },
+pub struct Message {
+    /// 消息来源会话（客户端为None，服务端为Some）
+    pub peer: Option<SessionId>,
+    /// 已解压和解包的原始数据
+    pub data: Vec<u8>,
+    /// 消息ID（用于调试和日志）
+    pub message_id: u32,
 }
 
-impl ClientEvent {
-    /// 从TransportEvent转换为ClientEvent，隐藏会话ID
-    pub fn from_transport_event(event: TransportEvent) -> Option<Self> {
-        match event {
-            TransportEvent::ConnectionEstablished { info } =>
-                Some(ClientEvent::Connected { info }),
-            TransportEvent::ConnectionClosed { reason } =>
-                Some(ClientEvent::Disconnected { reason }),
-            TransportEvent::MessageReceived(packet) => {
-                // 🔧 修复：Request包不应该通过这里处理，应该等待RequestReceived事件
-                match packet.header.packet_type {
-                    crate::packet::PacketType::Request => {
-                        // Request包跳过，等待Transport的on_event处理后发送RequestReceived事件
-                        None
-                    }
-                    _ => {
-                        // OneWay和Response包正常处理
-                        Some(ClientEvent::MessageReceived { packet })
-                    }
-                }
-            }
-            TransportEvent::MessageSent { packet_id } =>
-                Some(ClientEvent::MessageSent { packet_id }),
-            TransportEvent::TransportError { error } =>
-                Some(ClientEvent::Error { error }),
-            TransportEvent::RequestReceived(ctx) =>
-                Some(ClientEvent::RequestReceived { ctx }),
-            _ => None,
+impl Message {
+    /// 尝试将消息数据转换为UTF-8字符串
+    pub fn as_text(&self) -> Result<String, std::string::FromUtf8Error> {
+        String::from_utf8(self.data.clone())
+    }
+    
+    /// 将消息数据转换为UTF-8字符串（lossy）
+    pub fn as_text_lossy(&self) -> String {
+        String::from_utf8_lossy(&self.data).to_string()
+    }
+    
+    /// 获取原始字节数据
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.data
+    }
+}
+
+/// 🎯 用户友好的请求上下文 - 已解包，提供简单响应接口
+pub struct RequestContext {
+    /// 请求来源会话（客户端为None，服务端为Some）
+    pub peer: Option<SessionId>,
+    /// 已解压和解包的请求数据
+    pub data: Vec<u8>,
+    /// 请求ID（用于调试和日志）
+    pub request_id: u32,
+    /// 响应回调（内部处理所有协议细节）
+    responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
+    /// 确保只响应一次（使用Arc共享状态）
+    responded: Arc<std::sync::atomic::AtomicBool>,
+    /// 🔧 标记：是否为负责检查响应的主实例（防止clone实例触发警告）
+    is_primary: bool,
+}
+
+impl RequestContext {
+    /// 创建新的请求上下文
+    pub fn new(
+        peer: Option<SessionId>,
+        data: Vec<u8>,
+        request_id: u32,
+        responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
+    ) -> Self {
+        Self {
+            peer,
+            data,
+            request_id,
+            responder,
+            responded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            is_primary: false, // 🔧 新创建的实例默认不是主实例，等待事件转发时设置
         }
     }
     
-    /// 判断是否为连接相关事件
-    pub fn is_connection_event(&self) -> bool {
-        matches!(self, 
-            ClientEvent::Connected { .. } | 
-            ClientEvent::Disconnected { .. }
-        )
+    /// 尝试将请求数据转换为UTF-8字符串
+    pub fn as_text(&self) -> Result<String, std::string::FromUtf8Error> {
+        String::from_utf8(self.data.clone())
     }
     
-    /// 判断是否为数据传输事件
-    pub fn is_data_event(&self) -> bool {
-        matches!(self, 
-            ClientEvent::MessageReceived { .. } | 
-            ClientEvent::MessageSent { .. }
-        )
+    /// 将请求数据转换为UTF-8字符串（lossy）
+    pub fn as_text_lossy(&self) -> String {
+        String::from_utf8_lossy(&self.data).to_string()
     }
     
-    /// 判断是否为错误事件
-    pub fn is_error_event(&self) -> bool {
-        matches!(self, ClientEvent::Error { .. })
+    /// 获取原始字节数据
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.data
+    }
+    
+    /// 🎯 使用字符串响应请求
+    pub fn respond_text(&mut self, response: &str) {
+        self.respond_bytes(response.as_bytes());
+    }
+    
+    /// 🎯 使用字节数据响应请求
+    pub fn respond_bytes(&mut self, response: &[u8]) {
+        if self.responded.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok() {
+            (self.responder)(response.to_vec());
+        } else {
+            tracing::warn!("⚠️ RequestContext 已经响应过了 (ID: {})", self.request_id);
+        }
+    }
+    
+    /// 🔧 设置为主实例（负责检查响应状态）
+    pub(crate) fn set_primary(&mut self) {
+        self.is_primary = true;
     }
 }
 
-/// 服务端专用事件 - 必须带 session_id
+impl Clone for RequestContext {
+    fn clone(&self) -> Self {
+        Self {
+            peer: self.peer,
+            data: self.data.clone(),
+            request_id: self.request_id,
+            responder: self.responder.clone(),
+            responded: self.responded.clone(), // 🔧 修复：共享响应状态
+            is_primary: false, // 🔧 克隆实例不是主实例，不负责检查响应
+        }
+    }
+}
+
+impl std::fmt::Debug for RequestContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RequestContext")
+            .field("peer", &self.peer)
+            .field("data", &format!("{} bytes", self.data.len()))
+            .field("request_id", &self.request_id)
+            .field("responded", &self.responded.load(std::sync::atomic::Ordering::SeqCst))
+            .finish()
+    }
+}
+
+impl Drop for RequestContext {
+    fn drop(&mut self) {
+        // 🔧 只有主实例才负责检查响应状态，避免clone实例触发误报警告
+        if self.is_primary && !self.responded.load(std::sync::atomic::Ordering::SeqCst) {
+            tracing::warn!("⚠️ RequestContext被丢弃但未响应 (ID: {})", self.request_id);
+        }
+    }
+}
+
+/// 🎯 用户友好的客户端事件 - 完全隐藏Packet复杂性
+#[derive(Debug, Clone)]
+pub enum ClientEvent {
+    /// 连接已建立
+    Connected { info: ConnectionInfo },
+    /// 连接已断开
+    Disconnected { reason: CloseReason },
+    
+    /// 🎯 收到消息（已解包）
+    MessageReceived(Message),
+    
+    /// 🎯 收到请求（已解包，可直接响应）
+    RequestReceived(RequestContext),
+    
+    /// 消息发送确认
+    MessageSent { message_id: u32 },
+    
+    /// 传输错误
+    Error { error: TransportError },
+}
+
+/// 🎯 用户友好的服务端事件 - 完全隐藏Packet复杂性  
 #[derive(Debug, Clone)]
 pub enum ServerEvent {
+    /// 新连接建立
     ConnectionEstablished { session_id: SessionId, info: ConnectionInfo },
+    /// 连接关闭
     ConnectionClosed { session_id: SessionId, reason: CloseReason },
-    MessageReceived { session_id: SessionId, packet: Packet },
-    MessageSent { session_id: SessionId, packet_id: PacketId },
+    
+    /// 🎯 收到消息（已解包）
+    MessageReceived { session_id: SessionId, message: Message },
+    
+    /// 🎯 收到请求（已解包，可直接响应）
+    RequestReceived { session_id: SessionId, request: RequestContext },
+    
+    /// 消息发送确认
+    MessageSent { session_id: SessionId, message_id: u32 },
+    
+    /// 传输错误
     TransportError { session_id: Option<SessionId>, error: TransportError },
-    ServerStarted { address: SocketAddr },
+    
+    /// 服务器生命周期事件
+    ServerStarted { address: std::net::SocketAddr },
     ServerStopped,
-    RequestReceived { session_id: SessionId, ctx: Arc<RequestContext> },
 }
 
 impl ServerEvent {
@@ -401,14 +495,16 @@ impl ServerEvent {
                 Some(ServerEvent::ConnectionEstablished { session_id, info }),
             TransportEvent::ConnectionClosed { reason } =>
                 Some(ServerEvent::ConnectionClosed { session_id, reason }),
-            TransportEvent::MessageReceived(packet) =>
-                Some(ServerEvent::MessageReceived { session_id, packet }),
-            TransportEvent::MessageSent { packet_id } =>
-                Some(ServerEvent::MessageSent { session_id, packet_id }),
+                         TransportEvent::MessageReceived(packet) =>
+                 Some(ServerEvent::MessageReceived { session_id, message: Message { peer: Some(session_id), data: packet.payload.clone(), message_id: packet.header.message_id } }),
+             TransportEvent::MessageSent { packet_id } =>
+                 Some(ServerEvent::MessageSent { session_id, message_id: packet_id }),
             TransportEvent::TransportError { error } =>
                 Some(ServerEvent::TransportError { session_id: Some(session_id), error }),
-            TransportEvent::RequestReceived(ctx) =>
-                Some(ServerEvent::RequestReceived { session_id, ctx }),
+                         TransportEvent::RequestReceived(ctx) => {
+                 // 🔧 克隆实例用于用户处理，主实例管理在Transport层
+                 Some(ServerEvent::RequestReceived { session_id, request: ctx })
+             }
             TransportEvent::ServerStarted { address } =>
                 Some(ServerEvent::ServerStarted { address }),
             TransportEvent::ServerStopped =>
@@ -418,70 +514,56 @@ impl ServerEvent {
     }
 }
 
-#[derive(Clone)]
-pub struct RequestContext {
-    pub session_id: SessionId,
-    pub request: Packet,
-    responder: Arc<Mutex<Option<Box<dyn FnOnce(Packet) + Send + 'static>>>>,
-    responded: Arc<AtomicBool>,
-}
-
-impl RequestContext {
-    pub fn new(
-        session_id: SessionId,
-        request: Packet,
-        responder: Box<dyn FnOnce(Packet) + Send + 'static>,
-    ) -> Self {
-        Self {
-            session_id,
-            request,
-            responder: Arc::new(Mutex::new(Some(responder))),
-            responded: Arc::new(AtomicBool::new(false)),
+impl ClientEvent {
+    /// 从TransportEvent转换为ClientEvent，隐藏会话ID
+    pub fn from_transport_event(event: TransportEvent) -> Option<Self> {
+        match event {
+            TransportEvent::ConnectionEstablished { info } =>
+                Some(ClientEvent::Connected { info }),
+            TransportEvent::ConnectionClosed { reason } =>
+                Some(ClientEvent::Disconnected { reason }),
+            TransportEvent::MessageReceived(packet) => {
+                match packet.header.packet_type {
+                    crate::packet::PacketType::Request => {
+                        // Request包由Transport处理并发送RequestReceived事件
+                        None
+                    }
+                    _ => {
+                        // OneWay和Response包正常处理
+                        Some(ClientEvent::MessageReceived(Message { peer: None, data: packet.payload.clone(), message_id: packet.header.message_id }))
+                    }
+                }
+            }
+                         TransportEvent::MessageSent { packet_id } =>
+                 Some(ClientEvent::MessageSent { message_id: packet_id }),
+            TransportEvent::TransportError { error } =>
+                Some(ClientEvent::Error { error }),
+                         TransportEvent::RequestReceived(ctx) => {
+                 // 🔧 克隆实例用于用户处理，主实例管理在Transport层
+                 Some(ClientEvent::RequestReceived(ctx))
+             }
+            _ => None,
         }
     }
-
-    pub fn respond(self: Arc<Self>, mut response: Packet) {
-        if self.responded.swap(true, Ordering::SeqCst) {
-            log::warn!("Request already responded");
-            return;
-        }
-        tracing::debug!("🔄 RequestContext::respond called: 原类型={:?}, ID={}", response.header.packet_type, response.header.message_id);
-        
-        // 🔧 只设置header中的标准字段
-        response.header.packet_type = PacketType::Response;
-        response.header.message_id = self.request.header.message_id;
-        
-        tracing::debug!("🔄 RequestContext::respond 设置后: 新类型={:?}, ID={}", 
-            response.header.packet_type, response.header.message_id);
-        
-        if let Some(responder) = self.responder.lock().unwrap().take() {
-            tracing::debug!("🔄 RequestContext::respond 调用发送回调，包类型={:?}, ID={}", 
-                response.header.packet_type, response.header.message_id);
-            responder(response);
-        } else {
-            tracing::warn!("⚠️ RequestContext::respond 没有发送回调可用");
-        }
+    
+    /// 判断是否为连接相关事件
+    pub fn is_connection_event(&self) -> bool {
+        matches!(self, 
+            ClientEvent::Connected { .. } | 
+            ClientEvent::Disconnected { .. }
+        )
     }
-
-    pub fn respond_with<F: FnOnce(&Packet) -> Packet>(self: Arc<Self>, f: F) {
-        let response = f(&self.request);
-        self.respond(response);
+    
+    /// 判断是否为数据传输事件
+    pub fn is_data_event(&self) -> bool {
+        matches!(self, 
+            ClientEvent::MessageReceived { .. } | 
+            ClientEvent::MessageSent { .. }
+        )
     }
-}
-
-impl Drop for RequestContext {
-    fn drop(&mut self) {
-        if !self.responded.load(Ordering::SeqCst) {
-            log::warn!("RequestContext dropped without response (可能漏响应)");
-        }
-    }
-}
-
-impl std::fmt::Debug for RequestContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RequestContext")
-            .field("session_id", &self.session_id)
-            .field("request", &self.request)
-            .finish()
+    
+    /// 判断是否为错误事件
+    pub fn is_error_event(&self) -> bool {
+        matches!(self, ClientEvent::Error { .. })
     }
 } 

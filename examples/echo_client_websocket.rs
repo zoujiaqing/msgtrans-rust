@@ -128,11 +128,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, message) in test_messages.iter().enumerate() {
         println!("📤 发送消息 #{}: \"{}\"", i + 1, message);
-        let packet = Packet::request((i as u32) + 1, message.as_bytes());
-        match transport.request(packet).await {
+        // 🎯 使用新的简化API - 直接传字符串
+        match transport.request(message).await {
             Ok(response) => {
-                let resp_msg = String::from_utf8_lossy(&response.payload);
-                println!("✅ 收到响应: ID {}, 内容: {}", response.header.message_id, resp_msg);
+                println!("✅ 收到响应 #{}: {}", i + 1, response);
             }
             Err(e) => {
                 println!("❌ 请求失败: {:?}", e);

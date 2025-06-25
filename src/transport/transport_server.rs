@@ -43,6 +43,8 @@ pub struct TransportServer {
     state_manager: ConnectionStateManager,
     /// 🎯 新增：请求跟踪器 - 支持服务端向客户端发送请求
     request_tracker: Arc<crate::transport::transport::RequestTracker>,
+    /// 🎯 消息ID计数器 - 用于自动生成消息ID
+    message_id_counter: std::sync::atomic::AtomicU32,
 }
 
 impl TransportServer {
@@ -60,6 +62,7 @@ impl TransportServer {
             protocol_configs: std::collections::HashMap::new(),
             state_manager: ConnectionStateManager::new(),
             request_tracker: Arc::new(crate::transport::transport::RequestTracker::new_with_start_id(10000)),
+            message_id_counter: std::sync::atomic::AtomicU32::new(20000), // 服务端使用更高的ID范围
         })
     }
 
@@ -80,6 +83,7 @@ impl TransportServer {
             protocol_configs,
             state_manager: ConnectionStateManager::new(),
             request_tracker: Arc::new(crate::transport::transport::RequestTracker::new_with_start_id(10000)),
+            message_id_counter: std::sync::atomic::AtomicU32::new(20000), // 服务端使用更高的ID范围
         })
     }
 
@@ -197,6 +201,27 @@ impl TransportServer {
             tracing::warn!("⚠️ 会话 {} 不存在于连接映射中", session_id);
             Err(TransportError::connection_error("Session not found", false))
         }
+    }
+
+    /// 🚀 向指定会话发送字节数据 - 简化API
+    pub async fn send(&self, session_id: SessionId, data: &[u8]) -> Result<(), TransportError> {
+        let message_id = self.message_id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let packet = crate::packet::Packet::one_way(message_id, data.to_vec());
+        
+        tracing::debug!("TransportServer 向会话 {} 发送数据: {} bytes (ID: {})", session_id, data.len(), message_id);
+        self.send_to_session(session_id, packet).await
+    }
+    
+    /// 🔄 向指定会话发送字节请求并等待响应 - 简化API
+    pub async fn request(&self, session_id: SessionId, data: &[u8]) -> Result<Vec<u8>, TransportError> {
+        let message_id = self.message_id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let packet = crate::packet::Packet::request(message_id, data.to_vec());
+        
+        tracing::debug!("TransportServer 向会话 {} 发送请求: {} bytes (ID: {})", session_id, data.len(), message_id);
+        let response_packet = self.request_to_session(session_id, packet).await?;
+        
+        tracing::debug!("TransportServer 收到会话 {} 的响应: {} bytes (ID: {})", session_id, response_packet.payload.len(), response_packet.header.message_id);
+        Ok(response_packet.payload.clone())
     }
 
     /// 添加会话 - 使用连接已有的会话ID
@@ -557,18 +582,33 @@ impl TransportServer {
                         // 创建 RequestContext 并发送 RequestReceived 事件
                         let server_clone = self.clone();
                         let ctx = crate::event::RequestContext::new(
-                            session_id,
-                            packet.clone(),
-                            Box::new(move |response| {
+                            Some(session_id),
+                            packet.payload.clone(),
+                            packet.header.message_id,
+                            std::sync::Arc::new(move |response_data| {
                                 let server = server_clone.clone();
                                 tokio::spawn(async move {
-                                    let _ = server.send_to_session(session_id, response).await;
+                                    let response_packet = crate::packet::Packet {
+                                        header: crate::packet::FixedHeader {
+                                            version: 1,
+                                            packet_type: crate::packet::PacketType::Response,
+                                            flags: crate::packet::PacketFlags::new(),
+                                            reserved: 0,
+                                            payload_len: response_data.len() as u32,
+                                            message_id: packet.header.message_id,
+                                            ext_header_len: 0,
+                                            reserved2: 0,
+                                        },
+                                        ext_header: Vec::new(),
+                                        payload: response_data,
+                                    };
+                                    let _ = server.send_to_session(session_id, response_packet).await;
                                 });
                             }),
                         );
                         let event = crate::event::ServerEvent::RequestReceived { 
                             session_id, 
-                            ctx: std::sync::Arc::new(ctx) 
+                            request: ctx 
                         };
                         let _ = self.event_sender.send(event);
                     }
@@ -582,19 +622,29 @@ impl TransportServer {
                         } else {
                             tracing::warn!("⚠️ 收到未知响应包 (ID: {})，可能是超时或重复响应", message_id);
                             // 作为普通消息处理
-                            let event = crate::event::ServerEvent::MessageReceived { session_id, packet };
+                            let message = crate::event::Message {
+                                peer: Some(session_id),
+                                data: packet.payload.clone(),
+                                message_id: packet.header.message_id,
+                            };
+                            let event = crate::event::ServerEvent::MessageReceived { session_id, message };
                             let _ = self.event_sender.send(event);
                         }
                     }
                     _ => {
                         // 其他类型的数据包作为普通消息处理
-                        let event = crate::event::ServerEvent::MessageReceived { session_id, packet };
+                        let message = crate::event::Message {
+                            peer: Some(session_id),
+                            data: packet.payload.clone(),
+                            message_id: packet.header.message_id,
+                        };
+                        let event = crate::event::ServerEvent::MessageReceived { session_id, message };
                         let _ = self.event_sender.send(event);
                     }
                 }
             }
             crate::event::TransportEvent::MessageSent { packet_id } => {
-                let event = crate::event::ServerEvent::MessageSent { session_id, packet_id };
+                let event = crate::event::ServerEvent::MessageSent { session_id, message_id: packet_id };
                 let _ = self.event_sender.send(event);
             }
             crate::event::TransportEvent::ConnectionClosed { reason } => {
@@ -642,6 +692,7 @@ impl Clone for TransportServer {
             protocol_configs: cloned_configs,
             state_manager: self.state_manager.clone(),
             request_tracker: self.request_tracker.clone(),
+            message_id_counter: std::sync::atomic::AtomicU32::new(20000), // 克隆时重新初始化
         }
     }
 }

@@ -1,183 +1,151 @@
-/// TCP Echo 客户端 - 使用TransportClientBuilder
-/// 🎯 使用标准的Transport客户端构建器，确保协议兼容
-/// 
-/// 与echo_server_new_api.rs配套使用
+//! TCP Echo 客户端示例
+//! 
+//! 🎯 展示简化API：只有字节版本，用户负责字符串转换
 
 use std::time::Duration;
 use msgtrans::{
-    transport::{client::TransportClientBuilder},
+    transport::client::TransportClientBuilder,
     protocol::TcpClientConfig,
-    packet::Packet,
     event::ClientEvent,
 };
+use tracing::{info, warn, error};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 启用详细日志
+    // 初始化日志 - 启用DEBUG级别以调试事件转发
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .init();
-
-    println!("🎯 TCP Echo 客户端 - TransportClientBuilder版本");
-    println!("==============================================");
-    println!();
-
-    // 配置TCP客户端 - 使用链式配置
+    
+    info!("🚀 启动TCP Echo客户端 (简化API - 只有字节版本)");
+    
+    // 创建TCP配置
     let tcp_config = TcpClientConfig::new()
         .with_target_str("127.0.0.1:8001")?
-        .with_connect_timeout(Duration::from_secs(10))
-        .with_read_timeout(Some(Duration::from_secs(30)))
-        .with_write_timeout(Some(Duration::from_secs(10)))
+        .with_connect_timeout(Duration::from_secs(5))
         .with_nodelay(true)
-        .with_keepalive(Some(Duration::from_secs(60)))
-        .with_read_buffer_size(8192)
-        .with_write_buffer_size(8192)
-        .with_retry_config(Default::default())
-        .with_local_bind_address(None)
         .build()?;
-
-    println!("🔌 准备连接到服务器: {}", tcp_config.target_address);
-
-    // 🔧 修正：使用TransportClientBuilder构建标准客户端
+    
+    // 🎯 使用新的TransportClientBuilder构建客户端
     let mut transport = TransportClientBuilder::new()
         .with_protocol(tcp_config)
         .connect_timeout(Duration::from_secs(10))
-        .enable_connection_monitoring(true)
         .build()
         .await?;
+    
+    // 连接到服务端
+    info!("🔌 连接到TCP服务端...");
+    match transport.connect().await {
+        Ok(()) => {
+            info!("✅ 连接成功!");
+        }
+        Err(e) => {
+            error!("❌ 连接失败: {:?}", e);
+            return Err(e.into());
+        }
+    }
+    
+    // 获取事件流 
+    let mut event_stream = transport.subscribe_events();
+    
+    // 🔥 关键修复：启动事件处理任务，与发送并行运行
+    let event_handle = tokio::spawn(async move {
+        // 🎯 处理简化事件（完全不涉及Packet）
+        info!("👂 开始监听事件...");
+        let mut event_count = 0;
         
-    println!("✅ 客户端Transport构建成功");
-
-    // 建立连接
-    transport.connect().await?;
-    println!("✅ 连接建立成功");
-
-    // 获取事件流来接收回显消息
-    let mut events = transport.subscribe_events();
-    // 启动接收任务来处理回显
-    let receiver_task = tokio::spawn(async move {
-        println!("🎧 开始监听回显事件...");
-        let mut received_count = 0u64;
-        loop {
-            match events.recv().await {
-                Ok(event) => {
-                    match event {
-                        ClientEvent::MessageReceived { packet } => {
-                            received_count += 1;
-                            let message = String::from_utf8_lossy(&packet.payload);
-                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.header.message_id);
-                            println!("   内容: \"{}\"", message);
-                            if message.contains("Message #4") {
-                                println!("🎯 收到最后一条回显，准备结束");
-                                break;
-                            }
-                        }
-                        ClientEvent::RequestReceived { ctx } => {
-                            let request_text = String::from_utf8_lossy(&ctx.request.payload);
-                            println!("🔄 客户端收到服务端请求: ID: {}", ctx.request.header.message_id);
-                            println!("   请求内容: \"{}\"", request_text);
-                            
-                            // 🎯 智能响应服务端的不同请求
-                            let response_text = if request_text.contains("status") {
-                                "Client status: All systems operational!"
-                            } else {
-                                "Client received your request successfully"
-                            };
-                            
-                            ctx.respond_with(|req| {
-                                let mut resp = req.clone();
-                                resp.payload = response_text.as_bytes().to_vec();
-                                resp
-                            });
-                            
-                            println!("✅ 已响应服务端请求: \"{}\"", response_text);
-                        }
-                        ClientEvent::Disconnected { reason } => {
-                            println!("🔌 连接已关闭: {:?}", reason);
-                            break;
-                        }
-                        ClientEvent::Connected { info } => {
-                            println!("🔗 连接已建立: {} ↔ {}", info.local_addr, info.peer_addr);
-                        }
-                        ClientEvent::Error { error } => {
-                            println!("⚠️ 传输错误: {:?}", error);
-                            break;
-                        }
-                        ClientEvent::MessageSent { packet_id } => {
-                            println!("ℹ️ 消息发送确认: ID {}", packet_id);
-                        }
-                    }
+        while let Ok(event) = event_stream.recv().await {
+            event_count += 1;
+            
+            match event {
+                ClientEvent::Connected { info } => {
+                    info!("🎉 连接事件: {:?}", info);
                 }
-                Err(e) => {
-                    println!("❌ 事件接收错误: {:?}", e);
+                
+                ClientEvent::MessageReceived(message) => {
+                    // 🎯 用户自己处理字节到字符串的转换
+                    info!("📥 收到消息 (ID: {}): {}", 
+                        message.message_id, 
+                        message.as_text_lossy()
+                    );
+                }
+                
+                ClientEvent::RequestReceived(mut request) => {
+                    // 🎯 用户自己处理字节到字符串的转换
+                    info!("📥 收到服务端请求 (ID: {}): {}", 
+                        request.request_id, 
+                        request.as_text_lossy()
+                    );
+                    
+                    // 🎯 响应字节数据
+                    info!("📤 响应服务端请求...");
+                    request.respond_bytes("Hello from client response!".as_bytes());
+                    info!("✅ 已响应服务端请求 (ID: {})", request.request_id);
+                }
+                
+                ClientEvent::MessageSent { message_id } => {
+                    info!("✅ 消息发送成功 (ID: {})", message_id);
+                }
+                
+                ClientEvent::Disconnected { reason } => {
+                    warn!("❌ 连接断开: {:?}", reason);
+                    break;
+                }
+                
+                ClientEvent::Error { error } => {
+                    error!("💥 传输错误: {:?}", error);
                     break;
                 }
             }
-        }
-        println!("📡 事件接收器已停止 (共收到 {} 条回显)", received_count);
-    });
-
-    // 🎯 准备测试消息
-    let test_messages = vec![
-        "Hello, TransportClient!",
-        "测试标准客户端协议", 
-        "Message with numbers: 12345",
-        "Message #4 - Final test",
-    ];
-
-    println!("📤 开始发送测试消息...");
-    println!();
-
-    for (i, message) in test_messages.iter().enumerate() {
-        println!("📤 发送消息 #{}: \"{}\"", i + 1, message);
-        let packet = Packet::request((i as u32) + 1, message.as_bytes());
-        match transport.request(packet).await {
-            Ok(response) => {
-                let resp_msg = String::from_utf8_lossy(&response.payload);
-                println!("✅ 收到响应: ID {}, 内容: {}", response.header.message_id, resp_msg);
-            }
-            Err(e) => {
-                println!("❌ 请求失败: {:?}", e);
+            
+            // 限制事件处理数量以避免无限循环
+            if event_count >= 15 {
+                info!("🔚 处理了 {} 个事件，结束监听", event_count);
                 break;
             }
         }
-        if i < test_messages.len() - 1 {
-            println!("⏳ 等待2秒后发送下一条...");
-            tokio::time::sleep(Duration::from_secs(2)).await;
+    });
+    
+    // 🎯 展示简化发送API - 只有字节版本
+    info!("📤 发送消息...");
+    transport.send("Hello from TCP client!".as_bytes()).await?;
+    transport.send(b"Binary data from client").await?;
+    
+    // 给事件处理一点时间
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    
+    // 🎯 展示简化请求API - 只有字节版本，用户负责转换
+    info!("🔄 发送请求...");
+    match transport.request("What time is it?".as_bytes()).await {
+        Ok(response_bytes) => {
+            let response_text = String::from_utf8_lossy(&response_bytes);
+            info!("📥 收到响应: {}", response_text);
+        }
+        Err(e) => {
+            warn!("⚠️ 请求失败: {:?}", e);
         }
     }
-
-    println!();
-    println!("⏳ 等待接收所有回显消息...");
     
-    // 增加等待时间，给服务端足够时间发送回显
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    
-    // 等待接收器任务完成或超时
-    match tokio::time::timeout(Duration::from_secs(15), receiver_task).await {
-        Ok(_) => {
-            println!("✅ 所有回显已接收");
+    match transport.request(b"Binary request").await {
+        Ok(response) => {
+            info!("📥 收到字节响应: {} bytes", response.len());
+            if let Ok(text) = String::from_utf8(response) {
+                info!("   内容: {}", text);
+            }
         }
-        Err(_) => {
-            println!("⏰ 等待回显超时，但这是正常的");
+        Err(e) => {
+            warn!("⚠️ 字节请求失败: {:?}", e);
         }
     }
     
-    // 关闭连接
-    println!("👋 关闭客户端连接...");
-    if let Err(e) = transport.disconnect().await {
-        println!("❌ 关闭连接失败: {:?}", e);
-    } else {
-        println!("✅ 连接已关闭");
-    }
-
-    println!("🏁 客户端测试完成");
-    println!();
-    println!("🎯 标准客户端特性:");
-    println!("   ✅ 使用TransportClientBuilder");
-    println!("   ✅ 标准协议栈和数据包格式");
-    println!("   ✅ 完整的事件处理");
-    println!("   ✅ 与服务器协议兼容");
-
+    // 等待事件处理完成
+    info!("⏳ 等待事件处理完成...");
+    let _ = tokio::time::timeout(Duration::from_secs(5), event_handle).await;
+    
+    // 优雅断开连接
+    info!("🔌 断开连接...");
+    transport.disconnect().await?;
+    
+    info!("👋 TCP Echo客户端示例完成");
     Ok(())
 } 

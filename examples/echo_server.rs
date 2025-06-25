@@ -1,17 +1,13 @@
-/// Echo服务器 - 新API设计演示
-/// 🎯 使用推荐的模式A：先定义事件处理，后启动服务器
-/// 
-/// 专注于TCP协议，展示事件流的完整功能
+/// Echo服务器 - 简化API演示
+/// 🎯 只有字节版本的API，用户负责字符串转换
 
 use msgtrans::{
     transport::TransportServerBuilder,
     protocol::TcpServerConfig,
     protocol::WebSocketServerConfig,
     protocol::QuicServerConfig,
-    event::{ServerEvent, RequestContext},
-    packet::Packet,
+    event::ServerEvent,
 };
-use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,8 +16,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_max_level(tracing::Level::DEBUG)
         .init();
     
-    println!("🎯 Echo服务器 - 新API设计演示");
-    println!("=============================");
+    println!("🎯 Echo服务器 - 简化API演示 (只有字节版本)");
+    println!("============================================");
     println!("📋 使用模式A：先定义事件处理，后启动服务器");
     println!();
     
@@ -70,9 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("   会话ID: {}", session_id);
                     println!("   地址: {} ↔ {}", info.local_addr, info.peer_addr);
                     
-                    // 发送欢迎消息
-                    let welcome = Packet::one_way(1002, b"Welcome to Echo Server!".to_vec());
-                    match transport.send_to_session(session_id, welcome).await {
+                    // 发送欢迎消息 - 使用简化字节API
+                    match transport.send(session_id, "Welcome to Echo Server!".as_bytes()).await {
                         Ok(()) => {
                             println!("✅ 欢迎消息发送成功 -> 会话 {}", session_id);
                         }
@@ -81,14 +76,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                     
-                    // 🎯 演示服务端向客户端发送请求
+                    // 🎯 演示服务端向客户端发送请求 - 使用简化字节API
                     // 等待100ms确保客户端完全准备好
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     println!("🔄 服务端向客户端发送请求...");
-                    let server_request = Packet::request(9001, b"Server asks: What is your status?".to_vec());
-                    match transport.request_to_session(session_id, server_request).await {
-                        Ok(response) => {
-                            let response_text = String::from_utf8_lossy(&response.payload);
+                    match transport.request(session_id, "Server asks: What is your status?".as_bytes()).await {
+                        Ok(response_bytes) => {
+                            let response_text = String::from_utf8_lossy(&response_bytes);
                             println!("✅ 收到客户端响应: \"{}\"", response_text);
                         }
                         Err(e) => {
@@ -105,20 +99,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("   原因: {:?}", reason);
                     connections.remove(&session_id);
                 }
-                ServerEvent::MessageReceived { session_id, packet } => {
+                ServerEvent::MessageReceived { session_id, message } => {
                     event_count += 1;
-                    let message = String::from_utf8_lossy(&packet.payload);
+                    let msg_text = String::from_utf8_lossy(&message.data);
                     println!("📥 事件 #{}: 收到消息", event_count);
                     println!("   会话: {}", session_id);
-                    println!("   包ID: {}", packet.header.message_id);
-                    println!("   包类型: {:?}", packet.header.packet_type);
-                    println!("   大小: {} bytes", packet.payload.len());
-                    println!("   内容: \"{}\"", message);
+                    println!("   消息ID: {}", message.message_id);
+                    println!("   大小: {} bytes", message.data.len());
+                    println!("   内容: \"{}\"", msg_text);
                     
-                    // 发送回显
-                    let echo_message = format!("Echo: {}", message);
-                    let echo_packet = Packet::one_way(packet.header.message_id + 1000, echo_message.as_bytes());
-                    match transport.send_to_session(session_id, echo_packet).await {
+                    // 发送回显 - 使用简化字节API
+                    let echo_message = format!("Echo: {}", msg_text);
+                    match transport.send(session_id, echo_message.as_bytes()).await {
                         Ok(()) => {
                             println!("✅ 回显发送成功 -> 会话 {}", session_id);
                         }
@@ -127,8 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
-                ServerEvent::MessageSent { session_id, packet_id } => {
-                    println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, packet_id);
+                ServerEvent::MessageSent { session_id, message_id } => {
+                    println!("📤 消息发送确认: 会话 {}, 消息ID {}", session_id, message_id);
                 }
                 ServerEvent::TransportError { session_id, error } => {
                     println!("⚠️ 传输错误: {:?} (会话: {:?})", error, session_id);
@@ -139,13 +131,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ServerEvent::ServerStopped => {
                     println!("🛑 服务器停止通知");
                 }
-                ServerEvent::RequestReceived { session_id, ctx } => {
-                    println!("🔄 收到请求: 会话: {}, ID: {}", session_id, ctx.request.header.message_id);
-                    ctx.respond_with(|req| {
-                        let mut resp = req.clone();
-                        resp.payload = format!("Echo: {}", String::from_utf8_lossy(&req.payload)).into_bytes();
-                        resp
-                    });
+                ServerEvent::RequestReceived { session_id, mut request } => {
+                    println!("🔄 收到请求: 会话: {}, ID: {}", session_id, request.request_id);
+                    let request_text = String::from_utf8_lossy(&request.data);
+                    let response_text = format!("Echo: {}", request_text);
+                    request.respond_bytes(response_text.as_bytes());
+                    println!("✅ 请求响应已发送");
                 }
             }
         }
@@ -158,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🌐 现在启动服务器...");
     println!();
     println!("🎯 测试方法:");
-    println!("   在另一个终端运行: cargo run --example echo_client_tcp_new");
+    println!("   在另一个终端运行: cargo run --example echo_client_tcp");
     println!("   或使用: telnet 127.0.0.1 8001");
     println!();
     

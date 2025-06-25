@@ -232,6 +232,8 @@ pub struct TransportClient {
     // 🎯 当前连接的会话ID - 使用 Arc<RwLock> 以便修改
     current_session_id: Arc<RwLock<Option<SessionId>>>,
     event_sender: tokio::sync::broadcast::Sender<crate::event::ClientEvent>,
+    // 🎯 消息ID计数器 - 用于自动生成消息ID
+    message_id_counter: std::sync::atomic::AtomicU32,
 }
 
 impl TransportClient {
@@ -246,6 +248,7 @@ impl TransportClient {
             protocol_config,
             current_session_id: Arc::new(RwLock::new(None)),
             event_sender: tokio::sync::broadcast::channel(16).0,
+            message_id_counter: std::sync::atomic::AtomicU32::new(1),
         }
     }
     
@@ -380,14 +383,33 @@ impl TransportClient {
         }
     }
     
-    /// 🚀 发送数据包 - 客户端核心方法
-    pub async fn send(&self, packet: crate::packet::Packet) -> Result<(), TransportError> {
-        if self.is_connected().await {
-            tracing::debug!("TransportClient 发送数据包到当前连接");
-            self.inner.send(packet).await
-        } else {
-            Err(TransportError::connection_error("Not connected - call connect() first", false))
+    /// 🚀 发送字节数据 - 简化API
+    pub async fn send(&self, data: &[u8]) -> Result<(), TransportError> {
+        if !self.is_connected().await {
+            return Err(TransportError::connection_error("Not connected - call connect() first", false));
         }
+        
+        let message_id = self.message_id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let packet = crate::packet::Packet::one_way(message_id, data.to_vec());
+        
+        tracing::debug!("TransportClient 发送数据: {} bytes (ID: {})", data.len(), message_id);
+        self.inner.send(packet).await
+    }
+    
+    /// 🔄 发送字节请求并等待响应 - 简化API
+    pub async fn request(&self, data: &[u8]) -> Result<Vec<u8>, TransportError> {
+        if !self.is_connected().await {
+            return Err(TransportError::connection_error("Not connected - call connect() first", false));
+        }
+        
+        let message_id = self.message_id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let packet = crate::packet::Packet::request(message_id, data.to_vec());
+        
+        tracing::debug!("TransportClient 发送请求: {} bytes (ID: {})", data.len(), message_id);
+        let response_packet = self.inner.request(packet).await?;
+        
+        tracing::debug!("TransportClient 收到响应: {} bytes (ID: {})", response_packet.payload.len(), response_packet.header.message_id);
+        Ok(response_packet.payload.clone())
     }
     
     /// 📊 检查连接状态
@@ -438,10 +460,7 @@ impl TransportClient {
         Err(TransportError::connection_error("Stats not implemented for Transport yet", false))
     }
 
-    /// 客户端 request 方法，直接转发到内部 Transport
-    pub async fn request(&self, packet: crate::packet::Packet) -> Result<crate::packet::Packet, crate::error::TransportError> {
-        self.inner.request(packet).await
-    }
+
 
     /// 业务层订阅 ClientEvent
     pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::ClientEvent> {
@@ -459,10 +478,10 @@ impl TransportClient {
                 tracing::debug!("🔄 TransportClient 事件转发任务启动");
                 
                 while let Ok(transport_event) = transport_events.recv().await {
-                    tracing::debug!("📥 TransportClient 收到Transport事件: {:?}", transport_event);
+                    tracing::debug!("📥 TransportClient 收到Transport事件");
                     
-                    // 转换为ClientEvent并转发
-                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event.clone()) {
+                    // 🔧 修复：直接移动所有权，避免clone导致RequestContext重复
+                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
                         tracing::debug!("📤 TransportClient 转发ClientEvent: {:?}", client_event);
                         
                         if let Err(e) = client_event_sender.send(client_event) {
@@ -470,7 +489,7 @@ impl TransportClient {
                             // 如果没有接收者，继续运行
                         }
                     } else {
-                        tracing::debug!("🚫 TransportClient 跳过不支持的事件: {:?}", transport_event);
+                        tracing::debug!("🚫 TransportClient 跳过不支持的事件");
                     }
                 }
                 

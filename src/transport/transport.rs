@@ -363,11 +363,34 @@ impl Transport {
         }
     }
 
-    /// 统一事件处理入口，所有 TransportEvent 都交给这里
+    /// 🎯 解压和解包 Packet payload，隐藏协议复杂性
+    fn decode_payload(&self, packet: &Packet) -> Result<Vec<u8>, TransportError> {
+        let payload = &packet.payload;
+        
+        // 🔧 处理压缩（如果实现了压缩）
+        let data = match packet.header.flags.compression() {
+            crate::packet::CompressionType::None => payload.clone(), // 无压缩
+            crate::packet::CompressionType::Zlib => {
+                // TODO: 解压缩 zlib
+                tracing::warn!("⚠️ zlib 解压缩未实现，使用原始数据");
+                payload.clone()
+            }
+            crate::packet::CompressionType::Zstd => {
+                // TODO: 解压缩 zstd  
+                tracing::warn!("⚠️ zstd 解压缩未实现，使用原始数据");
+                payload.clone()
+            }
+        };
+        
+        Ok(data)
+    }
+
+    /// 🎯 统一事件处理入口 - 在此层完成解包并发送用户友好事件
     pub async fn on_event(&self, event: crate::event::TransportEvent) {
         match event {
             crate::event::TransportEvent::MessageReceived(packet) => {
                 tracing::debug!("🎯 Transport::on_event 处理消息包: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
+                
                 match packet.header.packet_type {
                     crate::packet::PacketType::Response => {
                         let id = packet.header.message_id;
@@ -375,27 +398,94 @@ impl Transport {
                         let completed = self.request_tracker.complete(id, packet);
                         tracing::debug!("🔄 响应包处理结果: ID={}, completed={}", id, completed);
                     }
+                    
                     crate::packet::PacketType::Request => {
                         let id = packet.header.message_id;
-                        tracing::debug!("🔄 收到请求包，创建 RequestContext: ID={}, type={:?}", id, packet.header.packet_type);
-                        let transport = self.clone();
-                        let session_id = *self.session_id.lock().await.as_ref().expect("session_id 必须存在");
-                        let ctx = crate::event::RequestContext::new(
-                            session_id,
-                            packet.clone(),
-                            Box::new(move |resp| {
-                                let transport = transport.clone();
+                        tracing::debug!("🔄 收到请求包，创建用户友好的 RequestContext: ID={}, type={:?}", id, packet.header.packet_type);
+                        
+                        // 🎯 解包数据
+                        match self.decode_payload(&packet) {
+                            Ok(data) => {
+                                let session_id = self.session_id.lock().await.as_ref().cloned();
+                                let transport = self.clone();
+                                let message_id = packet.header.message_id;
+                                
+                                // 🎯 创建用户友好的 RequestContext
+                                let request_ctx = crate::event::RequestContext::new(
+                                    session_id,
+                                    data,
+                                    message_id,
+                                    Arc::new(move |response_data: Vec<u8>| {
+                                        let transport = transport.clone();
+                                        tokio::spawn(async move {
+                                            // 🎯 自动封装响应数据为 Packet
+                                            let response_packet = crate::packet::Packet {
+                                                header: crate::packet::FixedHeader {
+                                                    version: 1,
+                                                    packet_type: crate::packet::PacketType::Response,
+                                                    flags: crate::packet::PacketFlags::new(),
+                                                    reserved: 0,
+                                                    payload_len: response_data.len() as u32,
+                                                    message_id,
+                                                    ext_header_len: 0,
+                                                    reserved2: 0,
+                                                },
+                                                ext_header: Vec::new(),
+                                                payload: response_data,
+                                            };
+                                            
+                                            if let Err(e) = transport.send(response_packet).await {
+                                                tracing::error!("❌ 发送响应失败: {}", e);
+                                            }
+                                        });
+                                    }),
+                                );
+                                
+                                // 🎯 发送 TransportEvent::RequestReceived 事件
+                                tracing::debug!("📤 发送 RequestReceived 事件: ID={}", id);
+                                // 🔧 修复：克隆RequestContext用于广播，这样原始实例不会立即被丢弃
+                                let _ = self.event_sender.send(crate::event::TransportEvent::RequestReceived(request_ctx.clone()));
+                                
+                                // 🔧 修复：将原始实例设为主实例并明确保留一段时间，防止立即被丢弃导致警告
+                                let mut primary_ctx = request_ctx;
+                                primary_ctx.set_primary();
+                                
+                                // 延迟丢弃主实例，给事件处理足够时间
                                 tokio::spawn(async move {
-                                    let _ = transport.send(resp).await;
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                    drop(primary_ctx);
                                 });
-                            }),
-                        );
-                        tracing::debug!("📤 发送 RequestReceived 事件: ID={}", id);
-                        let _ = self.event_sender.send(crate::event::TransportEvent::RequestReceived(Arc::new(ctx)));
+                            }
+                            Err(e) => {
+                                tracing::error!("❌ 解包请求数据失败: {}", e);
+                                let _ = self.event_sender.send(crate::event::TransportEvent::TransportError { error: e });
+                            }
+                        }
                     }
+                    
                     crate::packet::PacketType::OneWay => {
                         tracing::debug!("📥 处理单向消息包: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
-                        let _ = self.event_sender.send(crate::event::TransportEvent::MessageReceived(packet));
+                        
+                        // 🎯 解包数据
+                        match self.decode_payload(&packet) {
+                            Ok(data) => {
+                                let session_id = self.session_id.lock().await.as_ref().cloned();
+                                
+                                // 🎯 创建用户友好的 Message
+                                let message = crate::event::Message {
+                                    peer: session_id,
+                                    data,
+                                    message_id: packet.header.message_id,
+                                };
+                                
+                                // 🎯 发送用户友好的消息事件 (保持向后兼容)
+                                let _ = self.event_sender.send(crate::event::TransportEvent::MessageReceived(packet));
+                            }
+                            Err(e) => {
+                                tracing::error!("❌ 解包消息数据失败: {}", e);
+                                let _ = self.event_sender.send(crate::event::TransportEvent::TransportError { error: e });
+                            }
+                        }
                     }
                 }
             }

@@ -52,7 +52,7 @@ impl TransportClient {
     pub fn is_connected(&self) -> bool;
     
     // 🔧 高级API (可选)
-    pub async fn send_to_session(&self, session_id: SessionId, packet: Packet) -> Result<()>;
+    pub async fn send(&self, session_id: SessionId, packet: Packet) -> Result<()>;
     pub async fn close_session(&self, session_id: SessionId) -> Result<()>;
 }
 ```
