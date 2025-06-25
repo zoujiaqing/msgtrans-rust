@@ -1,13 +1,10 @@
-/// WebSocket Echo 客户端 - 使用TransportClientBuilder
-/// 🎯 使用标准的Transport客户端构建器，确保协议兼容
-/// 
-/// 与echo_server_new_api.rs配套使用
+/// WebSocket Echo 客户端 - 简化API演示
+/// 🎯 演示简化的字节API，隐藏所有Packet复杂性
 
 use std::time::Duration;
 use msgtrans::{
     transport::{client::TransportClientBuilder},
     protocol::WebSocketClientConfig,
-    packet::Packet,
     event::ClientEvent,
 };
 
@@ -15,14 +12,12 @@ use msgtrans::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 启用详细日志
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::INFO)
         .init();
 
-    println!("🎯 WebSocket Echo 客户端 - TransportClientBuilder版本");
-    println!("==============================================");
-    println!();
+    tracing::info!("🚀 启动WebSocket Echo客户端 (简化API - 只有字节版本)");
 
-    // 配置WebSocket客户端 - 使用链式配置
+    // 🎯 配置WebSocket客户端
     let websocket_config = WebSocketClientConfig::new()
         .with_target_url("ws://127.0.0.1:8002")
         .with_connect_timeout(Duration::from_secs(10))
@@ -30,151 +25,98 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_pong_timeout(Duration::from_secs(10))
         .with_max_frame_size(8192)
         .with_max_message_size(65536)
-        .with_retry_config(Default::default())
         .with_verify_tls(false) // 测试环境
         .build()?;
 
-    println!("🔌 准备连接到WebSocket服务器: {}", websocket_config.target_url);
-
-    // 🔧 修正：使用TransportClientBuilder构建标准客户端
+    // 🎯 构建TransportClient
     let mut transport = TransportClientBuilder::new()
         .with_protocol(websocket_config)
         .connect_timeout(Duration::from_secs(10))
-        .enable_connection_monitoring(true)
         .build()
         .await?;
-        
-    println!("✅ 客户端Transport构建成功");
 
-    // 建立连接
+    tracing::info!("🔌 连接到WebSocket服务端...");
     transport.connect().await?;
-    println!("✅ 连接建立成功");
+    tracing::info!("✅ 连接成功!");
 
-    // 获取事件流来接收回显消息
+    tracing::info!("📤 发送消息...");
+    // 🎯 使用简化的字节API
+    transport.send(b"Hello from WebSocket client!").await?;
+    transport.send(b"Binary data from client").await?;
+
+    tracing::info!("👂 开始监听事件...");
     let mut events = transport.subscribe_events();
-    // 启动接收任务来处理回显
-    let receiver_task = tokio::spawn(async move {
-        println!("🎧 开始监听回显事件...");
-        let mut received_count = 0u64;
-        loop {
-            match events.recv().await {
-                Ok(event) => {
-                    match event {
-                        ClientEvent::MessageReceived { packet } => {
-                            received_count += 1;
-                            let message = String::from_utf8_lossy(&packet.payload);
-                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.header.message_id);
-                            println!("   内容: \"{}\"", message);
-                            if message.contains("Message #4") {
-                                println!("🎯 收到最后一条回显，准备结束");
-                                break;
-                            }
-                        }
-                        ClientEvent::RequestReceived { ctx } => {
-                            let request_text = String::from_utf8_lossy(&ctx.request.payload);
-                            println!("🔄 客户端收到服务端请求: ID: {}", ctx.request.header.message_id);
-                            println!("   请求内容: \"{}\"", request_text);
-                            
-                            // 🎯 智能响应服务端的不同请求
-                            let response_text = if request_text.contains("status") {
-                                "Client status: All systems operational!"
-                            } else {
-                                "Client received your request successfully"
-                            };
-                            
-                            ctx.respond_with(|req| {
-                                let mut resp = req.clone();
-                                resp.payload = response_text.as_bytes().to_vec();
-                                resp
-                            });
-                            
-                            println!("✅ 已响应服务端请求: \"{}\"", response_text);
-                        }
-                        ClientEvent::Disconnected { reason } => {
-                            println!("🔌 连接已关闭: {:?}", reason);
-                            break;
-                        }
-                        ClientEvent::Connected { info } => {
-                            println!("🔗 连接已建立: {} ↔ {}", info.local_addr, info.peer_addr);
-                        }
-                        ClientEvent::Error { error } => {
-                            println!("⚠️ 传输错误: {:?}", error);
-                            break;
-                        }
-                        ClientEvent::MessageSent { packet_id } => {
-                            println!("ℹ️ 消息发送确认: ID {}", packet_id);
-                        }
-                    }
+    
+    // 🎯 并行处理事件，避免阻塞
+    let event_task = tokio::spawn(async move {
+        while let Ok(event) = events.recv().await {
+            match event {
+                ClientEvent::Connected { info } => {
+                    tracing::info!("🔗 连接建立: {} ↔ {}", info.local_addr, info.peer_addr);
                 }
-                Err(e) => {
-                    println!("❌ 事件接收错误: {:?}", e);
+                ClientEvent::Disconnected { reason } => {
+                    tracing::info!("🔌 连接关闭: {:?}", reason);
+                    break;
+                }
+                ClientEvent::MessageReceived(message) => {
+                    let content = String::from_utf8_lossy(&message.data);
+                    tracing::info!("📥 收到消息 (ID: {}): {}", message.message_id, content);
+                }
+                ClientEvent::RequestReceived(mut request) => {
+                    let content = String::from_utf8_lossy(&request.data);
+                    tracing::info!("📥 收到服务端请求 (ID: {}): {}", request.request_id, content);
+                    tracing::info!("📤 响应服务端请求...");
+                    
+                    // 🎯 简化的响应API
+                    request.respond_bytes(b"Hello from client response!");
+                    tracing::info!("✅ 已响应服务端请求 (ID: {})", request.request_id);
+                }
+                ClientEvent::MessageSent { message_id } => {
+                    tracing::info!("✅ 消息发送成功 (ID: {})", message_id);
+                }
+                ClientEvent::Error { error } => {
+                    tracing::error!("❌ 传输错误: {:?}", error);
                     break;
                 }
             }
         }
-        println!("📡 事件接收器已停止 (共收到 {} 条回显)", received_count);
     });
 
-    // 🎯 准备测试消息
-    let test_messages = vec![
-        "Hello, TransportClient!",
-        "测试标准客户端协议", 
-        "Message with numbers: 12345",
-        "Message #4 - Final test",
-    ];
+    // 等待100ms让连接稳定
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    println!("📤 开始发送测试消息...");
-    println!();
-
-    for (i, message) in test_messages.iter().enumerate() {
-        println!("📤 发送消息 #{}: \"{}\"", i + 1, message);
-        // 🎯 使用新的简化API - 直接传字符串
-        match transport.request(message).await {
-            Ok(response) => {
-                println!("✅ 收到响应 #{}: {}", i + 1, response);
-            }
-            Err(e) => {
-                println!("❌ 请求失败: {:?}", e);
-                break;
-            }
+    tracing::info!("🔄 发送请求...");
+    // 🎯 简化的请求API
+    match transport.request(b"What time is it?").await {
+        Ok(response) => {
+            let content = String::from_utf8_lossy(&response);
+            tracing::info!("📥 收到响应: {}", content);
         }
-        if i < test_messages.len() - 1 {
-            println!("⏳ 等待2秒后发送下一条...");
-            tokio::time::sleep(Duration::from_secs(2)).await;
+        Err(e) => {
+            tracing::error!("❌ 请求失败: {:?}", e);
         }
     }
 
-    println!();
-    println!("⏳ 等待接收所有回显消息...");
-    
-    // 增加等待时间，给服务端足够时间发送回显
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    
-    // 等待接收器任务完成或超时
-    match tokio::time::timeout(Duration::from_secs(15), receiver_task).await {
-        Ok(_) => {
-            println!("✅ 所有回显已接收");
+    match transport.request(b"Binary request").await {
+        Ok(response) => {
+            tracing::info!("📥 收到字节响应: {} bytes", response.len());
+            let content = String::from_utf8_lossy(&response);
+            tracing::info!("   内容: {}", content);
         }
-        Err(_) => {
-            println!("⏰ 等待回显超时，但这是正常的");
+        Err(e) => {
+            tracing::error!("❌ 字节请求失败: {:?}", e);
         }
     }
+
+    tracing::info!("⏳ 等待事件处理完成...");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    tracing::info!("🔌 断开连接...");
+    transport.disconnect().await?;
     
-    // 关闭连接
-    println!("👋 关闭客户端连接...");
-    if let Err(e) = transport.disconnect().await {
-        println!("❌ 关闭连接失败: {:?}", e);
-    } else {
-        println!("✅ 连接已关闭");
-    }
+    // 等待事件任务结束
+    let _ = tokio::time::timeout(Duration::from_secs(1), event_task).await;
 
-    println!("🏁 客户端测试完成");
-    println!();
-    println!("🎯 标准客户端特性:");
-    println!("   ✅ 使用TransportClientBuilder");
-    println!("   ✅ 标准协议栈和数据包格式");
-    println!("   ✅ 完整的事件处理");
-    println!("   ✅ 与服务器协议兼容");
-
+    tracing::info!("👋 WebSocket Echo客户端示例完成");
     Ok(())
 } 
