@@ -6,6 +6,7 @@ use crate::packet::Packet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use crate::packet::PacketType;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// 传输层事件的统一抽象
 #[derive(Debug, Clone)]
@@ -392,8 +393,8 @@ impl Clone for RequestContext {
             peer: self.peer,
             data: self.data.clone(),
             request_id: self.request_id,
-            responder: self.responder.clone(),
-            responded: self.responded.clone(), // 🔧 修复：共享响应状态
+            responder: self.responder.clone(), // 🔧 修复：共享响应状态
+            responded: self.responded.clone(), // 🔧 克隆实例不是主实例，不负责检查响应
             is_primary: false, // 🔧 克隆实例不是主实例，不负责检查响应
         }
     }
@@ -427,11 +428,8 @@ pub enum ClientEvent {
     /// 连接已断开
     Disconnected { reason: CloseReason },
     
-    /// 🎯 收到消息（已解包）
-    MessageReceived(Message),
-    
-    /// 🎯 收到请求（已解包，可直接响应）
-    RequestReceived(RequestContext),
+    /// 🎯 收到消息（统一上下文，包含所有信息）
+    MessageReceived(TransportContext),
     
     /// 消息发送确认
     MessageSent { message_id: u32 },
@@ -448,11 +446,8 @@ pub enum ServerEvent {
     /// 连接关闭
     ConnectionClosed { session_id: SessionId, reason: CloseReason },
     
-    /// 🎯 收到消息（已解包）
-    MessageReceived { session_id: SessionId, message: Message },
-    
-    /// 🎯 收到请求（已解包，可直接响应）
-    RequestReceived { session_id: SessionId, request: RequestContext },
+    /// 🎯 收到消息（统一上下文，包含所有信息）
+    MessageReceived { session_id: SessionId, context: TransportContext },
     
     /// 消息发送确认
     MessageSent { session_id: SessionId, message_id: u32 },
@@ -495,15 +490,28 @@ impl ServerEvent {
                 Some(ServerEvent::ConnectionEstablished { session_id, info }),
             TransportEvent::ConnectionClosed { reason } =>
                 Some(ServerEvent::ConnectionClosed { session_id, reason }),
-                         TransportEvent::MessageReceived(packet) =>
-                 Some(ServerEvent::MessageReceived { session_id, message: Message { peer: Some(session_id), data: packet.payload.clone(), message_id: packet.header.message_id } }),
+                         TransportEvent::MessageReceived(packet) => {
+                 // 转换为统一的TransportContext
+                 let context = TransportContext::new_oneway(
+                     Some(session_id), 
+                     packet.header.message_id, 
+                     packet.payload.clone()
+                 );
+                 Some(ServerEvent::MessageReceived { session_id, context })
+             }
              TransportEvent::MessageSent { packet_id } =>
                  Some(ServerEvent::MessageSent { session_id, message_id: packet_id }),
             TransportEvent::TransportError { error } =>
                 Some(ServerEvent::TransportError { session_id: Some(session_id), error }),
                          TransportEvent::RequestReceived(ctx) => {
-                 // 🔧 克隆实例用于用户处理，主实例管理在Transport层
-                 Some(ServerEvent::RequestReceived { session_id, request: ctx })
+                 // 🔧 将RequestContext转换为TransportContext
+                 let transport_ctx = TransportContext::new_request(
+                     Some(session_id),
+                     ctx.request_id,
+                     ctx.data.clone(),
+                     ctx.responder.clone()
+                 );
+                 Some(ServerEvent::MessageReceived { session_id, context: transport_ctx })
              }
             TransportEvent::ServerStarted { address } =>
                 Some(ServerEvent::ServerStarted { address }),
@@ -525,12 +533,17 @@ impl ClientEvent {
             TransportEvent::MessageReceived(packet) => {
                 match packet.header.packet_type {
                     crate::packet::PacketType::Request => {
-                        // Request包由Transport处理并发送RequestReceived事件
+                        // Request包由TransportClient特殊处理
                         None
                     }
                     _ => {
                         // OneWay和Response包正常处理
-                        Some(ClientEvent::MessageReceived(Message { peer: None, data: packet.payload.clone(), message_id: packet.header.message_id }))
+                        let context = TransportContext::new_oneway(
+                            None, 
+                            packet.header.message_id, 
+                            packet.payload.clone()
+                        );
+                        Some(ClientEvent::MessageReceived(context))
                     }
                 }
             }
@@ -538,10 +551,7 @@ impl ClientEvent {
                  Some(ClientEvent::MessageSent { message_id: packet_id }),
             TransportEvent::TransportError { error } =>
                 Some(ClientEvent::Error { error }),
-                         TransportEvent::RequestReceived(ctx) => {
-                 // 🔧 克隆实例用于用户处理，主实例管理在Transport层
-                 Some(ClientEvent::RequestReceived(ctx))
-             }
+
             _ => None,
         }
     }
@@ -557,7 +567,7 @@ impl ClientEvent {
     /// 判断是否为数据传输事件
     pub fn is_data_event(&self) -> bool {
         matches!(self, 
-            ClientEvent::MessageReceived { .. } | 
+            ClientEvent::MessageReceived(..) | 
             ClientEvent::MessageSent { .. }
         )
     }
@@ -565,5 +575,215 @@ impl ClientEvent {
     /// 判断是否为错误事件
     pub fn is_error_event(&self) -> bool {
         matches!(self, ClientEvent::Error { .. })
+    }
+}
+
+/// 🎯 统一的传输上下文 - 用于所有接收的消息
+#[derive(Clone)]
+pub struct TransportContext {
+    /// 消息来源会话ID（客户端为None，服务端为Some）
+    pub peer: Option<SessionId>,
+    /// 系统分配的消息ID
+    pub message_id: u32,
+    /// 解压后的纯数据
+    pub data: Vec<u8>,
+    /// 接收时间戳
+    pub timestamp: Instant,
+    /// 消息类型（内部使用）
+    kind: TransportContextKind,
+}
+
+/// 消息类型枚举
+#[derive(Clone)]
+enum TransportContextKind {
+    /// 单向消息（不需要响应）
+    OneWay,
+    /// 请求消息（需要响应）
+    Request {
+        responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
+        responded: Arc<AtomicBool>,
+        is_primary: bool, // 标记是否为主实例
+    },
+}
+
+impl TransportContext {
+    /// 创建单向消息上下文
+    pub fn new_oneway(
+        peer: Option<SessionId>,
+        message_id: u32,
+        data: Vec<u8>,
+    ) -> Self {
+        Self {
+            peer,
+            message_id,
+            data,
+            timestamp: Instant::now(),
+            kind: TransportContextKind::OneWay,
+        }
+    }
+
+    /// 创建请求消息上下文
+    pub fn new_request(
+        peer: Option<SessionId>,
+        message_id: u32,
+        data: Vec<u8>,
+        responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
+    ) -> Self {
+        Self {
+            peer,
+            message_id,
+            data,
+            timestamp: Instant::now(),
+            kind: TransportContextKind::Request {
+                responder,
+                responded: Arc::new(AtomicBool::new(false)),
+                is_primary: false, // 默认不是主实例
+            },
+        }
+    }
+
+    /// 设置为主实例（负责检查响应状态）
+    pub(crate) fn set_primary(&mut self) {
+        if let TransportContextKind::Request { is_primary, .. } = &mut self.kind {
+            *is_primary = true;
+        }
+    }
+
+    /// 检查是否为请求类型
+    pub fn is_request(&self) -> bool {
+        matches!(self.kind, TransportContextKind::Request { .. })
+    }
+    
+    /// 将数据转换为字符串（损失转换）
+    pub fn as_text_lossy(&self) -> String {
+        String::from_utf8_lossy(&self.data).to_string()
+    }
+
+    /// 响应请求（仅请求类型可用）
+    pub fn respond(mut self, response: Vec<u8>) {
+        match &mut self.kind {
+            TransportContextKind::Request { responder, responded, .. } => {
+                if responded.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+                    responder(response);
+                } else {
+                    tracing::warn!("⚠️ TransportContext 已经响应过了 (ID: {})", self.message_id);
+                }
+            }
+            TransportContextKind::OneWay => {
+                tracing::warn!("⚠️ 无法响应单向消息 (ID: {})", self.message_id);
+            }
+        }
+    }
+
+    /// 便利方法：响应字节数据
+    pub fn respond_bytes(self, response: &[u8]) {
+        self.respond(response.to_vec());
+    }
+}
+
+impl std::fmt::Debug for TransportContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportContext")
+            .field("peer", &self.peer)
+            .field("message_id", &self.message_id)
+            .field("data", &format!("{} bytes", self.data.len()))
+            .field("timestamp", &self.timestamp)
+            .field("is_request", &self.is_request())
+            .finish()
+    }
+}
+
+impl Drop for TransportContext {
+    fn drop(&mut self) {
+        if let TransportContextKind::Request { responded, is_primary, .. } = &self.kind {
+            // 只有主实例才检查响应状态
+            if *is_primary && !responded.load(Ordering::SeqCst) {
+                tracing::warn!("⚠️ TransportContext被丢弃但未响应 (ID: {})", self.message_id);
+            }
+        }
+    }
+}
+
+/// 🎯 统一的传输结果 - 用于所有发送操作的返回值
+#[derive(Debug, Clone)]
+pub struct TransportResult {
+    /// 目标会话ID（客户端为None，服务端为Some）
+    pub peer: Option<SessionId>,
+    /// 系统分配的消息ID
+    pub message_id: u32,
+    /// 发送时间戳
+    pub timestamp: Instant,
+    /// 响应数据（仅request有，send为None）
+    pub data: Option<Vec<u8>>,
+    /// 传输状态
+    pub status: TransportStatus,
+}
+
+/// 传输状态枚举
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransportStatus {
+    /// 发送成功
+    Sent,
+    /// 请求超时
+    Timeout,
+    /// 连接错误
+    ConnectionError,
+    /// 发送成功并收到响应
+    Completed,
+}
+
+impl TransportResult {
+    /// 创建发送结果
+    pub fn new_sent(peer: Option<SessionId>, message_id: u32) -> Self {
+        Self {
+            peer,
+            message_id,
+            timestamp: Instant::now(),
+            data: None,
+            status: TransportStatus::Sent,
+        }
+    }
+
+    /// 创建请求完成结果
+    pub fn new_completed(peer: Option<SessionId>, message_id: u32, data: Vec<u8>) -> Self {
+        Self {
+            peer,
+            message_id,
+            timestamp: Instant::now(),
+            data: Some(data),
+            status: TransportStatus::Completed,
+        }
+    }
+
+    /// 创建超时结果
+    pub fn new_timeout(peer: Option<SessionId>, message_id: u32) -> Self {
+        Self {
+            peer,
+            message_id,
+            timestamp: Instant::now(),
+            data: None,
+            status: TransportStatus::Timeout,
+        }
+    }
+    
+    /// 创建连接错误结果
+    pub fn new_connection_error(peer: Option<SessionId>, message_id: u32) -> Self {
+        Self {
+            peer,
+            message_id,
+            timestamp: Instant::now(),
+            data: None,
+            status: TransportStatus::ConnectionError,
+        }
+    }
+
+    /// 检查是否发送成功
+    pub fn is_sent(&self) -> bool {
+        matches!(self.status, TransportStatus::Sent | TransportStatus::Completed)
+    }
+
+    /// 检查是否有响应数据
+    pub fn has_response(&self) -> bool {
+        self.data.is_some()
     }
 } 

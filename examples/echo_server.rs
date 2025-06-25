@@ -66,10 +66,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("   会话ID: {}", session_id);
                     println!("   地址: {} ↔ {}", info.local_addr, info.peer_addr);
                     
-                    // 发送欢迎消息 - 使用简化字节API
+                    // 发送欢迎消息 - 使用统一字节API
                     match transport.send(session_id, "Welcome to Echo Server!".as_bytes()).await {
-                        Ok(()) => {
-                            println!("✅ 欢迎消息发送成功 -> 会话 {}", session_id);
+                        Ok(result) => {
+                            println!("✅ 欢迎消息发送成功 -> 会话 {} (ID: {})", session_id, result.message_id);
                         }
                         Err(e) => {
                             println!("❌ 欢迎消息发送失败: {:?}", e);
@@ -81,9 +81,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                     println!("🔄 服务端向客户端发送请求...");
                     match transport.request(session_id, "Server asks: What is your status?".as_bytes()).await {
-                        Ok(response_bytes) => {
-                            let response_text = String::from_utf8_lossy(&response_bytes);
-                            println!("✅ 收到客户端响应: \"{}\"", response_text);
+                        Ok(result) => {
+                            if let Some(response_data) = &result.data {
+                                let response_text = String::from_utf8_lossy(response_data);
+                                println!("✅ 收到客户端响应 (ID: {}): \"{}\"", result.message_id, response_text);
+                            } else {
+                                println!("⚠️ 请求结果无数据 (ID: {})", result.message_id);
+                            }
                         }
                         Err(e) => {
                             println!("❌ 服务端请求失败: {:?}", e);
@@ -99,23 +103,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("   原因: {:?}", reason);
                     connections.remove(&session_id);
                 }
-                ServerEvent::MessageReceived { session_id, message } => {
+                ServerEvent::MessageReceived { session_id, context } => {
                     event_count += 1;
-                    let msg_text = String::from_utf8_lossy(&message.data);
+                    let msg_text = context.as_text_lossy();
+                    let message_id = context.message_id;
+                    let is_request = context.is_request();
+                    
                     println!("📥 事件 #{}: 收到消息", event_count);
                     println!("   会话: {}", session_id);
-                    println!("   消息ID: {}", message.message_id);
-                    println!("   大小: {} bytes", message.data.len());
+                    println!("   消息ID: {}", message_id);
+                    println!("   大小: {} bytes", context.data.len());
                     println!("   内容: \"{}\"", msg_text);
                     
-                    // 发送回显 - 使用简化字节API
-                    let echo_message = format!("Echo: {}", msg_text);
-                    match transport.send(session_id, echo_message.as_bytes()).await {
-                        Ok(()) => {
-                            println!("✅ 回显发送成功 -> 会话 {}", session_id);
-                        }
-                        Err(e) => {
-                            println!("❌ 回显发送失败: {:?}", e);
+                    // 如果是请求，则响应
+                    if is_request {
+                        let echo_message = format!("Echo: {}", msg_text);
+                        println!("📤 响应客户端请求...");
+                        context.respond(echo_message.as_bytes().to_vec());
+                        println!("✅ 已响应客户端请求 (ID: {})", message_id);
+                    } else {
+                        // 发送回显 - 使用统一字节API
+                        let echo_message = format!("Echo: {}", msg_text);
+                        match transport.send(session_id, echo_message.as_bytes()).await {
+                            Ok(result) => {
+                                println!("✅ 回显发送成功 -> 会话 {} (ID: {})", session_id, result.message_id);
+                            }
+                            Err(e) => {
+                                println!("❌ 回显发送失败: {:?}", e);
+                            }
                         }
                     }
                 }
@@ -131,13 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ServerEvent::ServerStopped => {
                     println!("🛑 服务器停止通知");
                 }
-                ServerEvent::RequestReceived { session_id, mut request } => {
-                    println!("🔄 收到请求: 会话: {}, ID: {}", session_id, request.request_id);
-                    let request_text = String::from_utf8_lossy(&request.data);
-                    let response_text = format!("Echo: {}", request_text);
-                    request.respond_bytes(response_text.as_bytes());
-                    println!("✅ 请求响应已发送");
-                }
+
             }
         }
         

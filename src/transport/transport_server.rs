@@ -203,25 +203,44 @@ impl TransportServer {
         }
     }
 
-    /// 🚀 向指定会话发送字节数据 - 简化API
-    pub async fn send(&self, session_id: SessionId, data: &[u8]) -> Result<(), TransportError> {
+    /// 🚀 向指定会话发送字节数据 - 统一API返回TransportResult
+    pub async fn send(&self, session_id: SessionId, data: &[u8]) -> Result<crate::event::TransportResult, TransportError> {
         let message_id = self.message_id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let packet = crate::packet::Packet::one_way(message_id, data.to_vec());
         
         tracing::debug!("TransportServer 向会话 {} 发送数据: {} bytes (ID: {})", session_id, data.len(), message_id);
-        self.send_to_session(session_id, packet).await
+        
+        match self.send_to_session(session_id, packet).await {
+            Ok(()) => {
+                // 发送成功，返回TransportResult
+                Ok(crate::event::TransportResult::new_sent(Some(session_id), message_id))
+            }
+            Err(e) => Err(e),
+        }
     }
     
-    /// 🔄 向指定会话发送字节请求并等待响应 - 简化API
-    pub async fn request(&self, session_id: SessionId, data: &[u8]) -> Result<Vec<u8>, TransportError> {
+    /// 🔄 向指定会话发送字节请求并等待响应 - 统一API返回TransportResult
+    pub async fn request(&self, session_id: SessionId, data: &[u8]) -> Result<crate::event::TransportResult, TransportError> {
         let message_id = self.message_id_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let packet = crate::packet::Packet::request(message_id, data.to_vec());
         
         tracing::debug!("TransportServer 向会话 {} 发送请求: {} bytes (ID: {})", session_id, data.len(), message_id);
-        let response_packet = self.request_to_session(session_id, packet).await?;
         
-        tracing::debug!("TransportServer 收到会话 {} 的响应: {} bytes (ID: {})", session_id, response_packet.payload.len(), response_packet.header.message_id);
-        Ok(response_packet.payload.clone())
+        match self.request_to_session(session_id, packet).await {
+            Ok(response_packet) => {
+                tracing::debug!("TransportServer 收到会话 {} 的响应: {} bytes (ID: {})", session_id, response_packet.payload.len(), response_packet.header.message_id);
+                // 请求成功，返回包含响应数据的TransportResult
+                Ok(crate::event::TransportResult::new_completed(Some(session_id), message_id, response_packet.payload.clone()))
+            }
+            Err(e) => {
+                // 判断是否为超时错误
+                if e.to_string().contains("timeout") || e.to_string().contains("Timeout") {
+                    Ok(crate::event::TransportResult::new_timeout(Some(session_id), message_id))
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 
     /// 添加会话 - 使用连接已有的会话ID
@@ -579,12 +598,12 @@ impl TransportServer {
             crate::event::TransportEvent::MessageReceived(packet) => {
                 match packet.header.packet_type {
                     crate::packet::PacketType::Request => {
-                        // 创建 RequestContext 并发送 RequestReceived 事件
+                        // 创建统一的TransportContext
                         let server_clone = self.clone();
-                        let ctx = crate::event::RequestContext::new(
+                        let context = crate::event::TransportContext::new_request(
                             Some(session_id),
-                            packet.payload.clone(),
                             packet.header.message_id,
+                            packet.payload.clone(),
                             std::sync::Arc::new(move |response_data| {
                                 let server = server_clone.clone();
                                 tokio::spawn(async move {
@@ -606,9 +625,9 @@ impl TransportServer {
                                 });
                             }),
                         );
-                        let event = crate::event::ServerEvent::RequestReceived { 
+                        let event = crate::event::ServerEvent::MessageReceived { 
                             session_id, 
-                            request: ctx 
+                            context 
                         };
                         let _ = self.event_sender.send(event);
                     }
@@ -622,23 +641,23 @@ impl TransportServer {
                         } else {
                             tracing::warn!("⚠️ 收到未知响应包 (ID: {})，可能是超时或重复响应", message_id);
                             // 作为普通消息处理
-                            let message = crate::event::Message {
-                                peer: Some(session_id),
-                                data: packet.payload.clone(),
-                                message_id: packet.header.message_id,
-                            };
-                            let event = crate::event::ServerEvent::MessageReceived { session_id, message };
+                            let context = crate::event::TransportContext::new_oneway(
+                                Some(session_id),
+                                packet.header.message_id,
+                                packet.payload.clone(),
+                            );
+                            let event = crate::event::ServerEvent::MessageReceived { session_id, context };
                             let _ = self.event_sender.send(event);
                         }
                     }
                     _ => {
                         // 其他类型的数据包作为普通消息处理
-                        let message = crate::event::Message {
-                            peer: Some(session_id),
-                            data: packet.payload.clone(),
-                            message_id: packet.header.message_id,
-                        };
-                        let event = crate::event::ServerEvent::MessageReceived { session_id, message };
+                        let context = crate::event::TransportContext::new_oneway(
+                            Some(session_id),
+                            packet.header.message_id,
+                            packet.payload.clone(),
+                        );
+                        let event = crate::event::ServerEvent::MessageReceived { session_id, context };
                         let _ = self.event_sender.send(event);
                     }
                 }

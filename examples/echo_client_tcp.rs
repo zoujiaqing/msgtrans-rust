@@ -62,25 +62,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     info!("🎉 连接事件: {:?}", info);
                 }
                 
-                ClientEvent::MessageReceived(message) => {
-                    // 🎯 用户自己处理字节到字符串的转换
+                ClientEvent::MessageReceived(context) => {
+                    // 🎯 统一上下文处理所有消息类型
                     info!("📥 收到消息 (ID: {}): {}", 
-                        message.message_id, 
-                        message.as_text_lossy()
-                    );
-                }
-                
-                ClientEvent::RequestReceived(mut request) => {
-                    // 🎯 用户自己处理字节到字符串的转换
-                    info!("📥 收到服务端请求 (ID: {}): {}", 
-                        request.request_id, 
-                        request.as_text_lossy()
+                        context.message_id, 
+                        context.as_text_lossy()
                     );
                     
-                    // 🎯 响应字节数据
-                    info!("📤 响应服务端请求...");
-                    request.respond_bytes("Hello from client response!".as_bytes());
-                    info!("✅ 已响应服务端请求 (ID: {})", request.request_id);
+                    // 如果是请求，则响应
+                    if context.is_request() {
+                        let message_id = context.message_id;
+                        info!("📤 响应服务端请求...");
+                        context.respond(b"Hello from client response!".to_vec());
+                        info!("✅ 已响应服务端请求 (ID: {})", message_id);
+                    }
                 }
                 
                 ClientEvent::MessageSent { message_id } => {
@@ -106,20 +101,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     
-    // 🎯 展示简化发送API - 只有字节版本
+    // 🎯 展示统一发送API - 返回TransportResult
     info!("📤 发送消息...");
-    transport.send("Hello from TCP client!".as_bytes()).await?;
-    transport.send(b"Binary data from client").await?;
+    let result1 = transport.send("Hello from TCP client!".as_bytes()).await?;
+    info!("✅ 消息发送成功 (ID: {})", result1.message_id);
+    
+    let result2 = transport.send(b"Binary data from client").await?;
+    info!("✅ 消息发送成功 (ID: {})", result2.message_id);
     
     // 给事件处理一点时间
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    // 🎯 展示简化请求API - 只有字节版本，用户负责转换
+    // 🎯 展示统一请求API - 返回TransportResult
     info!("🔄 发送请求...");
     match transport.request("What time is it?".as_bytes()).await {
-        Ok(response_bytes) => {
-            let response_text = String::from_utf8_lossy(&response_bytes);
-            info!("📥 收到响应: {}", response_text);
+        Ok(result) => {
+            if let Some(response_data) = &result.data {
+                let response_text = String::from_utf8_lossy(response_data);
+                info!("📥 收到响应 (ID: {}): {}", result.message_id, response_text);
+            } else {
+                warn!("⚠️ 请求结果无数据 (ID: {})", result.message_id);
+            }
         }
         Err(e) => {
             warn!("⚠️ 请求失败: {:?}", e);
@@ -127,10 +129,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     match transport.request(b"Binary request").await {
-        Ok(response) => {
-            info!("📥 收到字节响应: {} bytes", response.len());
-            if let Ok(text) = String::from_utf8(response) {
-                info!("   内容: {}", text);
+        Ok(result) => {
+            if let Some(response) = &result.data {
+                info!("📥 收到字节响应 (ID: {}): {} bytes", result.message_id, response.len());
+                if let Ok(text) = String::from_utf8(response.clone()) {
+                    info!("   内容: {}", text);
+                }
+            } else {
+                warn!("⚠️ 字节请求结果无数据 (ID: {})", result.message_id);
             }
         }
         Err(e) => {

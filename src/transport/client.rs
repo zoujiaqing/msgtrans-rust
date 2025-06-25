@@ -383,8 +383,8 @@ impl TransportClient {
         }
     }
     
-    /// 🚀 发送字节数据 - 简化API
-    pub async fn send(&self, data: &[u8]) -> Result<(), TransportError> {
+    /// 🚀 发送字节数据 - 统一API返回TransportResult
+    pub async fn send(&self, data: &[u8]) -> Result<crate::event::TransportResult, TransportError> {
         if !self.is_connected().await {
             return Err(TransportError::connection_error("Not connected - call connect() first", false));
         }
@@ -393,11 +393,18 @@ impl TransportClient {
         let packet = crate::packet::Packet::one_way(message_id, data.to_vec());
         
         tracing::debug!("TransportClient 发送数据: {} bytes (ID: {})", data.len(), message_id);
-        self.inner.send(packet).await
+        
+        match self.inner.send(packet).await {
+            Ok(()) => {
+                // 发送成功，返回TransportResult
+                Ok(crate::event::TransportResult::new_sent(None, message_id))
+            }
+            Err(e) => Err(e),
+        }
     }
     
-    /// 🔄 发送字节请求并等待响应 - 简化API
-    pub async fn request(&self, data: &[u8]) -> Result<Vec<u8>, TransportError> {
+    /// 🔄 发送字节请求并等待响应 - 统一API返回TransportResult
+    pub async fn request(&self, data: &[u8]) -> Result<crate::event::TransportResult, TransportError> {
         if !self.is_connected().await {
             return Err(TransportError::connection_error("Not connected - call connect() first", false));
         }
@@ -406,10 +413,22 @@ impl TransportClient {
         let packet = crate::packet::Packet::request(message_id, data.to_vec());
         
         tracing::debug!("TransportClient 发送请求: {} bytes (ID: {})", data.len(), message_id);
-        let response_packet = self.inner.request(packet).await?;
         
-        tracing::debug!("TransportClient 收到响应: {} bytes (ID: {})", response_packet.payload.len(), response_packet.header.message_id);
-        Ok(response_packet.payload.clone())
+        match self.inner.request(packet).await {
+            Ok(response_packet) => {
+                tracing::debug!("TransportClient 收到响应: {} bytes (ID: {})", response_packet.payload.len(), response_packet.header.message_id);
+                // 请求成功，返回包含响应数据的TransportResult
+                Ok(crate::event::TransportResult::new_completed(None, message_id, response_packet.payload.clone()))
+            }
+            Err(e) => {
+                // 判断是否为超时错误
+                if e.to_string().contains("timeout") || e.to_string().contains("Timeout") {
+                    Ok(crate::event::TransportResult::new_timeout(None, message_id))
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
     
     /// 📊 检查连接状态
@@ -472,6 +491,7 @@ impl TransportClient {
         // 获取Transport的事件流
         if let Some(mut transport_events) = self.inner.get_event_stream().await {
             let client_event_sender = self.event_sender.clone();
+            let transport_for_response = self.inner.clone();
             
             // 启动转发任务
             tokio::spawn(async move {
@@ -480,16 +500,64 @@ impl TransportClient {
                 while let Ok(transport_event) = transport_events.recv().await {
                     tracing::debug!("📥 TransportClient 收到Transport事件");
                     
-                    // 🔧 修复：直接移动所有权，避免clone导致RequestContext重复
-                    if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
-                        tracing::debug!("📤 TransportClient 转发ClientEvent: {:?}", client_event);
-                        
-                        if let Err(e) = client_event_sender.send(client_event) {
-                            tracing::warn!("⚠️ TransportClient 事件转发失败: {:?}", e);
-                            // 如果没有接收者，继续运行
+                    // 🎯 特殊处理 MessageReceived 中的 Request 包
+                    match &transport_event {
+                        crate::event::TransportEvent::MessageReceived(packet) 
+                            if packet.header.packet_type == crate::packet::PacketType::Request => {
+                            
+                            // 为 Request 包创建带真实响应功能的 TransportContext
+                            let transport = transport_for_response.clone();
+                            let message_id = packet.header.message_id;
+                            
+                            let context = crate::event::TransportContext::new_request(
+                                None, 
+                                message_id, 
+                                packet.payload.clone(),
+                                Arc::new(move |response_data: Vec<u8>| {
+                                    let transport = transport.clone();
+                                    tokio::spawn(async move {
+                                        // 🎯 创建响应包
+                                        let response_packet = crate::packet::Packet {
+                                            header: crate::packet::FixedHeader {
+                                                version: 1,
+                                                packet_type: crate::packet::PacketType::Response,
+                                                flags: crate::packet::PacketFlags::new(),
+                                                reserved: 0,
+                                                payload_len: response_data.len() as u32,
+                                                message_id,
+                                                ext_header_len: 0,
+                                                reserved2: 0,
+                                            },
+                                            ext_header: Vec::new(),
+                                            payload: response_data,
+                                        };
+                                        
+                                        if let Err(e) = transport.send(response_packet).await {
+                                            tracing::error!("❌ TransportClient 发送响应失败: {}", e);
+                                        }
+                                    });
+                                })
+                            );
+                            
+                            let client_event = crate::event::ClientEvent::MessageReceived(context);
+                            tracing::debug!("📤 TransportClient 转发ClientEvent (Request): {:?}", client_event);
+                            
+                            if let Err(e) = client_event_sender.send(client_event) {
+                                tracing::warn!("⚠️ TransportClient 事件转发失败: {:?}", e);
+                            }
                         }
-                    } else {
-                        tracing::debug!("🚫 TransportClient 跳过不支持的事件");
+                        _ => {
+                            // 其他事件使用标准转换
+                            if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
+                                tracing::debug!("📤 TransportClient 转发ClientEvent: {:?}", client_event);
+                                
+                                if let Err(e) = client_event_sender.send(client_event) {
+                                    tracing::warn!("⚠️ TransportClient 事件转发失败: {:?}", e);
+                                }
+                            } else {
+                                tracing::debug!("🚫 TransportClient 跳过不支持的事件");
+                            }
+                        }
                     }
                 }
                 
