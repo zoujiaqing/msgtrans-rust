@@ -51,28 +51,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ 连接建立成功");
 
     // 获取事件流来接收回显消息
-    let mut events = transport.events().await?;
-    
+    let mut events = transport.subscribe_events();
     // 启动接收任务来处理回显
     let receiver_task = tokio::spawn(async move {
         println!("🎧 开始监听回显事件...");
         let mut received_count = 0u64;
-        
         loop {
-            match events.next().await {
+            match events.recv().await {
                 Ok(event) => {
                     match event {
                         ClientEvent::MessageReceived { packet } => {
                             received_count += 1;
                             let message = String::from_utf8_lossy(&packet.payload);
-                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.message_id);
+                            println!("📥 收到回显 #{}: (ID: {})", received_count, packet.header.message_id);
                             println!("   内容: \"{}\"", message);
-                            
-                            // 检查是否是最后一条消息
                             if message.contains("Message #4") {
                                 println!("🎯 收到最后一条回显，准备结束");
                                 break;
                             }
+                        }
+                        ClientEvent::RequestReceived { ctx } => {
+                            let request_text = String::from_utf8_lossy(&ctx.request.payload);
+                            println!("🔄 客户端收到服务端请求: ID: {}", ctx.request.header.message_id);
+                            println!("   请求内容: \"{}\"", request_text);
+                            
+                            // 🎯 智能响应服务端的不同请求
+                            let response_text = if request_text.contains("status") {
+                                "Client status: All systems operational!"
+                            } else {
+                                "Client received your request successfully"
+                            };
+                            
+                            ctx.respond_with(|req| {
+                                let mut resp = req.clone();
+                                resp.payload = response_text.as_bytes().to_vec();
+                                resp
+                            });
+                            
+                            println!("✅ 已响应服务端请求: \"{}\"", response_text);
                         }
                         ClientEvent::Disconnected { reason } => {
                             println!("🔌 连接已关闭: {:?}", reason);
@@ -96,7 +112,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
         println!("📡 事件接收器已停止 (共收到 {} 条回显)", received_count);
     });
 
@@ -113,21 +128,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for (i, message) in test_messages.iter().enumerate() {
         println!("📤 发送消息 #{}: \"{}\"", i + 1, message);
-        
-        // 🔧 使用标准的客户端发送方法
-                    let packet = Packet::one_way((i as u32) + 1, message.as_bytes());
-        
-        match transport.send(packet).await {
-            Ok(_) => {
-                println!("✅ 消息 #{} 发送成功（通过Transport）", i + 1);
+        let packet = Packet::request((i as u32) + 1, message.as_bytes());
+        match transport.request(packet).await {
+            Ok(response) => {
+                let resp_msg = String::from_utf8_lossy(&response.payload);
+                println!("✅ 收到响应: ID {}, 内容: {}", response.header.message_id, resp_msg);
             }
             Err(e) => {
-                println!("❌ 消息 #{} 发送失败: {:?}", i + 1, e);
+                println!("❌ 请求失败: {:?}", e);
                 break;
             }
         }
-
-        // 等待一下再发送下一条
         if i < test_messages.len() - 1 {
             println!("⏳ 等待2秒后发送下一条...");
             tokio::time::sleep(Duration::from_secs(2)).await;
