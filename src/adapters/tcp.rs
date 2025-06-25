@@ -101,10 +101,11 @@ impl OptimizedReadBuffer {
             return Ok(None);
         }
 
-        // 解析固定头部（零拷贝）
+        // 解析固定头部（零拷贝）- 使用新的字段顺序
         let header_bytes = &self.buffer[0..16];
-        let payload_len = u32::from_be_bytes([header_bytes[4], header_bytes[5], header_bytes[6], header_bytes[7]]) as usize;
-        let ext_header_len = u16::from_be_bytes([header_bytes[12], header_bytes[13]]) as usize;
+        // 新字段顺序: version(1) + compression(1) + packet_type(1) + biz_type(1) + message_id(4) + ext_header_len(2) + payload_len(4) + reserved(2)
+        let ext_header_len = u16::from_be_bytes([header_bytes[8], header_bytes[9]]) as usize;
+        let payload_len = u32::from_be_bytes([header_bytes[10], header_bytes[11], header_bytes[12], header_bytes[13]]) as usize;
 
         // 安全检查
         if payload_len > 1024 * 1024 || ext_header_len > 64 * 1024 {

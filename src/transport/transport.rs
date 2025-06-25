@@ -72,6 +72,13 @@ impl RequestTracker {
         self.pending.insert(id, tx);
         (id, rx)
     }
+    
+    /// 🔧 新增：使用指定的ID注册请求跟踪
+    pub fn register_with_id(&self, id: u32) -> (u32, oneshot::Receiver<Packet>) {
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(id, tx);
+        (id, rx)
+    }
     pub fn complete(&self, id: u32, packet: Packet) -> bool {
         if let Some((_, tx)) = self.pending.remove(&id) {
             let _ = tx.send(packet);
@@ -349,12 +356,15 @@ impl Transport {
     }
 
     /// 🚀 发送数据包并等待响应
-    pub async fn request(&self, mut packet: Packet) -> Result<Packet, TransportError> {
+    pub async fn request(&self, packet: Packet) -> Result<Packet, TransportError> {
         if packet.header.packet_type != crate::packet::PacketType::Request {
             return Err(TransportError::connection_error("Not a Request packet", false));
         }
-        let (id, rx) = self.request_tracker.register();
-        packet.header.message_id = id;
+        
+        // 🔧 修复：使用客户端设置的message_id，而不是覆盖它
+        let client_message_id = packet.header.message_id;
+        let (_, rx) = self.request_tracker.register_with_id(client_message_id);
+        
         self.send(packet).await?;
         match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
             Ok(Ok(resp)) => Ok(resp),
@@ -368,7 +378,7 @@ impl Transport {
         let payload = &packet.payload;
         
         // 🔧 处理压缩（如果实现了压缩）
-        let data = match packet.header.flags.compression() {
+        let data = match packet.header.compression {
             crate::packet::CompressionType::None => payload.clone(), // 无压缩
             crate::packet::CompressionType::Zlib => {
                 // TODO: 解压缩 zlib

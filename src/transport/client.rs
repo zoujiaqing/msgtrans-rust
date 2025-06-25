@@ -520,13 +520,13 @@ impl TransportClient {
                                         let response_packet = crate::packet::Packet {
                                             header: crate::packet::FixedHeader {
                                                 version: 1,
+                                                compression: crate::packet::CompressionType::None,
                                                 packet_type: crate::packet::PacketType::Response,
-                                                flags: crate::packet::PacketFlags::new(),
-                                                reserved: 0,
-                                                payload_len: response_data.len() as u32,
+                                                biz_type: 0,
                                                 message_id,
                                                 ext_header_len: 0,
-                                                reserved2: 0,
+                                                payload_len: response_data.len() as u32,
+                                                reserved: crate::packet::ReservedFlags::new(),
                                             },
                                             ext_header: Vec::new(),
                                             payload: response_data,

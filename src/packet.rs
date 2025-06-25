@@ -64,93 +64,98 @@ impl From<CompressionType> for u8 {
     }
 }
 
-/// 数据包标志位
+/// 保留字段标志位
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PacketFlags(u8);
+pub struct ReservedFlags(u16);
 
-impl PacketFlags {
+impl ReservedFlags {
     /// 创建空标志
     pub fn new() -> Self {
         Self(0)
     }
     
-    /// 设置压缩类型
-    pub fn with_compression(mut self, compression: CompressionType) -> Self {
-        self.0 = (self.0 & 0xF0) | (u8::from(compression) & 0x0F);
-        self
-    }
-    
-    /// 获取压缩类型
-    pub fn compression(&self) -> CompressionType {
-        CompressionType::from(self.0 & 0x0F)
-    }
-    
     /// 设置分片标志
     pub fn with_fragmented(mut self, fragmented: bool) -> Self {
         if fragmented {
-            self.0 |= 0x10;
+            self.0 |= 0x0001;
         } else {
-            self.0 &= !0x10;
+            self.0 &= !0x0001;
         }
         self
     }
     
     /// 检查是否分片
     pub fn is_fragmented(&self) -> bool {
-        (self.0 & 0x10) != 0
+        (self.0 & 0x0001) != 0
     }
     
     /// 设置优先级标志
     pub fn with_priority(mut self, high_priority: bool) -> Self {
         if high_priority {
-            self.0 |= 0x20;
+            self.0 |= 0x0002;
         } else {
-            self.0 &= !0x20;
+            self.0 &= !0x0002;
         }
         self
     }
     
     /// 检查是否高优先级
     pub fn is_high_priority(&self) -> bool {
-        (self.0 & 0x20) != 0
+        (self.0 & 0x0002) != 0
+    }
+    
+    /// 设置路由标签
+    pub fn with_route_tag(mut self, has_route: bool) -> Self {
+        if has_route {
+            self.0 |= 0x0004;
+        } else {
+            self.0 &= !0x0004;
+        }
+        self
+    }
+    
+    /// 检查是否有路由标签
+    pub fn has_route_tag(&self) -> bool {
+        (self.0 & 0x0004) != 0
     }
     
     /// 获取原始值
-    pub fn raw(&self) -> u8 {
+    pub fn raw(&self) -> u16 {
         self.0
     }
     
     /// 从原始值创建
-    pub fn from_raw(value: u8) -> Self {
+    pub fn from_raw(value: u16) -> Self {
         Self(value)
     }
 }
 
-impl Default for PacketFlags {
+impl Default for ReservedFlags {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// 16字节固定头部
+/// 16字节固定头部 - 优化的字段顺序
+#[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FixedHeader {
     /// 协议版本 (1字节)
     pub version: u8,
+    /// 压缩算法 (1字节)
+    pub compression: CompressionType,
     /// 数据包类型 (1字节)
     pub packet_type: PacketType,
-    /// 标志位 (1字节) - 包含压缩、分片等信息
-    pub flags: PacketFlags,
-    /// 保留字段 (1字节)
-    pub reserved: u8,
-    /// 负载长度 (4字节) - 不包括扩展头
-    pub payload_len: u32,
+    /// 应用层业务类型 (1字节) - 0-255，由业务层自定义
+    pub biz_type: u8,
     /// 消息ID (4字节)
     pub message_id: u32,
     /// 扩展头长度 (2字节)
     pub ext_header_len: u16,
-    /// 保留字段2 (2字节) - 为将来扩展预留
-    pub reserved2: u16,
+    /// 负载长度 (4字节)
+    pub payload_len: u32,
+    /// 保留字段 (2字节) - 分片、优先级、路由等标志
+    pub reserved: ReservedFlags,
 }
 
 impl FixedHeader {
@@ -158,13 +163,13 @@ impl FixedHeader {
     pub fn new(packet_type: PacketType, message_id: u32) -> Self {
         Self {
             version: 1,
+            compression: CompressionType::None,
             packet_type,
-            flags: PacketFlags::new(),
-            reserved: 0,
-            payload_len: 0,
+            biz_type: 0, // 默认业务类型
             message_id,
             ext_header_len: 0,
-            reserved2: 0,
+            payload_len: 0,
+            reserved: ReservedFlags::new(),
         }
     }
     
@@ -172,13 +177,13 @@ impl FixedHeader {
     pub fn to_bytes(&self) -> [u8; 16] {
         let mut bytes = [0u8; 16];
         bytes[0] = self.version;
-        bytes[1] = u8::from(self.packet_type);
-        bytes[2] = self.flags.raw();
-        bytes[3] = self.reserved;
-        bytes[4..8].copy_from_slice(&self.payload_len.to_be_bytes());
-        bytes[8..12].copy_from_slice(&self.message_id.to_be_bytes());
-        bytes[12..14].copy_from_slice(&self.ext_header_len.to_be_bytes());
-        bytes[14..16].copy_from_slice(&self.reserved2.to_be_bytes());
+        bytes[1] = u8::from(self.compression);
+        bytes[2] = u8::from(self.packet_type);
+        bytes[3] = self.biz_type;
+        bytes[4..8].copy_from_slice(&self.message_id.to_be_bytes());
+        bytes[8..10].copy_from_slice(&self.ext_header_len.to_be_bytes());
+        bytes[10..14].copy_from_slice(&self.payload_len.to_be_bytes());
+        bytes[14..16].copy_from_slice(&self.reserved.raw().to_be_bytes());
         bytes
     }
     
@@ -193,24 +198,24 @@ impl FixedHeader {
             return Err(PacketError::UnsupportedVersion(version));
         }
         
-        let packet_type = PacketType::from(bytes[1]);
-        let flags = PacketFlags::from_raw(bytes[2]);
-        let reserved = bytes[3];
+        let compression = CompressionType::from(bytes[1]);
+        let packet_type = PacketType::from(bytes[2]);
+        let biz_type = bytes[3];
         
-        let payload_len = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-        let message_id = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-        let ext_header_len = u16::from_be_bytes([bytes[12], bytes[13]]);
-        let reserved2 = u16::from_be_bytes([bytes[14], bytes[15]]);
+        let message_id = u32::from_be_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        let ext_header_len = u16::from_be_bytes([bytes[8], bytes[9]]);
+        let payload_len = u32::from_be_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+        let reserved = ReservedFlags::from_raw(u16::from_be_bytes([bytes[14], bytes[15]]));
         
         Ok(Self {
             version,
+            compression,
             packet_type,
-            flags,
-            reserved,
-            payload_len,
+            biz_type,
             message_id,
             ext_header_len,
-            reserved2,
+            payload_len,
+            reserved,
         })
     }
 }
@@ -324,22 +329,57 @@ impl Packet {
     
     /// 设置压缩类型
     pub fn set_compression(&mut self, compression: CompressionType) {
-        self.header.flags = self.header.flags.with_compression(compression);
+        self.header.compression = compression;
     }
     
     /// 设置分片标志
     pub fn set_fragmented(&mut self, fragmented: bool) {
-        self.header.flags = self.header.flags.with_fragmented(fragmented);
+        self.header.reserved = self.header.reserved.with_fragmented(fragmented);
     }
     
     /// 设置优先级
     pub fn set_priority(&mut self, high_priority: bool) {
-        self.header.flags = self.header.flags.with_priority(high_priority);
+        self.header.reserved = self.header.reserved.with_priority(high_priority);
+    }
+    
+    /// 设置业务类型
+    pub fn set_biz_type(&mut self, biz_type: u8) {
+        self.header.biz_type = biz_type;
+    }
+    
+    /// 获取业务类型
+    pub fn biz_type(&self) -> u8 {
+        self.header.biz_type
+    }
+    
+    /// 获取压缩类型
+    pub fn compression(&self) -> CompressionType {
+        self.header.compression
+    }
+    
+    /// 检查是否分片
+    pub fn is_fragmented(&self) -> bool {
+        self.header.reserved.is_fragmented()
+    }
+    
+    /// 检查是否高优先级
+    pub fn is_high_priority(&self) -> bool {
+        self.header.reserved.is_high_priority()
+    }
+    
+    /// 设置路由标签
+    pub fn set_route_tag(&mut self, has_route: bool) {
+        self.header.reserved = self.header.reserved.with_route_tag(has_route);
+    }
+    
+    /// 检查是否有路由标签
+    pub fn has_route_tag(&self) -> bool {
+        self.header.reserved.has_route_tag()
     }
     
     /// 压缩负载
     pub fn compress_payload(&mut self) -> Result<(), PacketError> {
-        let compression = self.header.flags.compression();
+        let compression = self.header.compression;
         if compression == CompressionType::None {
             return Ok(());
         }
@@ -351,7 +391,7 @@ impl Packet {
     
     /// 解压负载
     pub fn decompress_payload(&mut self) -> Result<(), PacketError> {
-        let compression = self.header.flags.compression();
+        let compression = self.header.compression;
         if compression == CompressionType::None {
             return Ok(());
         }
@@ -544,42 +584,25 @@ mod tests {
     #[test]
     fn test_compression_type_conversion() {
         assert_eq!(u8::from(CompressionType::None), 0);
-        assert_eq!(u8::from(CompressionType::Zlib), 1);
-        assert_eq!(u8::from(CompressionType::Zstd), 2);
+        assert_eq!(u8::from(CompressionType::Zstd), 1);
+        assert_eq!(u8::from(CompressionType::Zlib), 2);
         
         assert_eq!(CompressionType::from(0), CompressionType::None);
-        assert_eq!(CompressionType::from(1), CompressionType::Zlib);
-        assert_eq!(CompressionType::from(2), CompressionType::Zstd);
-    }
-
-    #[test]
-    fn test_packet_flags() {
-        let mut flags = PacketFlags::new();
-        assert_eq!(flags.compression(), CompressionType::None);
-        assert!(!flags.is_fragmented());
-        assert!(!flags.is_high_priority());
-        
-        flags = flags.with_compression(CompressionType::Zstd);
-        assert_eq!(flags.compression(), CompressionType::Zstd);
-        
-        flags = flags.with_fragmented(true);
-        assert!(flags.is_fragmented());
-        
-        flags = flags.with_priority(true);
-        assert!(flags.is_high_priority());
+        assert_eq!(CompressionType::from(1), CompressionType::Zstd);
+        assert_eq!(CompressionType::from(2), CompressionType::Zlib);
     }
 
     #[test]
     fn test_fixed_header_serialization() {
         let header = FixedHeader {
             version: 1,
+            compression: CompressionType::Zstd,
             packet_type: PacketType::Request,
-            flags: PacketFlags::new().with_compression(CompressionType::Zstd),
-            reserved: 0,
-            payload_len: 1024,
+            biz_type: 0,
             message_id: 12345,
             ext_header_len: 8,
-            reserved2: 0,
+            payload_len: 1024,
+            reserved: ReservedFlags::new(),
         };
         
         let bytes = header.to_bytes();
@@ -610,8 +633,8 @@ mod tests {
         assert_eq!(packet.header.packet_type, PacketType::OneWay);
         assert_eq!(packet.header.message_id, 123);
         assert_eq!(packet.payload_len(), 11);
-        assert_eq!(packet.header.flags.compression(), CompressionType::Zstd);
-        assert!(packet.header.flags.is_fragmented());
+        assert_eq!(packet.header.compression, CompressionType::Zstd);
+        assert!(packet.header.reserved.is_fragmented());
     }
 
     #[test]
@@ -662,15 +685,96 @@ mod tests {
     }
 
     #[test]
+    fn test_reserved_flags() {
+        let mut flags = ReservedFlags::new();
+        assert!(!flags.is_fragmented());
+        assert!(!flags.is_high_priority());
+        assert!(!flags.has_route_tag());
+        
+        flags = flags.with_fragmented(true);
+        assert!(flags.is_fragmented());
+        
+        flags = flags.with_priority(true);
+        assert!(flags.is_high_priority());
+        
+        flags = flags.with_route_tag(true);
+        assert!(flags.has_route_tag());
+    }
+
+    #[test]
+    fn test_packet_creation_with_new_fields() {
+        let mut packet = Packet::one_way(123, b"hello world");
+        packet.set_compression(CompressionType::Zstd);
+        packet.set_biz_type(42); // 业务层自定义类型
+        packet.set_fragmented(true);
+        packet.set_priority(true);
+        packet.set_route_tag(true);
+        
+        assert_eq!(packet.header.packet_type, PacketType::OneWay);
+        assert_eq!(packet.header.message_id, 123);
+        assert_eq!(packet.payload_len(), 11);
+        assert_eq!(packet.header.compression, CompressionType::Zstd);
+        assert_eq!(packet.header.biz_type, 42);
+        assert!(packet.header.reserved.is_fragmented());
+        assert!(packet.header.reserved.is_high_priority());
+        assert!(packet.header.reserved.has_route_tag());
+    }
+
+    #[test]
+    fn test_packet_serialization_with_new_format() {
+        let mut packet = Packet::request(456, "test message");
+        packet.set_biz_type(123); // 业务层自定义类型
+        packet.set_compression(CompressionType::Zlib);
+        
+        let bytes = packet.to_bytes();
+        let recovered = Packet::from_bytes(&bytes).unwrap();
+        
+        assert_eq!(packet, recovered);
+        assert_eq!(recovered.biz_type(), 123);
+        assert_eq!(recovered.compression(), CompressionType::Zlib);
+    }
+
+    #[test]
+    fn test_new_byte_order_format() {
+        let mut packet = Packet::request(0x12345678, "test");
+        packet.set_biz_type(255); // 最大业务类型值
+        packet.set_compression(CompressionType::Zstd);
+        
+        let bytes = packet.to_bytes();
+        
+        // 验证新的字段顺序
+        assert_eq!(bytes[0], 1); // version
+        assert_eq!(bytes[1], 1); // compression = Zstd
+        assert_eq!(bytes[2], 1); // packet_type = Request
+        assert_eq!(bytes[3], 255); // biz_type = 255
+        
+        // message_id 在字节 4-7 位置，大端序
+        assert_eq!(bytes[4], 0x12);
+        assert_eq!(bytes[5], 0x34);
+        assert_eq!(bytes[6], 0x56);
+        assert_eq!(bytes[7], 0x78);
+        
+        // ext_header_len 在字节 8-9
+        assert_eq!(bytes[8], 0x00);
+        assert_eq!(bytes[9], 0x00);
+        
+        // payload_len 在字节 10-13
+        assert_eq!(bytes[10], 0x00);
+        assert_eq!(bytes[11], 0x00);
+        assert_eq!(bytes[12], 0x00);
+        assert_eq!(bytes[13], 0x04); // "test" = 4 bytes
+    }
+
+    #[test]
     fn test_big_endian_format() {
         let packet = Packet::request(0x12345678, "test");
         let bytes = packet.to_bytes();
         
         // 验证 big endian 格式
-        // message_id 应该在字节 8-11 位置，大端序
-        assert_eq!(bytes[8], 0x12);
-        assert_eq!(bytes[9], 0x34);
-        assert_eq!(bytes[10], 0x56);
-        assert_eq!(bytes[11], 0x78);
+        // message_id 在新字段顺序中应该在字节 4-7 位置，大端序
+        assert_eq!(bytes[4], 0x12);
+        assert_eq!(bytes[5], 0x34);
+        assert_eq!(bytes[6], 0x56);
+        assert_eq!(bytes[7], 0x78);
     }
 } 
