@@ -42,6 +42,7 @@ pub mod request_manager;
 
 // 🚀 Phase 3: 核心高性能组件 (默认启用)
 pub mod lockfree;
+pub mod lockfree_connection;
 pub mod memory_pool;
 pub mod protocol_adapter;
 pub mod actor;
@@ -110,6 +111,11 @@ pub use server::{
 pub use lockfree::{
     LockFreeHashMap, LockFreeQueue, LockFreeCounter,
     LockFreeStats, QueueStats, CounterStats
+};
+
+// 无锁连接导出
+pub use lockfree_connection::{
+    LockFreeConnection, LockFreeConnectionStats, LockFreeConnectionCommand
 };
 
 // 连接状态管理导出

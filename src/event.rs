@@ -716,7 +716,21 @@ impl Drop for TransportContext {
         if let TransportContextKind::Request { responded, is_primary, .. } = &self.kind {
             // 只有主实例才检查响应状态
             if *is_primary && !responded.load(Ordering::SeqCst) {
-                tracing::warn!("⚠️ TransportContext被丢弃但未响应 (ID: {})", self.message_id);
+                // 🚀 修复：延迟检查，给应用层一些时间处理事件
+                // 克隆检查所需的数据
+                let message_id = self.message_id;
+                let responded_clone = responded.clone();
+                
+                // 在单独的任务中进行延迟检查
+                tokio::spawn(async move {
+                    // 给应用层 10ms 时间处理事件
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    
+                    // 再次检查是否已响应
+                    if !responded_clone.load(Ordering::SeqCst) {
+                        tracing::warn!("⚠️ TransportContext被丢弃但未响应 (ID: {})", message_id);
+                    }
+                });
             }
         }
     }

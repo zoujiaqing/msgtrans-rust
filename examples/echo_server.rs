@@ -66,33 +66,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("   会话ID: {}", session_id);
                     println!("   地址: {} ↔ {}", info.local_addr, info.peer_addr);
                     
-                    // 发送欢迎消息 - 使用统一字节API
-                    match transport.send(session_id, "Welcome to Echo Server!".as_bytes()).await {
-                        Ok(result) => {
-                            println!("✅ 欢迎消息发送成功 -> 会话 {} (ID: {})", session_id, result.message_id);
-                        }
-                        Err(e) => {
-                            println!("❌ 欢迎消息发送失败: {:?}", e);
-                        }
-                    }
-                    
-                    // 🎯 演示服务端向客户端发送请求 - 使用简化字节API
-                    // 等待100ms确保客户端完全准备好
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                    println!("🔄 服务端向客户端发送请求...");
-                    match transport.request(session_id, "Server asks: What is your status?".as_bytes()).await {
-                        Ok(result) => {
-                            if let Some(response_data) = &result.data {
-                                let response_text = String::from_utf8_lossy(response_data);
-                                println!("✅ 收到客户端响应 (ID: {}): \"{}\"", result.message_id, response_text);
-                            } else {
-                                println!("⚠️ 请求结果无数据 (ID: {})", result.message_id);
+                    // 🚀 修复：将发送操作移到单独的异步任务中，避免阻塞事件循环
+                    let transport_clone = transport.clone();
+                    tokio::spawn(async move {
+                        // 发送欢迎消息 - 使用统一字节API
+                        match transport_clone.send(session_id, "Welcome to Echo Server!".as_bytes()).await {
+                            Ok(result) => {
+                                println!("✅ 欢迎消息发送成功 -> 会话 {} (ID: {})", session_id, result.message_id);
+                            }
+                            Err(e) => {
+                                println!("❌ 欢迎消息发送失败: {:?}", e);
                             }
                         }
-                        Err(e) => {
-                            println!("❌ 服务端请求失败: {:?}", e);
+                        
+                        // 🎯 演示服务端向客户端发送请求 - 使用简化字节API
+                        // 等待100ms确保客户端完全准备好
+                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                        println!("🔄 服务端向客户端发送请求...");
+                        match transport_clone.request(session_id, "Server asks: What is your status?".as_bytes()).await {
+                            Ok(result) => {
+                                if let Some(response_data) = &result.data {
+                                    let response_text = String::from_utf8_lossy(response_data);
+                                    println!("✅ 收到客户端响应 (ID: {}): \"{}\"", result.message_id, response_text);
+                                } else {
+                                    println!("⚠️ 请求结果无数据 (ID: {})", result.message_id);
+                                }
+                            }
+                            Err(e) => {
+                                println!("❌ 服务端请求失败: {:?}", e);
+                            }
                         }
-                    }
+                    });
                     
                     connections.insert(session_id, info);
                 }
@@ -122,16 +126,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         context.respond(echo_message.as_bytes().to_vec());
                         println!("✅ 已响应客户端请求 (ID: {})", message_id);
                     } else {
-                        // 发送回显 - 使用统一字节API
+                        // 🚀 修复：将发送操作移到单独的异步任务中，避免阻塞事件循环
+                        let transport_clone = transport.clone();
                         let echo_message = format!("Echo: {}", msg_text);
-                        match transport.send(session_id, echo_message.as_bytes()).await {
-                            Ok(result) => {
-                                println!("✅ 回显发送成功 -> 会话 {} (ID: {})", session_id, result.message_id);
+                        tokio::spawn(async move {
+                            // 发送回显 - 使用统一字节API
+                            match transport_clone.send(session_id, echo_message.as_bytes()).await {
+                                Ok(result) => {
+                                    println!("✅ 回显发送成功 -> 会话 {} (ID: {})", session_id, result.message_id);
+                                }
+                                Err(e) => {
+                                    println!("❌ 回显发送失败: {:?}", e);
+                                }
                             }
-                            Err(e) => {
-                                println!("❌ 回显发送失败: {:?}", e);
-                            }
-                        }
+                        });
                     }
                 }
                 ServerEvent::MessageSent { session_id, message_id } => {
