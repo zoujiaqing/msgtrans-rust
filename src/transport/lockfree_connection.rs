@@ -385,6 +385,42 @@ impl Clone for LockFreeConnection {
 unsafe impl Send for LockFreeConnection {}
 unsafe impl Sync for LockFreeConnection {}
 
+/// 实现 Connection trait 以便与现有系统兼容
+#[async_trait::async_trait]
+impl crate::Connection for LockFreeConnection {
+    async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
+        self.send_lockfree(packet).await
+    }
+    
+    async fn close(&mut self) -> Result<(), TransportError> {
+        self.close_lockfree().await
+    }
+    
+    fn session_id(&self) -> SessionId {
+        self.session_id_lockfree()
+    }
+    
+    fn set_session_id(&mut self, session_id: SessionId) {
+        self.set_session_id_lockfree(session_id)
+    }
+    
+    fn connection_info(&self) -> ConnectionInfo {
+        self.connection_info_lockfree()
+    }
+    
+    fn is_connected(&self) -> bool {
+        self.is_connected_lockfree()
+    }
+    
+    async fn flush(&mut self) -> Result<(), TransportError> {
+        self.flush_lockfree().await
+    }
+    
+    fn event_stream(&self) -> Option<broadcast::Receiver<TransportEvent>> {
+        Some(self.subscribe_events())
+    }
+}
+
 /// 🎯 批量操作支持 - 进一步优化性能
 impl LockFreeConnection {
     /// 批量发送多个数据包
@@ -483,10 +519,10 @@ mod tests {
                 message_id: 1,
                 ext_header_len: 0,
                 payload_len: 4,
-                reserved: crate::packet::ReservedFlags::empty(),
+                reserved: crate::packet::ReservedFlags::new(),
             },
-            payload: Bytes::from("test"),
-            ext_header: None,
+            payload: b"test".to_vec(),
+            ext_header: vec![],
         };
         
         let result = lockfree_conn.send_lockfree(packet).await;
@@ -521,10 +557,10 @@ mod tests {
                         message_id: i,
                         ext_header_len: 0,
                         payload_len: 4,
-                        reserved: crate::packet::ReservedFlags::empty(),
+                        reserved: crate::packet::ReservedFlags::new(),
                     },
-                    payload: Bytes::from("test"),
-                    ext_header: None,
+                    payload: b"test".to_vec(),
+                    ext_header: vec![],
                 };
                 
                 conn.send_lockfree(packet).await

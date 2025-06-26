@@ -43,6 +43,7 @@ pub mod request_manager;
 // 🚀 Phase 3: 核心高性能组件 (默认启用)
 pub mod lockfree;
 pub mod lockfree_connection;
+pub mod connection_factory;
 pub mod memory_pool;
 pub mod protocol_adapter;
 pub mod actor;
@@ -180,5 +181,15 @@ impl TransportOptions {
     
 
 }
+
+pub use connection_factory::{
+    ConnectionFactory, 
+    ConnectionType, 
+    ConnectionResult, 
+    ConnectionConfig,
+    ConnectionMetrics,
+    MigrationReport,
+    MigrationComplexity,
+};
 
 
