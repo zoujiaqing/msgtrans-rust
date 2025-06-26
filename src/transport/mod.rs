@@ -41,10 +41,10 @@ pub mod connection_state;
 pub mod request_manager;
 
 // 🚀 Phase 3: 核心高性能组件 (默认启用)
-pub mod lockfree_enhanced;
-pub mod memory_pool_v2;
-pub mod protocol_adapter_v2;
-pub mod actor_v2;
+pub mod lockfree;
+pub mod memory_pool;
+pub mod protocol_adapter;
+pub mod actor;
 
 // 🚀 Phase 4: 架构清理完成 - 传统组件已完全移除
 // OptimizedActor 已成为唯一的Actor实现
@@ -67,14 +67,14 @@ pub use config::TransportConfig;
 pub use crate::protocol::adapter::ProtocolAdapter as ProtocolAdapterTrait;
 
 // 🚀 优化组件导出 (统一命名)
-pub use memory_pool_v2::{
+pub use memory_pool::{
     OptimizedMemoryPool as MemoryPool,
     OptimizedMemoryStats as MemoryStats, 
     OptimizedMemoryStatsSnapshot as MemoryStatsSnapshot,
     MemoryPoolEvent, BufferSize
 };
 
-pub use protocol_adapter_v2::{
+pub use protocol_adapter::{
     FlumePoweredProtocolAdapter as ProtocolAdapter,
     LockFreeProtocolStats as ProtocolStats, 
     ProtocolStatsSnapshot,
@@ -83,7 +83,7 @@ pub use protocol_adapter_v2::{
     create_test_packet
 };
 
-pub use actor_v2::{
+pub use actor::{
     OptimizedActor as Actor,
     ActorManager, ActorCommand, ActorEvent, 
     LockFreeActorStats as ActorStats
@@ -107,7 +107,7 @@ pub use server::{
 };
 
 // LockFree核心组件导出
-pub use lockfree_enhanced::{
+pub use lockfree::{
     LockFreeHashMap, LockFreeQueue, LockFreeCounter,
     LockFreeStats, QueueStats, CounterStats
 };

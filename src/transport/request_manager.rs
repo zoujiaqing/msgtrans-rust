@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::sync::oneshot;
-use crate::transport::lockfree_enhanced::LockFreeHashMap;
+use crate::transport::lockfree::LockFreeHashMap;
 use crate::packet::Packet;
 
 /// 包装 oneshot::Sender 使其可 Clone

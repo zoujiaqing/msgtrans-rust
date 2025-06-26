@@ -2,7 +2,7 @@
 /// 
 /// 展示无锁HashMap、队列、计数器的基本功能和性能
 
-use msgtrans::transport::lockfree_enhanced::{LockFreeHashMap, LockFreeQueue, LockFreeCounter};
+use msgtrans::transport::lockfree::{LockFreeHashMap, LockFreeQueue, LockFreeCounter};
 use std::sync::Arc;
 use std::thread;
 use std::time::Instant;

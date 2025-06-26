@@ -165,7 +165,7 @@ impl FlumeActor {
 
 ### 增强 LockFree 模块
 ```rust
-// src/transport/lockfree_enhanced.rs
+// src/transport/lockfree.rs
 pub struct FlumeLockFreeQueue<T> {
     sender: flume::Sender<T>,
     receiver: flume::Receiver<T>,

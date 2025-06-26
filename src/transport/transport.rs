@@ -18,7 +18,7 @@ use crate::{
     transport::{
         config::TransportConfig,
         pool::ConnectionPool,
-        memory_pool_v2::OptimizedMemoryPool,
+        memory_pool::OptimizedMemoryPool,
         connection_state::ConnectionStateManager,
     },
     protocol::{ProtocolRegistry, ProtocolAdapter},
@@ -333,7 +333,7 @@ impl Transport {
     }
     
     /// 🚀 Phase 3: 获取内存池统计
-    pub fn memory_pool_stats(&self) -> crate::transport::memory_pool_v2::OptimizedMemoryStatsSnapshot {
+    pub fn memory_pool_stats(&self) -> crate::transport::memory_pool::OptimizedMemoryStatsSnapshot {
         self.memory_pool.get_stats()
     }
     

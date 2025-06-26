@@ -21,14 +21,14 @@ pub enum ConnectionState {
 /// 
 /// 提供线程安全的状态管理，防止重复关闭
 pub struct ConnectionStateManager {
-    states: Arc<crate::transport::lockfree_enhanced::LockFreeHashMap<SessionId, Arc<Mutex<ConnectionState>>>>,
+    states: Arc<crate::transport::lockfree::LockFreeHashMap<SessionId, Arc<Mutex<ConnectionState>>>>,
 }
 
 impl ConnectionStateManager {
     /// 创建新的状态管理器
     pub fn new() -> Self {
         Self {
-            states: Arc::new(crate::transport::lockfree_enhanced::LockFreeHashMap::new()),
+            states: Arc::new(crate::transport::lockfree::LockFreeHashMap::new()),
         }
     }
     

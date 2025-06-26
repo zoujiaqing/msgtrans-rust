@@ -97,10 +97,10 @@ global_event_tx: broadcast::Sender<TransportEvent>,
 
 ### 核心功能测试 ✅
 ```bash
-test transport::lockfree_enhanced::tests::test_lockfree_hashmap_basic ... ok
-test transport::lockfree_enhanced::tests::test_lockfree_hashmap_concurrent ... ok
-test transport::lockfree_enhanced::tests::test_lockfree_queue ... ok
-test transport::lockfree_enhanced::tests::test_lockfree_counter ... ok
+test transport::lockfree::tests::test_lockfree_hashmap_basic ... ok
+test transport::lockfree::tests::test_lockfree_hashmap_concurrent ... ok
+test transport::lockfree::tests::test_lockfree_queue ... ok
+test transport::lockfree::tests::test_lockfree_counter ... ok
 ```
 
 ### 编译状态 ✅
@@ -182,7 +182,7 @@ test transport::lockfree_enhanced::tests::test_lockfree_counter ... ok
 
 - [架构决策分析](./architecture_decision.md)
 - [混合架构演示](../examples/hybrid_architecture_demo.rs)
-- [LockFree 实现细节](../src/transport/lockfree_enhanced.rs)
+- [LockFree 实现细节](../src/transport/lockfree.rs)
 - [ActorManager 迁移代码](../src/actor.rs)
 
 ---

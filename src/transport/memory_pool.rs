@@ -13,7 +13,7 @@ use std::sync::{
 };
 use bytes::BytesMut;
 
-use crate::transport::lockfree_enhanced::LockFreeQueue;
+use crate::transport::lockfree::LockFreeQueue;
 
 /// 🚀 Phase 3.1.2: 完全 LockFree 内存池
 #[derive(Clone)]

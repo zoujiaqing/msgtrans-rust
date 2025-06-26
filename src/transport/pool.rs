@@ -22,9 +22,9 @@ use tokio::sync::RwLock;
 use crossbeam_channel::{unbounded as crossbeam_unbounded, Sender as CrossbeamSender, Receiver as CrossbeamReceiver};
 
 use crate::error::TransportError;
-use crate::transport::lockfree_enhanced::{LockFreeHashMap, LockFreeQueue};
+use crate::transport::lockfree::{LockFreeHashMap, LockFreeQueue};
 use crate::SessionId;
-use crate::transport::memory_pool_v2::{OptimizedMemoryPool, OptimizedMemoryStatsSnapshot};
+use crate::transport::memory_pool::{OptimizedMemoryPool, OptimizedMemoryStatsSnapshot};
 
 /// 🚀 Phase 3: 优化后的智能连接池
 pub struct ConnectionPool {
@@ -650,14 +650,14 @@ impl PoolStats {
     }
 }
 
-// MemoryPool 已迁移到 memory_pool_v2.rs 中的 OptimizedMemoryPool
+// MemoryPool 已迁移到 memory_pool.rs 中的 OptimizedMemoryPool
 // 通过 mod.rs 的别名系统，用户使用 MemoryPool 时会自动使用 OptimizedMemoryPool
 // Legacy版本保留在 legacy 模块中
 
 // OptimizedMemoryStats、OptimizedMemoryStatsSnapshot 和 MemoryPoolEvent
-// 已迁移到 memory_pool_v2.rs，用户通过别名系统自动使用
+// 已迁移到 memory_pool.rs，用户通过别名系统自动使用
 
-// OptimizedMemoryStats 实现已迁移到 memory_pool_v2.rs
+// OptimizedMemoryStats 实现已迁移到 memory_pool.rs
 
 /// 性能监控器
 pub struct PerformanceMonitor {

@@ -7,7 +7,7 @@ use crate::{
     SessionId, TransportError, Packet, EventStream,
     transport::{
         config::TransportConfig,
-        lockfree_enhanced::LockFreeHashMap,
+        lockfree::LockFreeHashMap,
         connection_state::ConnectionStateManager,
     },
     error::CloseReason,

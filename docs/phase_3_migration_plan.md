@@ -396,7 +396,7 @@ async fn phase3_end_to_end_performance() {
 ### 技术参考
 - [Phase 1-2 迁移经验总结](./phase_2_migration_summary.md)
 - [混合架构设计决策](./architecture_decision.md)
-- [LockFree实现细节](../src/transport/lockfree_enhanced.rs)
+- [LockFree实现细节](../src/transport/lockfree.rs)
 
 ### 性能基准
 - [现有性能基准测试](../benches/lockfree_benchmarks.rs)

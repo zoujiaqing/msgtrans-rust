@@ -226,7 +226,7 @@ pub struct ServerTransport {
     protocol_configs: std::collections::HashMap<String, Box<dyn crate::protocol::adapter::DynProtocolConfig>>,
     
     /// 全局Actor管理器 - 所有Transport实例共享
-    global_actor_manager: Arc<crate::transport::actor_v2::ActorManager>,
+    global_actor_manager: Arc<crate::transport::actor::ActorManager>,
     
     /// 会话ID生成器
     session_id_generator: Arc<AtomicU64>,

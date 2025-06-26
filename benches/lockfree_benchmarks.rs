@@ -9,7 +9,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use msgtrans::transport::{
     ConnectionPool, MemoryPool, BufferSize,
-    lockfree_enhanced::{LockFreeHashMap, LockFreeQueue, LockFreeCounter},
+    lockfree::{LockFreeHashMap, LockFreeQueue, LockFreeCounter},
 };
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
