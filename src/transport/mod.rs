@@ -184,12 +184,9 @@ impl TransportOptions {
 
 pub use connection_factory::{
     ConnectionFactory, 
-    ConnectionType, 
     ConnectionResult, 
     ConnectionConfig,
     ConnectionMetrics,
-    MigrationReport,
-    MigrationComplexity,
 };
 
 
