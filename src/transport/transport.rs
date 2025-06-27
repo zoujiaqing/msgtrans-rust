@@ -38,7 +38,7 @@ pub struct Transport {
     /// 🚀 Phase 3: 优化后的内存池
     memory_pool: Arc<OptimizedMemoryPool>,
     /// 🎯 单个连接适配器 - 代表这个socket连接
-    connection_adapter: Arc<Mutex<Option<Arc<Mutex<dyn Connection>>>>>,
+    connection_adapter: Arc<Mutex<Option<Arc<Mutex<Box<dyn Connection>>>>>>,
     /// 当前连接的会话ID
     session_id: Arc<Mutex<Option<SessionId>>>,
     /// 连接状态管理器
@@ -240,7 +240,7 @@ impl Transport {
             // 尝试优雅关闭
             match tokio::time::timeout(
                 self.config.graceful_timeout,
-                self.try_graceful_close(&mut *conn)
+                self.try_graceful_close(&mut **conn)
             ).await {
                 Ok(Ok(_)) => {
                     tracing::debug!("✅ 会话 {} 优雅关闭成功", session_id);
@@ -286,10 +286,7 @@ impl Transport {
     }
     
     /// 设置连接适配器和会话ID (内部使用)
-    pub async fn set_connection<C>(self: &Arc<Self>, mut connection: C, session_id: SessionId)
-    where
-        C: Connection + 'static,
-    {
+    pub async fn set_connection(self: &Arc<Self>, mut connection: Box<dyn Connection>, session_id: SessionId) {
         // 🔧 修复：设置连接的 session_id
         connection.set_session_id(session_id);
         
@@ -338,7 +335,7 @@ impl Transport {
     }
     
     /// 获取连接适配器（用于消息接收）
-    pub async fn connection_adapter(&self) -> Option<Arc<Mutex<dyn Connection>>> {
+    pub async fn connection_adapter(&self) -> Option<Arc<Mutex<Box<dyn Connection>>>> {
         self.connection_adapter.lock().await.as_ref().cloned()
     }
     

@@ -828,7 +828,7 @@ impl ConnectableConfig for TcpClientConfig {
         let connection = crate::protocol::adapter::ClientConfig::build_connection(&self).await?;
         
         // 将连接设置到 Transport 中
-        transport.set_connection(connection, session_id).await;
+        transport.set_connection(Box::new(connection), session_id).await;
         tracing::info!("✅ TCP 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
         
         Ok(session_id)
@@ -843,7 +843,7 @@ impl ConnectableConfig for WebSocketClientConfig {
         let connection = crate::protocol::adapter::ClientConfig::build_connection(&self).await?;
         
         // 将连接设置到 Transport 中
-        transport.set_connection(connection, session_id).await;
+        transport.set_connection(Box::new(connection), session_id).await;
         tracing::info!("✅ WebSocket 客户端连接成功: {} -> 会话ID: {}", self.target_url, session_id);
         
         Ok(session_id)
@@ -858,7 +858,7 @@ impl ConnectableConfig for QuicClientConfig {
         let connection = crate::protocol::adapter::ClientConfig::build_connection(&self).await?;
         
         // 将连接设置到 Transport 中
-        transport.set_connection(connection, session_id).await;
+        transport.set_connection(Box::new(connection), session_id).await;
         tracing::info!("✅ QUIC 客户端连接成功: {} -> 会话ID: {}", self.target_address, session_id);
         
         Ok(session_id)

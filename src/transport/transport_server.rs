@@ -27,8 +27,8 @@ use tokio::sync::broadcast;
 pub struct TransportServer {
     /// 配置
     config: TransportConfig,
-    /// 🎯 核心：会话到连接的映射 (使用无锁连接)
-    connections: Arc<LockFreeHashMap<SessionId, Arc<crate::transport::LockFreeConnection>>>,
+    /// 🎯 核心：会话到传输层的映射 (统一使用 Transport 抽象)
+    transports: Arc<LockFreeHashMap<SessionId, Arc<crate::transport::transport::Transport>>>,
     /// 会话ID生成器
     session_id_generator: Arc<std::sync::atomic::AtomicU64>,
     /// 服务端统计信息 (使用 lockfree)
@@ -54,7 +54,7 @@ impl TransportServer {
         
         Ok(Self {
             config,
-            connections: Arc::new(LockFreeHashMap::new()),
+            transports: Arc::new(LockFreeHashMap::new()),
             session_id_generator: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             stats: Arc::new(LockFreeHashMap::new()),
             event_sender,
@@ -75,7 +75,7 @@ impl TransportServer {
         
         Ok(Self {
             config,
-            connections: Arc::new(LockFreeHashMap::new()),
+            transports: Arc::new(LockFreeHashMap::new()),
             session_id_generator: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             stats: Arc::new(LockFreeHashMap::new()),
             event_sender,
@@ -92,9 +92,9 @@ impl TransportServer {
         tracing::debug!("📤 TransportServer 向会话 {} 发送数据包 (ID: {}, 大小: {} bytes)", 
             session_id, packet.header.message_id, packet.payload.len());
         
-        if let Some(connection) = self.connections.get(&session_id) {
-            // 🚀 无锁状态检查 - 原子操作，超快速
-            if !connection.is_connected_lockfree() {
+        if let Some(transport) = self.transports.get(&session_id) {
+            // 🚀 状态检查 - 通过 Transport 抽象
+            if !transport.is_connected().await {
                 tracing::warn!("⚠️ 会话 {} 连接已断开，跳过发送", session_id);
                 // 清理已断开的连接
                 let _ = self.remove_session(session_id).await;
@@ -103,17 +103,14 @@ impl TransportServer {
             
             tracing::debug!("🔍 会话 {} 连接状态正常，开始发送数据包", session_id);
             
-            // 获取连接协议信息 - 使用缓存，避免异步调用
-            let protocol = connection.connection_info_lockfree().protocol;
-            
-            // 🚀 无锁发送 - 通过消息队列，完全避免锁竞争
-            match connection.send_lockfree(packet).await {
+            // 🚀 通过 Transport 统一接口发送
+            match transport.send(packet).await {
                 Ok(()) => {
-                    tracing::debug!("✅ 会话 {} {}层发送成功 (TransportServer层确认)", session_id, protocol.to_uppercase());
+                    tracing::debug!("✅ 会话 {} 发送成功 (TransportServer层确认)", session_id);
                     Ok(())
                 }
                 Err(e) => {
-                    tracing::error!("❌ 会话 {} {}层发送失败: {:?}", session_id, protocol.to_uppercase(), e);
+                    tracing::error!("❌ 会话 {} 发送失败: {:?}", session_id, e);
                     
                     // 🔧 关键修复：检查是否是连接相关错误
                     let error_msg = format!("{:?}", e);
@@ -138,52 +135,26 @@ impl TransportServer {
         }
     }
 
-    /// 🚀 向指定会话发送请求并等待响应 - 无锁版本
-    pub async fn request_to_session(&self, session_id: SessionId, mut packet: Packet) -> Result<Packet, TransportError> {
+    /// 🚀 向指定会话发送请求并等待响应 - 使用 Transport 的 request 方法
+    pub async fn request_to_session(&self, session_id: SessionId, packet: Packet) -> Result<Packet, TransportError> {
         tracing::debug!("🔄 TransportServer 向会话 {} 发送请求 (ID: {})", session_id, packet.header.message_id);
         
-        if let Some(connection) = self.connections.get(&session_id) {
-            // 🚀 无锁状态检查
-            if !connection.is_connected_lockfree() {
+        if let Some(transport) = self.transports.get(&session_id) {
+            // 🚀 状态检查 - 通过 Transport 抽象
+            if !transport.is_connected().await {
                 tracing::warn!("⚠️ 会话 {} 连接已断开，无法发送请求", session_id);
                 let _ = self.remove_session(session_id).await;
                 return Err(TransportError::connection_error("Connection closed", false));
             }
             
-            // 🎯 使用 RequestTracker 注册请求
-            let (request_id, response_rx) = self.request_tracker.register();
-            
-            // 设置包类型为 Request，并使用生成的请求ID
-            packet.header.packet_type = crate::packet::PacketType::Request;
-            packet.header.message_id = request_id;
-            
-            tracing::debug!("🔍 会话 {} 连接状态正常，发送请求包 (请求ID: {})", session_id, request_id);
-            
-            // 🚀 无锁发送请求包
-            match connection.send_lockfree(packet).await {
-                Ok(()) => {
-                    tracing::debug!("✅ 会话 {} 请求发送成功，等待响应 (请求ID: {})", session_id, request_id);
-                    
-                    // 等待响应（带超时）
-                    let timeout = std::time::Duration::from_secs(10);
-                    match tokio::time::timeout(timeout, response_rx).await {
-                        Ok(Ok(response)) => {
-                            tracing::debug!("✅ 会话 {} 收到响应 (请求ID: {}, 响应ID: {})", 
-                                session_id, request_id, response.header.message_id);
-                            Ok(response)
-                        }
-                        Ok(Err(_)) => {
-                            tracing::error!("❌ 会话 {} 响应通道已关闭 (请求ID: {})", session_id, request_id);
-                            Err(TransportError::connection_error("Response channel closed", false))
-                        }
-                        Err(_) => {
-                            tracing::error!("⏰ 会话 {} 请求超时 (请求ID: {})", session_id, request_id);
-                            Err(TransportError::timeout_error("Request", timeout))
-                        }
-                    }
+            // 🎯 直接使用 Transport 的 request 方法，它会正确管理 RequestTracker
+            match transport.request(packet).await {
+                Ok(response) => {
+                    tracing::debug!("✅ 会话 {} 收到响应 (响应ID: {})", session_id, response.header.message_id);
+                    Ok(response)
                 }
                 Err(e) => {
-                    tracing::error!("❌ 会话 {} 请求发送失败: {:?}", session_id, e);
+                    tracing::error!("❌ 会话 {} 请求失败: {:?}", session_id, e);
                     Err(e)
                 }
             }
@@ -233,20 +204,19 @@ impl TransportServer {
         }
     }
 
-    /// 🚀 添加会话 - 使用无锁连接
+    /// 🚀 添加会话 - 使用 Transport 抽象
     pub async fn add_session(&self, connection: Box<dyn crate::Connection>) -> SessionId {
         // 🔧 修复：使用连接已有的会话ID，而不是生成新的
         let session_id = connection.session_id();
         
-        // 🚀 创建无锁连接包装器
-        let (lockfree_connection, worker_handle) = crate::transport::LockFreeConnection::new(
-            connection, 
-            session_id, 
-            1000 // 命令队列缓冲区大小
-        );
+        // 🚀 创建 Transport 实例
+        let transport = Arc::new(crate::transport::transport::Transport::new(self.config.clone()).await.unwrap());
         
-        let wrapped_connection = Arc::new(lockfree_connection);
-        self.connections.insert(session_id, wrapped_connection.clone());
+        // 设置连接到 Transport
+        transport.set_connection(connection, session_id).await;
+        
+        // 插入到传输层映射中
+        self.transports.insert(session_id, transport.clone());
         self.stats.insert(session_id, TransportStats::new());
         
         // 注册连接状态
@@ -254,31 +224,27 @@ impl TransportServer {
         
         // ⭐️ 启动事件消费循环，将 TransportEvent 转换为 ServerEvent
         let server_clone = self.clone();
-        let conn_for_events = wrapped_connection.clone();
+        let transport_for_events = transport.clone();
         tokio::spawn(async move {
-            let mut event_receiver = conn_for_events.subscribe_events();
-            tracing::debug!("🎧 TransportServer 启动会话 {} 的事件消费循环", session_id);
-            while let Ok(transport_event) = event_receiver.recv().await {
-                tracing::trace!("📥 TransportServer 收到会话 {} 的事件: {:?}", session_id, transport_event);
-                server_clone.handle_transport_event(session_id, transport_event).await;
-            }
-            tracing::debug!("📡 TransportServer 会话 {} 的事件消费循环结束", session_id);
-        });
-        
-        // 启动无锁连接的后台工作器
-        tokio::spawn(async move {
-            if let Err(e) = worker_handle.await {
-                tracing::error!("❌ 会话 {} 的无锁连接工作器异常退出: {:?}", session_id, e);
+            if let Some(mut event_receiver) = transport_for_events.get_event_stream().await {
+                tracing::debug!("🎧 TransportServer 启动会话 {} 的事件消费循环", session_id);
+                while let Ok(transport_event) = event_receiver.recv().await {
+                    tracing::trace!("📥 TransportServer 收到会话 {} 的事件: {:?}", session_id, transport_event);
+                    server_clone.handle_transport_event(session_id, transport_event).await;
+                }
+                tracing::debug!("📡 TransportServer 会话 {} 的事件消费循环结束", session_id);
+            } else {
+                tracing::warn!("⚠️ 会话 {} 无法获取事件流", session_id);
             }
         });
         
-        tracing::info!("✅ TransportServer 添加会话: {} (使用无锁连接)", session_id);
+        tracing::info!("✅ TransportServer 添加会话: {} (使用 Transport 抽象)", session_id);
         session_id
     }
 
     /// 移除会话
     pub async fn remove_session(&self, session_id: SessionId) -> Result<(), TransportError> {
-        self.connections.remove(&session_id);
+        self.transports.remove(&session_id);
         self.stats.remove(&session_id);
         self.state_manager.remove_connection(session_id);
         tracing::info!("🗑️ TransportServer 移除会话: {}", session_id);
@@ -333,8 +299,8 @@ impl TransportServer {
         let _ = self.event_sender.send(close_event);
         
         // 3. 立即强制关闭，不等待
-        if let Some(connection) = self.connections.get(&session_id) {
-            let _ = connection.close_lockfree().await; // 忽略错误，直接关闭
+        if let Some(transport) = self.transports.get(&session_id) {
+            let _ = transport.disconnect().await; // 忽略错误，直接关闭
         }
         
         // 4. 标记为已关闭
@@ -389,13 +355,13 @@ impl TransportServer {
         Ok(())
     }
     
-    /// 内部方法：执行实际关闭逻辑 - 无锁版本
+    /// 内部方法：执行实际关闭逻辑 - 通过 Transport 抽象
     async fn do_close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
-        if let Some(connection) = self.connections.get(&session_id) {
+        if let Some(transport) = self.transports.get(&session_id) {
             // 尝试优雅关闭
             match tokio::time::timeout(
                 self.config.graceful_timeout,
-                connection.close_lockfree()
+                transport.disconnect()
             ).await {
                 Ok(Ok(_)) => {
                     tracing::debug!("✅ 会话 {} 优雅关闭成功", session_id);
@@ -424,17 +390,11 @@ impl TransportServer {
         let mut success_count = 0;
         let mut error_count = 0;
         
-        // 使用 for_each 遍历连接
-        let _ = self.connections.for_each(|session_id, connection| {
-            // 这里需要异步处理，但 for_each 不支持异步
-            // 所以我们先收集所有连接，然后处理
-        });
-        
-        // 改为先收集所有会话ID，然后逐个处理
-        let session_ids: Vec<SessionId> = self.connections.keys().unwrap_or_default();
+        // 先收集所有会话ID，然后逐个处理
+        let session_ids: Vec<SessionId> = self.transports.keys().unwrap_or_default();
         for session_id in session_ids {
-            if let Some(connection) = self.connections.get(&session_id) {
-                match connection.send_lockfree(packet.clone()).await {
+            if let Some(transport) = self.transports.get(&session_id) {
+                match transport.send(packet.clone()).await {
                     Ok(()) => success_count += 1,
                     Err(e) => {
                         error_count += 1;
@@ -455,12 +415,12 @@ impl TransportServer {
 
     /// 获取活跃会话列表
     pub async fn active_sessions(&self) -> Vec<SessionId> {
-        self.connections.keys().unwrap_or_default()
+        self.transports.keys().unwrap_or_default()
     }
 
     /// 获取会话计数
     pub async fn session_count(&self) -> usize {
-        self.connections.len()
+        self.transports.len()
     }
 
     /// 生成新的会话ID
@@ -761,7 +721,7 @@ impl Clone for TransportServer {
         
         Self {
             config: self.config.clone(),
-            connections: self.connections.clone(),
+            transports: self.transports.clone(),
             session_id_generator: self.session_id_generator.clone(),
             stats: self.stats.clone(),
             event_sender: self.event_sender.clone(),
@@ -777,7 +737,7 @@ impl Clone for TransportServer {
 impl std::fmt::Debug for TransportServer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransportServer")
-            .field("session_count", &self.connections.len())
+            .field("session_count", &self.transports.len())
             .field("config", &self.config)
             .finish()
     }
