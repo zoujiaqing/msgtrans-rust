@@ -62,15 +62,12 @@ use msgtrans::{
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 配置多个协议 - 同一业务逻辑支持多协议
-    let tcp_config = TcpServerConfig::new()
-        .with_bind_address("127.0.0.1:8001".parse()?);
+    let tcp_config = TcpServerConfig::new("127.0.0.1:8001");
     
-    let websocket_config = WebSocketServerConfig::new()
-        .with_bind_address("127.0.0.1:8002".parse()?)
+    let websocket_config = WebSocketServerConfig::new("127.0.0.1:8001")
         .with_path("/ws");
     
-    let quic_config = QuicServerConfig::new()
-        .with_bind_address("127.0.0.1:8003".parse()?);
+    let quic_config = QuicServerConfig::new("127.0.0.1:8001");
 
     // 构建多协议服务器
     let mut server = TransportServerBuilder::new()
@@ -122,8 +119,7 @@ use std::time::Duration;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 配置客户端 - 配置驱动的协议选择
-    let tcp_config = TcpClientConfig::new()
-        .with_target_address("127.0.0.1:8001".parse()?)
+    let tcp_config = TcpClientConfig::new("127.0.0.1:8001")
         .with_timeout(Duration::from_secs(30));
 
     // 构建客户端 - 零配置即高性能
@@ -201,11 +197,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```rust
 // 同样的服务器代码，不同的协议配置
 let server = TransportServerBuilder::new()
-    .with_protocol(TcpServerConfig::new().with_bind_address("0.0.0.0:8080".parse()?))
+    .with_protocol(TcpServerConfig::new("0.0.0.0:8080"))
     .build().await?;  // TCP版本
 
 let server = TransportServerBuilder::new()
-    .with_protocol(QuicServerConfig::new().with_bind_address("0.0.0.0:8080".parse()?))
+    .with_protocol(QuicServerConfig::new("0.0.0.0:8080"))
     .build().await?;  // QUIC版本 - 业务逻辑完全相同
 ```
 
@@ -402,8 +398,7 @@ use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = WebSocketServerConfig::new()
-        .with_bind_address("127.0.0.1:8080".parse()?)
+    let config = WebSocketServerConfig::new("127.0.0.1:8080")
         .with_path("/chat");
 
     let server = TransportServerBuilder::new()
@@ -468,8 +463,7 @@ use std::time::Instant;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = QuicClientConfig::new()
-        .with_target_address("127.0.0.1:8003".parse()?)
+    let config = QuicClientConfig::new("127.0.0.1:8003")
         .with_server_name("localhost")
         .with_alpn(vec![b"msgtrans".to_vec()]);
 
@@ -533,23 +527,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```rust
 // TCP服务器 - 高可靠性配置
-let tcp_config = TcpServerConfig::new()
-    .with_bind_address("0.0.0.0:8001".parse()?)
+let tcp_config = TcpServerConfig::new("0.0.0.0:8001")
     .with_max_connections(10000)
     .with_keepalive(Duration::from_secs(60))
     .with_nodelay(true)
     .with_reuse_addr(true);
 
 // WebSocket服务器 - Web集成配置
-let ws_config = WebSocketServerConfig::new()
-    .with_bind_address("0.0.0.0:8002".parse()?)
+let ws_config = WebSocketServerConfig::new("0.0.0.0:8002")
     .with_path("/api/ws")
     .with_max_frame_size(1024 * 1024)
     .with_max_connections(5000);
 
 // QUIC服务器 - 下一代协议配置
-let quic_config = QuicServerConfig::new()
-    .with_bind_address("0.0.0.0:8003".parse()?)
+let quic_config = QuicServerConfig::new("0.0.0.0:8003")
     .with_cert_path("cert.pem")
     .with_key_path("key.pem")
     .with_alpn(vec![b"h3".to_vec(), b"msgtrans".to_vec()])
