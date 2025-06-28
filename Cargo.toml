@@ -1,6 +1,6 @@
 [package]
 name = "msgtrans"
-version = "0.1.6"
+version = "1.0.0"
 edition = "2021"
 authors = ["zoujiaqing <zoujiaqing@gmail.com>"]
 license = "Apache-2.0"
@@ -63,25 +63,3 @@ log = "^0.4"
 [dev-dependencies]
 tracing-subscriber = "0.3"
 toml = "0.8"
-# Benchmark dependencies
-criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
-# Phase 2 testing dependencies
-rand = "0.8"
-
-# Phase 2 benchmarks
-[[bench]]
-name = "phase2_benchmarks"
-harness = false
-path = "benches/phase2_benchmarks.rs"
-
-# Modern transport benchmarks
-[[bench]]
-name = "modern_transport_benchmarks"
-harness = false
-path = "benches/modern_transport_benchmarks.rs"
-
-# Packet parsing performance benchmarks
-[[bench]]
-name = "packet_parsing_benchmarks"
-harness = false
-path = "benches/packet_parsing_benchmarks.rs"
