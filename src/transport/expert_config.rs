@@ -1,6 +1,6 @@
-/// 专家级配置 - 高级Builder配置项
+/// Expert-level configuration - Advanced Builder configuration options
 /// 
-/// 为高级用户提供精细化的性能调优、监控和韧性配置选项
+/// Provides fine-grained performance tuning, monitoring and resilience configuration options for advanced users
 
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
@@ -8,26 +8,26 @@ use serde::{Serialize, Deserialize};
 use super::pool::ExpansionStrategy;
 use crate::error::TransportError;
 
-/// 智能连接池专家配置
+/// Smart connection pool expert configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmartPoolConfig {
-    /// 初始连接池大小
+    /// Initial connection pool size
     pub initial_size: usize,
-    /// 最大连接池大小
+    /// Maximum connection pool size
     pub max_size: usize,
-    /// 扩展阈值 (0.0-1.0, 使用率触发扩展)
+    /// Expansion threshold (0.0-1.0, usage rate triggers expansion)
     pub expansion_threshold: f64,
-    /// 收缩阈值 (0.0-1.0, 使用率触发收缩)
+    /// Shrink threshold (0.0-1.0, usage rate triggers shrinking)
     pub shrink_threshold: f64,
-    /// 扩展冷却时间
+    /// Expansion cooldown time
     pub expansion_cooldown: Duration,
-    /// 收缩冷却时间
+    /// Shrink cooldown time
     pub shrink_cooldown: Duration,
-    /// 最小保留连接数
+    /// Minimum retained connections
     pub min_connections: usize,
-    /// 连接预热开关
+    /// Connection warmup switch
     pub enable_warmup: bool,
-    /// 自定义扩展因子序列
+    /// Custom expansion factor sequence
     pub expansion_factors: Vec<f64>,
 }
 
@@ -36,8 +36,8 @@ impl Default for SmartPoolConfig {
         Self {
             initial_size: 100,
             max_size: 2000,
-            expansion_threshold: 0.8,   // 80%使用率触发扩展
-            shrink_threshold: 0.3,      // 30%使用率触发收缩
+            expansion_threshold: 0.8,   // 80% usage rate triggers expansion
+            shrink_threshold: 0.3,      // 30% usage rate triggers shrinking
             expansion_cooldown: Duration::from_secs(30),
             shrink_cooldown: Duration::from_secs(60),
             min_connections: 10,
@@ -48,7 +48,7 @@ impl Default for SmartPoolConfig {
 }
 
 impl SmartPoolConfig {
-    /// 创建高性能配置预设
+    /// Create high-performance configuration preset
     pub fn high_performance() -> Self {
         Self {
             initial_size: 200,
@@ -63,7 +63,7 @@ impl SmartPoolConfig {
         }
     }
     
-    /// 创建保守配置预设
+    /// Create conservative configuration preset
     pub fn conservative() -> Self {
         Self {
             initial_size: 50,
@@ -78,7 +78,7 @@ impl SmartPoolConfig {
         }
     }
     
-    /// 验证配置有效性
+    /// Validate configuration validity
     pub fn validate(&self) -> Result<(), TransportError> {
         if self.initial_size == 0 {
             return Err(TransportError::config_error("smart_pool", "initial_size must be > 0"));
@@ -113,7 +113,7 @@ impl SmartPoolConfig {
         Ok(())
     }
     
-    /// 转换为ExpansionStrategy
+    /// Convert to ExpansionStrategy
     pub fn to_expansion_strategy(&self) -> ExpansionStrategy {
         ExpansionStrategy {
             factors: self.expansion_factors.clone(),
@@ -124,20 +124,20 @@ impl SmartPoolConfig {
     }
 }
 
-/// 性能监控专家配置
+/// Performance monitoring expert configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceConfig {
-    /// 启用详细监控
+    /// Enable detailed monitoring
     pub enable_detailed_monitoring: bool,
-    /// 监控数据保留时间
+    /// Monitoring data retention time
     pub monitoring_retention: Duration,
-    /// 性能指标采样间隔
+    /// Performance metrics sampling interval
     pub sampling_interval: Duration,
-    /// 启用性能分析
+    /// Enable performance profiling
     pub enable_profiling: bool,
-    /// 指标历史保留条数
+    /// Metrics history retention count
     pub metrics_history_size: usize,
-    /// 自动报告间隔
+    /// Automatic report interval
     pub auto_report_interval: Option<Duration>,
 }
 
@@ -145,41 +145,41 @@ impl Default for PerformanceConfig {
     fn default() -> Self {
         Self {
             enable_detailed_monitoring: true,
-            monitoring_retention: Duration::from_secs(3600), // 1小时
+            monitoring_retention: Duration::from_secs(3600), // 1 hour
             sampling_interval: Duration::from_millis(100),
             enable_profiling: cfg!(debug_assertions),
             metrics_history_size: 1000,
-            auto_report_interval: Some(Duration::from_secs(300)), // 5分钟
+            auto_report_interval: Some(Duration::from_secs(300)), // 5 minutes
         }
     }
 }
 
 impl PerformanceConfig {
-    /// 创建生产环境配置预设
+    /// Create production environment configuration preset
     pub fn production() -> Self {
         Self {
             enable_detailed_monitoring: true,
-            monitoring_retention: Duration::from_secs(7200), // 2小时
+            monitoring_retention: Duration::from_secs(7200), // 2 hours
             sampling_interval: Duration::from_millis(200),
             enable_profiling: false,
             metrics_history_size: 2000,
-            auto_report_interval: Some(Duration::from_secs(600)), // 10分钟
+            auto_report_interval: Some(Duration::from_secs(600)), // 10 minutes
         }
     }
     
-    /// 创建开发环境配置预设
+    /// Create development environment configuration preset
     pub fn development() -> Self {
         Self {
             enable_detailed_monitoring: true,
-            monitoring_retention: Duration::from_secs(1800), // 30分钟
+            monitoring_retention: Duration::from_secs(1800), // 30 minutes
             sampling_interval: Duration::from_millis(50),
             enable_profiling: true,
             metrics_history_size: 500,
-            auto_report_interval: Some(Duration::from_secs(60)), // 1分钟
+            auto_report_interval: Some(Duration::from_secs(60)), // 1 minute
         }
     }
     
-    /// 验证配置有效性
+    /// Validate configuration validity
     pub fn validate(&self) -> Result<(), TransportError> {
         if self.sampling_interval.as_millis() < 10 {
             return Err(TransportError::config_error("performance", "sampling_interval must be >= 10ms"));
@@ -197,12 +197,12 @@ impl PerformanceConfig {
     }
 }
 
-/// 专家配置集合
+/// Expert configuration collection
 #[derive(Debug, Clone)]
 pub struct ExpertConfig {
-    /// 智能连接池配置
+    /// Smart connection pool configuration
     pub smart_pool: Option<SmartPoolConfig>,
-    /// 性能监控配置
+    /// Performance monitoring configuration
     pub performance: Option<PerformanceConfig>,
 }
 
@@ -216,12 +216,12 @@ impl Default for ExpertConfig {
 }
 
 impl ExpertConfig {
-    /// 创建新的专家配置
+    /// Create new expert configuration
     pub fn new() -> Self {
         Self::default()
     }
     
-    /// 验证所有配置
+    /// Validate all configurations
     pub fn validate(&self) -> Result<(), TransportError> {
         if let Some(ref config) = self.smart_pool {
             config.validate()?;
@@ -234,7 +234,7 @@ impl ExpertConfig {
         Ok(())
     }
     
-    /// 是否启用了任何专家配置
+    /// Check if any expert configuration is enabled
     pub fn has_expert_config(&self) -> bool {
         self.smart_pool.is_some() || self.performance.is_some()
     }

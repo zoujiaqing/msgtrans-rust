@@ -4,7 +4,7 @@ use tokio::sync::oneshot;
 use crate::transport::lockfree::LockFreeHashMap;
 use crate::packet::Packet;
 
-/// 包装 oneshot::Sender 使其可 Clone
+/// Wrapper for oneshot::Sender to make it Clone
 #[derive(Clone)]
 struct SenderWrapper {
     inner: Arc<std::sync::Mutex<Option<oneshot::Sender<Packet>>>>,
@@ -27,7 +27,7 @@ impl SenderWrapper {
     }
 }
 
-/// 无锁请求管理器
+/// Lock-free request manager
 pub struct RequestManager {
     pending: LockFreeHashMap<u32, SenderWrapper>,
     message_id_counter: AtomicU32,
@@ -41,35 +41,35 @@ impl RequestManager {
         }
     }
     
-    /// 注册请求，返回 message_id 和接收器
+    /// Register request, returns message_id and receiver
     pub fn register(&self) -> (u32, oneshot::Receiver<Packet>) {
         let (tx, rx) = oneshot::channel();
         let message_id = self.message_id_counter.fetch_add(1, Ordering::Relaxed);
         
-        // 如果插入失败，直接 panic（底层库，不应该发生）
+        // If insertion fails, panic directly (should not happen in low-level library)
         self.pending.insert(message_id, SenderWrapper::new(tx)).expect("Failed to register request");
         
-        tracing::debug!("🔖 注册 RPC 请求: message_id={}", message_id);
+        tracing::debug!("[REGISTER] RPC request registered: message_id={}", message_id);
         (message_id, rx)
     }
     
-    /// 完成请求
+    /// Complete request
     pub fn complete(&self, message_id: u32, packet: Packet) -> bool {
-        tracing::debug!("📥 尝试完成 RPC 请求: message_id={}", message_id);
+        tracing::debug!("[COMPLETE] Attempting to complete RPC request: message_id={}", message_id);
         match self.pending.remove(&message_id) {
             Ok(Some(sender)) => {
-                tracing::debug!("✅ 找到对应的 RPC 请求，发送响应: message_id={}", message_id);
+                tracing::debug!("[SUCCESS] Found matching RPC request, sending response: message_id={}", message_id);
                 let _ = sender.send(packet);
                 true
             }
             _ => {
-                tracing::warn!("⚠️ 未找到对应的 RPC 请求: message_id={}", message_id);
+                tracing::warn!("[WARNING] No matching RPC request found: message_id={}", message_id);
                 false
             }
         }
     }
     
-    /// 清理所有待处理请求（连接关闭时）
+    /// Clear all pending requests (when connection closes)
     pub fn clear(&self) {
         if let Ok(snapshot) = self.pending.snapshot() {
             for (message_id, _) in snapshot {

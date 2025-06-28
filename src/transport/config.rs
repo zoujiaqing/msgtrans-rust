@@ -1,7 +1,7 @@
 #[derive(Debug, Clone)]
 pub struct TransportConfig { 
     pub global: GlobalConfig,
-    /// 优雅关闭超时时间
+    /// Graceful shutdown timeout duration
     pub graceful_timeout: std::time::Duration,
 } 
 
@@ -16,7 +16,7 @@ impl Default for TransportConfig {
 
 impl TransportConfig {
     pub fn validate(&self) -> Result<(), crate::error::TransportError> {
-        // TODO: 实现配置验证逻辑
+        // Implement configuration validation logic
         Ok(())
     }
 }

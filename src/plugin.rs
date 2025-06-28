@@ -7,48 +7,48 @@ use crate::{
     protocol::adapter::ConfigError,
 };
 
-/// 协议插件接口
+/// Protocol plugin interface
 #[async_trait]
 pub trait ProtocolPlugin: Send + Sync {
-    /// 获取协议名称
+    /// Get protocol name
     fn name(&self) -> &str;
     
-    /// 获取协议描述
+    /// Get protocol description
     fn description(&self) -> &str;
     
-    /// 获取协议特性
+    /// Get protocol features
     fn features(&self) -> Vec<String>;
     
-    /// 获取默认端口
+    /// Get default port
     fn default_port(&self) -> Option<u16>;
     
-    /// 验证配置
+    /// Validate configuration
     async fn validate_config(&self, config: &dyn std::any::Any) -> Result<(), ConfigError>;
     
-    /// 创建服务器
+    /// Create server
     async fn create_server(&self, config: Box<dyn std::any::Any>) -> Result<Box<dyn Server>, TransportError>;
     
-    /// 创建连接工厂
+    /// Create connection factory
     async fn create_connection_factory(&self, config: Box<dyn std::any::Any>) -> Result<Box<dyn ConnectionFactory>, TransportError>;
     
-    /// 支持的配置类型名称
+    /// Supported configuration type name
     fn config_type_name(&self) -> &str;
 }
 
-/// 插件注册表
+/// Plugin registry
 pub struct PluginRegistry {
     plugins: Arc<RwLock<HashMap<String, Arc<dyn ProtocolPlugin>>>>,
 }
 
 impl PluginRegistry {
-    /// 创建新的插件注册表
+    /// Create new plugin registry
     pub fn new() -> Self {
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
         }
     }
     
-    /// 注册插件
+    /// Register plugin
     pub fn register(&self, plugin: Arc<dyn ProtocolPlugin>) -> Result<(), TransportError> {
         let mut plugins = self.plugins.write().unwrap();
         let name = plugin.name().to_string();
@@ -63,7 +63,7 @@ impl PluginRegistry {
         Ok(())
     }
     
-    /// 注销插件
+    /// Unregister plugin
     pub fn unregister(&self, name: &str) -> Result<(), TransportError> {
         let mut plugins = self.plugins.write().unwrap();
         if plugins.remove(name).is_some() {
@@ -75,19 +75,19 @@ impl PluginRegistry {
         }
     }
     
-    /// 获取插件
+    /// Get plugin
     pub fn get(&self, name: &str) -> Option<Arc<dyn ProtocolPlugin>> {
         let plugins = self.plugins.read().unwrap();
         plugins.get(name).cloned()
     }
     
-    /// 列出所有插件
+    /// List all plugins
     pub fn list(&self) -> Vec<String> {
         let plugins = self.plugins.read().unwrap();
         plugins.keys().cloned().collect()
     }
     
-    /// 获取插件信息
+    /// Get plugin information
     pub fn get_plugin_info(&self, name: &str) -> Option<PluginInfo> {
         let plugins = self.plugins.read().unwrap();
         plugins.get(name).map(|plugin| PluginInfo {
@@ -99,7 +99,7 @@ impl PluginRegistry {
         })
     }
     
-    /// 获取所有插件信息
+    /// Get all plugin information
     pub fn get_all_plugin_info(&self) -> Vec<PluginInfo> {
         let plugins = self.plugins.read().unwrap();
         plugins.values().map(|plugin| PluginInfo {
@@ -118,30 +118,30 @@ impl Default for PluginRegistry {
     }
 }
 
-/// 插件信息
+/// Plugin information
 #[derive(Debug, Clone)]
 pub struct PluginInfo {
-    /// 插件名称
+    /// Plugin name
     pub name: String,
-    /// 插件描述
+    /// Plugin description
     pub description: String,
-    /// 插件特性
+    /// Plugin features
     pub features: Vec<String>,
-    /// 默认端口
+    /// Default port
     pub default_port: Option<u16>,
-    /// 配置类型名称
+    /// Configuration type name
     pub config_type: String,
 }
 
-/// 插件管理器
+/// Plugin manager
 pub struct PluginManager {
     registry: PluginRegistry,
-    /// 是否允许覆盖内置协议
+    /// Whether to allow overriding built-in protocols
     allow_override: bool,
 }
 
 impl PluginManager {
-    /// 创建新的插件管理器
+    /// Create new plugin manager
     pub fn new() -> Self {
         Self {
             registry: PluginRegistry::new(),
@@ -149,7 +149,7 @@ impl PluginManager {
         }
     }
     
-    /// 创建允许覆盖的插件管理器
+    /// Create plugin manager with override allowed
     pub fn with_override() -> Self {
         Self {
             registry: PluginRegistry::new(),

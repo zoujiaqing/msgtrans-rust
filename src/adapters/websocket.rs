@@ -370,7 +370,7 @@ where
     type Error = WebSocketError;
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
-        // 使用发送队列而不是直接发送
+        // Use send queue instead of direct sending
         self.send_queue.send(packet).map_err(|_| WebSocketError::ConnectionClosed)?;
         Ok(())
     }
@@ -450,7 +450,7 @@ impl<C: 'static> WebSocketServer<C> {
     where
         C: Clone + crate::protocol::ProtocolConfig,
     {
-        // 如果还没有监听器，先创建一个
+        // Create listener if not already created
         if self.listener.is_none() {
             let bind_addr = if let Some(ws_config) = (&self.config as &dyn std::any::Any).downcast_ref::<crate::protocol::WebSocketServerConfig>() {
                 ws_config.bind_address.to_string()
@@ -459,21 +459,21 @@ impl<C: 'static> WebSocketServer<C> {
             };
             
             let listener = TcpListener::bind(&bind_addr).await?;
-            tracing::debug!("🚀 WebSocket服务器启动在: {}", bind_addr);
+            tracing::debug!("[START] WebSocket server listening on: {}", bind_addr);
             self.listener = Some(listener);
         }
         
         if let Some(listener) = &self.listener {
             let (tcp_stream, addr) = listener.accept().await?;
-            tracing::debug!("✅ WebSocket服务器接受连接: {}", addr);
+            tracing::debug!("[ACCEPT] WebSocket server accepted connection: {}", addr);
             
-            // 执行WebSocket握手
+            // Perform WebSocket handshake
             let maybe_tls_stream = MaybeTlsStream::Plain(tcp_stream); let ws_stream = accept_async(maybe_tls_stream).await?;
             
-            // 创建事件发送器
+            // Create event sender
             let (event_sender, _) = broadcast::channel(1000);
             
-            // 创建WebSocket适配器
+            // Create WebSocket adapter
             WebSocketAdapter::new_with_stream(self.config.clone(), ws_stream, event_sender).await
         } else {
             Err(WebSocketError::Config("No listener available".to_string()))
@@ -513,24 +513,24 @@ impl<C> WebSocketClientBuilder<C> {
     {
         let config = self.config.ok_or_else(|| WebSocketError::Config("Missing WebSocket client config".to_string()))?;
         
-        // 从配置中获取连接URL
+        // Get connection URL from configuration
         let url = if let Some(ws_config) = (&config as &dyn std::any::Any).downcast_ref::<crate::protocol::WebSocketClientConfig>() {
             ws_config.target_url.clone()
         } else {
             "ws://127.0.0.1:8080".to_string()
         };
         
-        tracing::debug!("🔌 WebSocket客户端连接到: {}", url);
+        tracing::debug!("[CONNECT] WebSocket client connecting to: {}", url);
         
-        // 连接到WebSocket服务器
+        // Connect to WebSocket server
         let (ws_stream, _) = connect_async(&url).await?;
         
-        tracing::debug!("✅ WebSocket客户端已连接到: {}", url);
+        tracing::debug!("[SUCCESS] WebSocket client connected to: {}", url);
         
-        // 创建事件发送器
+        // Create event sender
         let (event_sender, _) = broadcast::channel(1000);
         
-        // 创建WebSocket适配器
+        // Create WebSocket adapter
         WebSocketAdapter::new_with_stream(config, ws_stream, event_sender).await
     }
 } 

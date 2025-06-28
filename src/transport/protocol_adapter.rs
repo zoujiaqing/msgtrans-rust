@@ -1,10 +1,10 @@
 /// [PROTOCOL] Flume-powered asynchronous protocol adapter
 /// 
-/// 核心优化：
-/// 1. Flume异步管道替代传统async/await模式
-/// 2. 批量处理提升吞吐量
-/// 3. LockFree统计监控
-/// 4. 零拷贝数据传输
+/// Core optimizations:
+/// 1. Flume async channels replace traditional async/await patterns
+/// 2. Batch processing improves throughput
+/// 3. LockFree statistics monitoring
+/// 4. Zero-copy data transmission
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -17,29 +17,29 @@ use crate::{
     command::ConnectionInfo,
 };
 
-/// LockFree协议统计
+/// LockFree protocol statistics
 #[derive(Debug)]  
 pub struct LockFreeProtocolStats {
-    // 发送统计
+    // Send statistics
     pub packets_sent: AtomicU64,
     pub bytes_sent: AtomicU64,
     pub send_errors: AtomicU64,
     
-    // 接收统计  
+    // Receive statistics  
     pub packets_received: AtomicU64,
     pub bytes_received: AtomicU64,
     pub receive_errors: AtomicU64,
     
-    // 批量处理统计
+    // Batch processing statistics
     pub batch_operations: AtomicU64,
     pub total_batch_size: AtomicU64,
     pub max_batch_size: AtomicUsize,
     
-    // 性能统计
+    // Performance statistics
     pub total_latency_ns: AtomicU64,
     pub operation_count: AtomicU64,
     
-    // 缓存统计
+    // Cache statistics
     pub cache_hits: AtomicU64,
     pub cache_misses: AtomicU64,
 }
@@ -77,7 +77,7 @@ impl LockFreeProtocolStats {
         self.batch_operations.fetch_add(1, Ordering::Relaxed);
         self.total_batch_size.fetch_add(batch_size as u64, Ordering::Relaxed);
         
-        // 原子更新最大批次大小
+        // Atomically update maximum batch size
         self.max_batch_size.fetch_max(batch_size, Ordering::Relaxed);
     }
     
@@ -94,7 +94,7 @@ impl LockFreeProtocolStats {
         self.cache_misses.fetch_add(1, Ordering::Relaxed);
     }
     
-    /// 获取统计快照
+    /// Get statistics snapshot
     pub fn snapshot(&self) -> ProtocolStatsSnapshot {
         ProtocolStatsSnapshot {
             packets_sent: self.packets_sent.load(Ordering::Relaxed),
@@ -114,7 +114,7 @@ impl LockFreeProtocolStats {
     }
 }
 
-/// 统计快照
+/// Statistics snapshot
 #[derive(Debug, Clone)]
 pub struct ProtocolStatsSnapshot {
     pub packets_sent: u64,
@@ -169,15 +169,15 @@ impl ProtocolStatsSnapshot {
     }
 }
 
-/// 协议事件类型
+/// Protocol event types
 #[derive(Debug, Clone)]
 pub enum ProtocolEvent {
-    PacketSent(usize),           // 发送数据包，参数为字节数
-    PacketReceived(usize),       // 接收数据包，参数为字节数
-    BatchProcessed(usize),       // 批量处理，参数为批次大小
-    PerformanceMetric(String),   // 性能指标
-    Error(String),               // 错误事件
-    ConnectionStatus(bool),      // 连接状态
+    PacketSent(usize),           // Packet sent, parameter is byte count
+    PacketReceived(usize),       // Packet received, parameter is byte count
+    BatchProcessed(usize),       // Batch processed, parameter is batch size
+    PerformanceMetric(String),   // Performance metric
+    Error(String),               // Error event
+    ConnectionStatus(bool),      // Connection status
 }
 
 /// [OPTIMIZED] Flume-driven protocol adapter
@@ -203,7 +203,7 @@ pub struct FlumePoweredProtocolAdapter {
 }
 
 impl FlumePoweredProtocolAdapter {
-    /// 创建新的Flume协议适配器
+    /// Create new Flume protocol adapter
     pub fn new(session_id: SessionId, connection_info: ConnectionInfo) -> (Self, FlumeReceiver<ProtocolEvent>) {
         let (send_tx, send_rx) = flume::unbounded();
         let (recv_tx, recv_rx) = flume::unbounded();
@@ -224,7 +224,7 @@ impl FlumePoweredProtocolAdapter {
         (adapter, event_rx)
     }
     
-    /// 核心优化1: 非阻塞发送
+    /// [OPTIMIZATION] Core optimization 1: Non-blocking send
     pub fn send_nowait(&self, packet: Packet) -> Result<(), TransportError> {
         let start_time = Instant::now();
         
@@ -245,12 +245,12 @@ impl FlumePoweredProtocolAdapter {
         result
     }
     
-    /// 核心优化2: 批量发送处理
+    /// [OPTIMIZATION] Core optimization 2: Batch send processing
     pub async fn process_send_batch(&self, max_batch: usize) -> Result<usize, TransportError> {
         let start_time = Instant::now();
         let mut batch = Vec::with_capacity(max_batch);
         
-        // 快速收集批量数据
+        // Quickly collect batch data
         while batch.len() < max_batch {
             match self.send_rx.try_recv() {
                 Ok(packet) => batch.push(packet),
@@ -265,10 +265,10 @@ impl FlumePoweredProtocolAdapter {
         let batch_size = batch.len();
         let total_bytes: usize = batch.iter().map(|p| p.payload.len()).sum();
         
-        // 模拟批量发送处理（实际实现中会调用底层网络接口）
+        // Simulate batch send processing (actual implementation would call underlying network interface)
         tokio::task::yield_now().await;
         
-        // 更新统计
+        // Update statistics
         self.stats.record_batch(batch_size);
         self.stats.bytes_sent.fetch_add(total_bytes as u64, Ordering::Relaxed);
         
@@ -280,12 +280,12 @@ impl FlumePoweredProtocolAdapter {
         Ok(batch_size)
     }
     
-    /// 核心优化3: 批量接收处理  
+    /// [OPTIMIZATION] Core optimization 3: Batch receive processing  
     pub async fn process_receive_batch(&self, max_batch: usize) -> Result<Vec<Packet>, TransportError> {
         let start_time = Instant::now();
         let mut batch = Vec::with_capacity(max_batch);
         
-        // 尝试批量接收
+        // Attempt batch receiving
         while batch.len() < max_batch {
             match self.recv_rx.try_recv() {
                 Ok(packet) => {
@@ -308,18 +308,18 @@ impl FlumePoweredProtocolAdapter {
         Ok(batch)
     }
     
-    /// 模拟接收数据包（用于测试）
+    /// Simulate packet reception (for testing)
     pub fn simulate_receive(&self, packet: Packet) -> Result<(), TransportError> {
         self.recv_tx.try_send(packet)
             .map_err(|_| TransportError::connection_error("Channel full: protocol_recv", false))
     }
     
-    /// 高性能统计查询
+    /// High-performance statistics query
     pub fn get_stats(&self) -> ProtocolStatsSnapshot {
         self.stats.snapshot()
     }
     
-    /// 获取实时性能指标
+    /// Get real-time performance metrics
     pub fn get_performance_metrics(&self) -> PerformanceMetrics {
         let stats = self.stats.snapshot();
         
@@ -340,7 +340,7 @@ impl FlumePoweredProtocolAdapter {
         }
     }
     
-    /// 会话管理接口
+    /// Session management interface
     pub fn session_id(&self) -> SessionId {
         self.session_id
     }
@@ -363,14 +363,14 @@ impl FlumePoweredProtocolAdapter {
     }
 }
 
-/// 性能指标
+/// Performance metrics
 #[derive(Debug, Clone)]
 pub struct PerformanceMetrics {
-    pub throughput_pps: f64,       // 包每秒
-    pub average_latency_ns: f64,   // 平均延迟（纳秒）
-    pub average_batch_size: f64,   // 平均批次大小
-    pub cache_hit_rate: f64,       // 缓存命中率
-    pub error_rate: f64,           // 错误率
+    pub throughput_pps: f64,       // Packets per second
+    pub average_latency_ns: f64,   // Average latency (nanoseconds)
+    pub average_batch_size: f64,   // Average batch size
+    pub cache_hit_rate: f64,       // Cache hit rate
+    pub error_rate: f64,           // Error rate
 }
 
 impl PerformanceMetrics {
@@ -383,7 +383,7 @@ impl PerformanceMetrics {
     }
 }
 
-/// 工具函数：创建测试数据包
+/// Utility function: Create test packet
 pub fn create_test_packet(id: u64, size: usize) -> Packet {
     Packet::one_way(id as u32, vec![0u8; size])
 }
