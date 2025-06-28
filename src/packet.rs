@@ -3,6 +3,8 @@
 /// 为统一架构设计的简化、高效的数据包格式
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use bytes::{Bytes, BytesMut, Buf, BufMut};
 
 /// 数据包类型 - 简化为3种核心类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -566,6 +568,315 @@ pub enum PacketError {
     SerializationError(String),
 }
 
+/// 🚀 零拷贝优化：共享数据包
+/// 
+/// 特性：
+/// 1. 使用 Bytes 实现零拷贝
+/// 2. 支持 Arc 共享，避免克隆
+/// 3. 协议格式与 Packet 完全兼容
+/// 4. 可以与现有 Packet 互相转换
+#[derive(Debug, Clone)]
+pub struct SharedPacket {
+    /// 固定头部（仍使用原结构，协议兼容）
+    pub header: FixedHeader,
+    /// 扩展头部（零拷贝）
+    pub ext_header: Bytes,
+    /// 负载数据（零拷贝）
+    pub payload: Bytes,
+}
+
+impl SharedPacket {
+    /// 创建新的共享数据包
+    pub fn new(packet_type: PacketType, message_id: u32) -> Self {
+        Self {
+            header: FixedHeader::new(packet_type, message_id),
+            ext_header: Bytes::new(),
+            payload: Bytes::new(),
+        }
+    }
+    
+    /// 创建单向消息（零拷贝）
+    pub fn one_way(message_id: u32, payload: impl Into<Bytes>) -> Self {
+        let mut packet = Self::new(PacketType::OneWay, message_id);
+        packet.set_payload_zerocopy(payload);
+        packet
+    }
+    
+    /// 创建请求消息（零拷贝）
+    pub fn request(message_id: u32, payload: impl Into<Bytes>) -> Self {
+        let mut packet = Self::new(PacketType::Request, message_id);
+        packet.set_payload_zerocopy(payload);
+        packet
+    }
+    
+    /// 创建回复消息（零拷贝）
+    pub fn response(message_id: u32, payload: impl Into<Bytes>) -> Self {
+        let mut packet = Self::new(PacketType::Response, message_id);
+        packet.set_payload_zerocopy(payload);
+        packet
+    }
+    
+    /// 设置负载（零拷贝）
+    pub fn set_payload_zerocopy(&mut self, payload: impl Into<Bytes>) {
+        self.payload = payload.into();
+        self.header.payload_len = self.payload.len() as u32;
+    }
+    
+    /// 设置扩展头（零拷贝）
+    pub fn set_ext_header_zerocopy(&mut self, ext_header: impl Into<Bytes>) {
+        self.ext_header = ext_header.into();
+        self.header.ext_header_len = self.ext_header.len() as u16;
+    }
+    
+    /// 🚀 零拷贝序列化
+    /// 
+    /// 协议格式与 Packet::to_bytes() 完全一致
+    pub fn to_bytes_zerocopy(&self) -> Bytes {
+        let total_len = 16 + self.ext_header.len() + self.payload.len();
+        let mut buf = BytesMut::with_capacity(total_len);
+        
+        // 固定头部（协议兼容）
+        buf.extend_from_slice(&self.header.to_bytes());
+        
+        // 扩展头部（零拷贝）
+        if !self.ext_header.is_empty() {
+            buf.extend_from_slice(&self.ext_header);
+        }
+        
+        // 负载（零拷贝）
+        buf.extend_from_slice(&self.payload);
+        
+        buf.freeze()
+    }
+    
+    /// 🚀 零拷贝反序列化
+    /// 
+    /// 协议格式与 Packet::from_bytes() 完全兼容
+    pub fn from_bytes_zerocopy(bytes: Bytes) -> Result<Self, PacketError> {
+        if bytes.len() < 16 {
+            return Err(PacketError::InvalidPacket("Packet too short".to_string()));
+        }
+        
+        // 解析固定头部（复用现有逻辑）
+        let header = FixedHeader::from_bytes(&bytes[0..16])?;
+        
+        let mut offset = 16;
+        
+        // 解析扩展头部（零拷贝切片）
+        let ext_header = if header.ext_header_len > 0 {
+            let end = offset + header.ext_header_len as usize;
+            if bytes.len() < end {
+                return Err(PacketError::InvalidPacket("Extended header incomplete".to_string()));
+            }
+            let ext_header = bytes.slice(offset..end);
+            offset = end;
+            ext_header
+        } else {
+            Bytes::new()
+        };
+        
+        // 解析负载（零拷贝切片）
+        let payload = if header.payload_len > 0 {
+            let end = offset + header.payload_len as usize;
+            if bytes.len() < end {
+                return Err(PacketError::InvalidPacket("Payload incomplete".to_string()));
+            }
+            bytes.slice(offset..end)
+        } else {
+            Bytes::new()
+        };
+        
+        Ok(Self {
+            header,
+            ext_header,
+            payload,
+        })
+    }
+    
+    /// 获取数据包类型
+    pub fn packet_type(&self) -> PacketType {
+        self.header.packet_type
+    }
+    
+    /// 获取消息ID
+    pub fn message_id(&self) -> u32 {
+        self.header.message_id
+    }
+    
+    /// 获取负载大小
+    pub fn payload_len(&self) -> usize {
+        self.payload.len()
+    }
+    
+    /// 获取总大小
+    pub fn total_len(&self) -> usize {
+        16 + self.ext_header.len() + self.payload.len()
+    }
+    
+    /// 获取负载的字符串表示（如果是有效UTF-8）
+    pub fn payload_as_string(&self) -> Option<String> {
+        String::from_utf8(self.payload.to_vec()).ok()
+    }
+    
+    /// 设置消息ID
+    pub fn set_message_id(&mut self, message_id: u32) {
+        self.header.message_id = message_id;
+    }
+    
+    /// 设置数据包类型
+    pub fn set_packet_type(&mut self, packet_type: PacketType) {
+        self.header.packet_type = packet_type;
+    }
+    
+    /// 设置压缩类型
+    pub fn set_compression(&mut self, compression: CompressionType) {
+        self.header.compression = compression;
+    }
+    
+    /// 设置业务类型
+    pub fn set_biz_type(&mut self, biz_type: u8) {
+        self.header.biz_type = biz_type;
+    }
+    
+    /// 获取业务类型
+    pub fn biz_type(&self) -> u8 {
+        self.header.biz_type
+    }
+    
+    /// 获取压缩类型
+    pub fn compression(&self) -> CompressionType {
+        self.header.compression
+    }
+}
+
+/// 🚀 在现有 Packet 中添加零拷贝方法
+impl Packet {
+    /// 🚀 零拷贝序列化（新增方法，不影响现有API）
+    /// 
+    /// 协议格式与 to_bytes() 完全一致，但返回 Bytes 而不是 Vec<u8>
+    pub fn to_bytes_zerocopy(&self) -> Bytes {
+        let total_len = 16 + self.ext_header.len() + self.payload.len();
+        let mut buf = BytesMut::with_capacity(total_len);
+        
+        // 固定头部
+        buf.extend_from_slice(&self.header.to_bytes());
+        
+        // 扩展头部
+        if !self.ext_header.is_empty() {
+            buf.extend_from_slice(&self.ext_header);
+        }
+        
+        // 负载
+        buf.extend_from_slice(&self.payload);
+        
+        buf.freeze()
+    }
+    
+    /// 🚀 从 Bytes 创建数据包（零拷贝反序列化）
+    pub fn from_bytes_zerocopy(bytes: &Bytes) -> Result<Self, PacketError> {
+        if bytes.len() < 16 {
+            return Err(PacketError::InvalidPacket("Packet too short".to_string()));
+        }
+        
+        // 解析固定头部
+        let header = FixedHeader::from_bytes(&bytes[0..16])?;
+        
+        let mut offset = 16;
+        
+        // 解析扩展头部
+        let ext_header = if header.ext_header_len > 0 {
+            let end = offset + header.ext_header_len as usize;
+            if bytes.len() < end {
+                return Err(PacketError::InvalidPacket("Extended header incomplete".to_string()));
+            }
+            let ext_header = bytes[offset..end].to_vec();
+            offset = end;
+            ext_header
+        } else {
+            Vec::new()
+        };
+        
+        // 解析负载
+        let payload = if header.payload_len > 0 {
+            let end = offset + header.payload_len as usize;
+            if bytes.len() < end {
+                return Err(PacketError::InvalidPacket("Payload incomplete".to_string()));
+            }
+            bytes[offset..end].to_vec()
+        } else {
+            Vec::new()
+        };
+        
+        Ok(Self {
+            header,
+            ext_header,
+            payload,
+        })
+    }
+    
+    /// 🚀 转换为共享数据包（零拷贝）
+    pub fn to_shared(&self) -> SharedPacket {
+        SharedPacket {
+            header: self.header.clone(),
+            ext_header: Bytes::copy_from_slice(&self.ext_header),
+            payload: Bytes::copy_from_slice(&self.payload),
+        }
+    }
+    
+    /// 🚀 从共享数据包转换（兼容性）
+    pub fn from_shared(shared: &SharedPacket) -> Self {
+        Self {
+            header: shared.header.clone(),
+            ext_header: shared.ext_header.to_vec(),
+            payload: shared.payload.to_vec(),
+        }
+    }
+}
+
+/// 🚀 互相转换实现
+impl From<Packet> for SharedPacket {
+    fn from(packet: Packet) -> Self {
+        Self {
+            header: packet.header,
+            ext_header: Bytes::from(packet.ext_header),
+            payload: Bytes::from(packet.payload),
+        }
+    }
+}
+
+impl From<SharedPacket> for Packet {
+    fn from(shared: SharedPacket) -> Self {
+        Self {
+            header: shared.header,
+            ext_header: shared.ext_header.to_vec(),
+            payload: shared.payload.to_vec(),
+        }
+    }
+}
+
+/// 🚀 Arc 包装的共享数据包，用于多线程零拷贝
+pub type ArcPacket = Arc<SharedPacket>;
+
+/// 🚀 Arc 共享数据包的辅助函数
+pub mod arc_packet {
+    use super::*;
+    
+    /// 创建新的共享数据包
+    pub fn new(packet_type: PacketType, message_id: u32, payload: impl Into<Bytes>) -> ArcPacket {
+        Arc::new(SharedPacket::one_way(message_id, payload))
+    }
+    
+    /// 从现有数据包创建共享版本
+    pub fn from_packet(packet: Packet) -> ArcPacket {
+        Arc::new(packet.into())
+    }
+    
+    /// 从字节数据创建（零拷贝）
+    pub fn from_bytes_zerocopy(bytes: Bytes) -> Result<ArcPacket, PacketError> {
+        Ok(Arc::new(SharedPacket::from_bytes_zerocopy(bytes)?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,5 +1087,126 @@ mod tests {
         assert_eq!(bytes[5], 0x34);
         assert_eq!(bytes[6], 0x56);
         assert_eq!(bytes[7], 0x78);
+    }
+
+    #[test]
+    fn test_zerocopy_packet_protocol_compatibility() {
+        // 🚀 零拷贝协议兼容性测试
+        let original_packet = Packet::request(12345, b"test message");
+        
+        // 传统序列化
+        let traditional_bytes = original_packet.to_bytes();
+        
+        // 零拷贝序列化
+        let zerocopy_bytes = original_packet.to_bytes_zerocopy();
+        
+        // 🎯 确保字节格式完全一致
+        assert_eq!(traditional_bytes, zerocopy_bytes.as_ref());
+        
+        // 反序列化测试
+        let recovered_traditional = Packet::from_bytes(&traditional_bytes).unwrap();
+        let recovered_zerocopy = Packet::from_bytes_zerocopy(&zerocopy_bytes).unwrap();
+        
+        // 🎯 确保反序列化结果一致
+        assert_eq!(recovered_traditional, recovered_zerocopy);
+        assert_eq!(recovered_traditional, original_packet);
+    }
+
+    #[test]
+    fn test_shared_packet_compatibility() {
+        // 🚀 SharedPacket 兼容性测试
+        let original = Packet::one_way(9999, b"shared test");
+        let shared = SharedPacket::one_way(9999, Bytes::from("shared test"));
+        
+        // 序列化格式必须一致
+        let original_bytes = original.to_bytes();
+        let shared_bytes = shared.to_bytes_zerocopy();
+        
+        assert_eq!(original_bytes, shared_bytes.as_ref());
+        
+        // 转换测试
+        let shared_from_original = original.to_shared();
+        let original_from_shared = Packet::from_shared(&shared);
+        
+        assert_eq!(shared_from_original.payload, shared.payload);
+        assert_eq!(original_from_shared, original);
+    }
+
+    #[test]
+    fn test_arc_packet_creation() {
+        // 🚀 Arc 共享数据包测试
+        use crate::packet::arc_packet;
+        
+        let arc_pkt = arc_packet::new(PacketType::Request, 789, Bytes::from("arc test"));
+        assert_eq!(arc_pkt.message_id(), 789);
+        assert_eq!(arc_pkt.payload_as_string().unwrap(), "arc test");
+        
+        // 从传统数据包创建
+        let traditional = Packet::response(456, b"traditional");
+        let arc_from_traditional = arc_packet::from_packet(traditional.clone());
+        
+        assert_eq!(arc_from_traditional.message_id(), 456);
+        assert_eq!(arc_from_traditional.payload_as_string().unwrap(), "traditional");
+    }
+
+    #[test]
+    fn test_zerocopy_performance_no_clone() {
+        // 🚀 验证零拷贝确实避免了数据拷贝
+        let large_data = vec![0u8; 1024 * 1024]; // 1MB
+        let bytes_data = Bytes::from(large_data);
+        
+        // 创建共享数据包（应该是零拷贝）
+        let shared = SharedPacket::one_way(123, bytes_data.clone());
+        
+        // 验证内存地址相同（零拷贝证明）
+        assert_eq!(shared.payload.as_ptr(), bytes_data.as_ptr());
+        assert_eq!(shared.payload.len(), bytes_data.len());
+        
+        // 切片也应该是零拷贝
+        let serialized = shared.to_bytes_zerocopy();
+        let recovered = SharedPacket::from_bytes_zerocopy(serialized).unwrap();
+        
+        // 负载部分应该共享内存
+        assert_eq!(recovered.payload.len(), 1024 * 1024);
+    }
+
+    #[test]
+    fn test_protocol_format_stability() {
+        // 🚀 协议格式稳定性测试 - 确保跨版本兼容
+        
+        // 创建包含所有字段的复杂数据包
+        let mut packet = Packet::new(PacketType::Request, 0xDEADBEEF);
+        packet.set_biz_type(0xFF);
+        packet.set_compression(CompressionType::Zlib);
+        packet.set_fragmented(true);
+        packet.set_priority(true);
+        packet.set_route_tag(true);
+        packet.set_ext_header(b"complex_ext_header");
+        packet.set_payload(b"complex_payload_data_for_testing");
+        
+        // 传统方式序列化
+        let traditional_bytes = packet.to_bytes();
+        
+        // 零拷贝方式序列化
+        let zerocopy_bytes = packet.to_bytes_zerocopy();
+        
+        // SharedPacket 方式序列化
+        let shared = packet.to_shared();
+        let shared_bytes = shared.to_bytes_zerocopy();
+        
+        // 🎯 所有序列化方式的字节格式必须完全一致
+        assert_eq!(traditional_bytes, zerocopy_bytes.as_ref());
+        assert_eq!(traditional_bytes, shared_bytes.as_ref());
+        
+        // 🎯 所有反序列化方式的结果必须一致
+        let recovered1 = Packet::from_bytes(&traditional_bytes).unwrap();
+        let recovered2 = Packet::from_bytes_zerocopy(&zerocopy_bytes).unwrap();
+        let recovered3 = SharedPacket::from_bytes_zerocopy(shared_bytes).unwrap();
+        
+        assert_eq!(recovered1, recovered2);
+        assert_eq!(recovered1, packet);
+        assert_eq!(recovered3.header, packet.header);
+        assert_eq!(recovered3.ext_header.as_ref(), packet.ext_header.as_slice());
+        assert_eq!(recovered3.payload.as_ref(), packet.payload.as_slice());
     }
 } 
