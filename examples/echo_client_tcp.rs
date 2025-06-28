@@ -19,12 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     info!("🚀 启动TCP Echo客户端 (简化API - 只有字节版本)");
     
-    // 创建TCP配置
-    let tcp_config = TcpClientConfig::new()
-        .with_target_str("127.0.0.1:8001")?
+    // 创建TCP配置 - 简化API
+    let tcp_config = TcpClientConfig::new("127.0.0.1:8001")?
         .with_connect_timeout(Duration::from_secs(5))
-        .with_nodelay(true)
-        .build()?;
+        .with_nodelay(true);
     
     // 🎯 使用新的TransportClientBuilder构建客户端
     let mut transport = TransportClientBuilder::new()

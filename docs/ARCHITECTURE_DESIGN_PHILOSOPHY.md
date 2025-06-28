@@ -29,9 +29,9 @@ struct LockFreeConnection {
 ```
 
 **核心优势**：
-- 🚀 **4.98x 整体性能提升** - 彻底消除锁竞争
-- ⚡ **20,000x 事件响应提升** - 微秒级响应时间
-- 📈 **近线性多核扩展** - 支持大规模并发处理
+- 🚀 **彻底消除锁竞争**
+- ⚡ **微秒级响应时间**
+- 📈 **近线性多核扩展**
 
 ### 2. 混合架构策略
 
@@ -79,7 +79,7 @@ ConnectionFactory::create_connection(adapter, session_id)?;
 /// ┌─ 应用接口层 ─────────────────────────────┐
 /// │  TransportClient / TransportServer      │ ← 统一 API
 /// ├─ 连接抽象层 ─────────────────────────────┤  
-/// │  Connection Trait (协议无关)             │ ← 协议解耦
+/// │  Transport (协议无关)                    │ ← 协议解耦
 /// ├─ 高性能实现层 ───────────────────────────┤
 /// │  LockFreeConnection (无锁实现)           │ ← 性能核心
 /// │  ├─ 命令队列 (Command Channel)           │

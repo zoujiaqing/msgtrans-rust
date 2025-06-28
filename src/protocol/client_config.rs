@@ -156,7 +156,22 @@ impl ProtocolConfig for TcpClientConfig {
 
 impl TcpClientConfig {
     /// 创建新的TCP客户端配置
-    pub fn new() -> Self {
+    pub fn new(target_address: &str) -> Result<Self, ConfigError> {
+        let addr = target_address.parse()
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: target_address.to_string(),
+                reason: format!("Invalid target address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        
+        Ok(Self {
+            target_address: addr,
+            ..Self::default()
+        })
+    }
+    
+    /// 创建默认配置（用于需要默认地址的场景）
+    pub fn default_config() -> Self {
         Self::default()
     }
     
@@ -238,27 +253,27 @@ impl TcpClientConfig {
     }
     
     /// 高性能客户端预设
-    pub fn high_performance() -> Self {
-        Self::new()
+    pub fn high_performance(target_address: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_address)?
             .with_nodelay(true)
             .with_read_buffer_size(65536)
             .with_write_buffer_size(65536)
             .with_connect_timeout(Duration::from_secs(5))
-            .with_keepalive(Some(Duration::from_secs(30)))
+            .with_keepalive(Some(Duration::from_secs(30))))
     }
     
     /// 低延迟客户端预设
-    pub fn low_latency() -> Self {
-        Self::new()
+    pub fn low_latency(target_address: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_address)?
             .with_nodelay(true)
             .with_read_buffer_size(4096)
             .with_write_buffer_size(4096)
-            .with_connect_timeout(Duration::from_secs(3))
+            .with_connect_timeout(Duration::from_secs(3)))
     }
     
     /// 可靠连接客户端预设
-    pub fn reliable() -> Self {
-        Self::new()
+    pub fn reliable(target_address: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_address)?
             .with_retry_config(RetryConfig {
                 max_retries: 10,
                 retry_interval: Duration::from_secs(1),
@@ -267,7 +282,7 @@ impl TcpClientConfig {
                 jitter: true,
             })
             .with_connect_timeout(Duration::from_secs(30))
-            .with_keepalive(Some(Duration::from_secs(120)))
+            .with_keepalive(Some(Duration::from_secs(120))))
     }
 }
 
@@ -386,7 +401,24 @@ impl ProtocolConfig for WebSocketClientConfig {
 
 impl WebSocketClientConfig {
     /// 创建新的WebSocket客户端配置
-    pub fn new() -> Self {
+    pub fn new(target_url: &str) -> Result<Self, ConfigError> {
+        if !target_url.starts_with("ws://") && !target_url.starts_with("wss://") {
+            return Err(ConfigError::InvalidValue {
+                field: "target_url".to_string(),
+                value: target_url.to_string(),
+                reason: "must start with 'ws://' or 'wss://'".to_string(),
+                suggestion: "use a valid WebSocket URL like 'ws://127.0.0.1:8080/path'".to_string(),
+            });
+        }
+        
+        Ok(Self {
+            target_url: target_url.to_string(),
+            ..Self::default()
+        })
+    }
+    
+    /// 创建默认配置（用于需要默认URL的场景）
+    pub fn default_config() -> Self {
         Self::default()
     }
     
@@ -463,33 +495,33 @@ impl WebSocketClientConfig {
     }
     
     /// JSON API客户端预设
-    pub fn json_api() -> Self {
+    pub fn json_api(target_url: &str) -> Result<Self, ConfigError> {
         let mut headers = std::collections::HashMap::new();
         headers.insert("Content-Type".to_string(), "application/json".to_string());
         
-        Self::new()
+        Ok(Self::new(target_url)?
             .with_headers(headers)
             .with_subprotocols(vec!["json".to_string()])
             .with_max_frame_size(16 * 1024)
-            .with_max_message_size(512 * 1024)
+            .with_max_message_size(512 * 1024))
     }
     
     /// 实时通信客户端预设
-    pub fn realtime() -> Self {
-        Self::new()
+    pub fn realtime(target_url: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_url)?
             .with_ping_interval(Some(Duration::from_secs(10)))
             .with_pong_timeout(Duration::from_secs(5))
             .with_max_frame_size(8 * 1024)
-            .with_connect_timeout(Duration::from_secs(5))
+            .with_connect_timeout(Duration::from_secs(5)))
     }
     
     /// 文件传输客户端预设
-    pub fn file_transfer() -> Self {
-        Self::new()
+    pub fn file_transfer(target_url: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_url)?
             .with_max_frame_size(1024 * 1024)  // 1MB
             .with_max_message_size(100 * 1024 * 1024)  // 100MB
             .with_ping_interval(None)  // 禁用ping以减少干扰
-            .with_connect_timeout(Duration::from_secs(30))
+            .with_connect_timeout(Duration::from_secs(30)))
     }
 }
 
@@ -596,7 +628,22 @@ impl ProtocolConfig for QuicClientConfig {
 
 impl QuicClientConfig {
     /// 创建新的QUIC客户端配置
-    pub fn new() -> Self {
+    pub fn new(target_address: &str) -> Result<Self, ConfigError> {
+        let addr = target_address.parse()
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: target_address.to_string(),
+                reason: format!("Invalid target address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        
+        Ok(Self {
+            target_address: addr,
+            ..Self::default()
+        })
+    }
+    
+    /// 创建默认配置（用于需要默认地址的场景）
+    pub fn default_config() -> Self {
         Self::default()
     }
     
@@ -684,26 +731,26 @@ impl QuicClientConfig {
     }
     
     /// 高性能客户端预设
-    pub fn high_performance() -> Self {
-        Self::new()
+    pub fn high_performance(target_address: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_address)?
             .with_max_concurrent_streams(1000)
             .with_initial_rtt(Duration::from_millis(20))
-            .with_connect_timeout(Duration::from_secs(5))
+            .with_connect_timeout(Duration::from_secs(5)))
     }
     
     /// 低延迟客户端预设
-    pub fn low_latency() -> Self {
-        Self::new()
+    pub fn low_latency(target_address: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_address)?
             .with_initial_rtt(Duration::from_millis(10))
             .with_keep_alive_interval(Some(Duration::from_secs(5)))
-            .with_max_idle_timeout(Duration::from_secs(10))
+            .with_max_idle_timeout(Duration::from_secs(10)))
     }
     
     /// 不安全客户端预设（仅用于测试）
-    pub fn insecure() -> Self {
-        Self::new()
+    pub fn insecure(target_address: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(target_address)?
             .with_verify_certificate(false)
-            .with_server_name("localhost")
+            .with_server_name("localhost"))
     }
 }
 

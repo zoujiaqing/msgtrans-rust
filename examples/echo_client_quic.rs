@@ -19,10 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("🚀 启动QUIC Echo客户端 (简化API - 只有字节版本)");
 
-    // 🎯 配置QUIC客户端
-    let quic_config = QuicClientConfig::new()
-        .with_target_address("127.0.0.1:8003".parse::<std::net::SocketAddr>()?)
-        .build()?;
+    // 🎯 配置QUIC客户端 - 简化API
+    let quic_config = QuicClientConfig::new("127.0.0.1:8003")?;
 
     // 🎯 构建TransportClient
     let mut transport = TransportClientBuilder::new()

@@ -17,16 +17,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("🚀 启动WebSocket Echo客户端 (简化API - 只有字节版本)");
 
-    // 🎯 配置WebSocket客户端
-    let websocket_config = WebSocketClientConfig::new()
-        .with_target_url("ws://127.0.0.1:8002")
+    // 🎯 配置WebSocket客户端 - 简化API
+    let websocket_config = WebSocketClientConfig::new("ws://127.0.0.1:8002")?
         .with_connect_timeout(Duration::from_secs(10))
         .with_ping_interval(Some(Duration::from_secs(30)))
         .with_pong_timeout(Duration::from_secs(10))
         .with_max_frame_size(8192)
         .with_max_message_size(65536)
-        .with_verify_tls(false) // 测试环境
-        .build()?;
+        .with_verify_tls(false); // 测试环境
 
     // 🎯 构建TransportClient
     let mut transport = TransportClientBuilder::new()

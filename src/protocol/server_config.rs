@@ -118,7 +118,22 @@ impl crate::protocol::adapter::DynServerConfig for TcpServerConfig {
 
 impl TcpServerConfig {
     /// 创建新的TCP服务端配置
-    pub fn new() -> Self {
+    pub fn new(bind_address: &str) -> Result<Self, ConfigError> {
+        let addr = bind_address.parse()
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: bind_address.to_string(),
+                reason: format!("Invalid bind address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        
+        Ok(Self {
+            bind_address: addr,
+            ..Self::default()
+        })
+    }
+    
+    /// 创建默认配置（用于需要默认地址的场景）
+    pub fn default_config() -> Self {
         Self::default()
     }
     
@@ -297,7 +312,22 @@ impl crate::protocol::adapter::DynServerConfig for WebSocketServerConfig {
 
 impl WebSocketServerConfig {
     /// 创建新的WebSocket服务端配置
-    pub fn new() -> Self {
+    pub fn new(bind_address: &str) -> Result<Self, ConfigError> {
+        let addr = bind_address.parse()
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: bind_address.to_string(),
+                reason: format!("Invalid bind address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        
+        Ok(Self {
+            bind_address: addr,
+            ..Self::default()
+        })
+    }
+    
+    /// 创建默认配置（用于需要默认地址的场景）
+    pub fn default_config() -> Self {
         Self::default()
     }
     
@@ -479,7 +509,22 @@ impl crate::protocol::adapter::DynServerConfig for QuicServerConfig {
 
 impl QuicServerConfig {
     /// 创建新的QUIC服务端配置
-    pub fn new() -> Self {
+    pub fn new(bind_address: &str) -> Result<Self, ConfigError> {
+        let addr = bind_address.parse()
+            .map_err(|e| ConfigError::InvalidAddress {
+                address: bind_address.to_string(),
+                reason: format!("Invalid bind address: {}", e),
+                source: Some(Box::new(e)),
+            })?;
+        
+        Ok(Self {
+            bind_address: addr,
+            ..Self::default()
+        })
+    }
+    
+    /// 创建默认配置（用于需要默认地址的场景）
+    pub fn default_config() -> Self {
         Self::default()
     }
     
@@ -550,9 +595,9 @@ impl QuicServerConfig {
     }
     
     /// 创建测试用的不安全配置
-    pub fn insecure() -> Self {
-        Self::new()
+    pub fn insecure(bind_address: &str) -> Result<Self, ConfigError> {
+        Ok(Self::new(bind_address)?
             .with_cert_pem("") // 空证书表示使用自签名
-            .with_key_pem("")  // 空私钥表示使用自签名
+            .with_key_pem("")) // 空私钥表示使用自签名
     }
 }

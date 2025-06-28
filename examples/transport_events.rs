@@ -24,10 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("观察无锁连接的事件桥接和服务端事件处理");
     println!();
     
-    // 启动服务端
-    let server_addr: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
-    let tcp_config = TcpServerConfig::new()
-        .with_bind_address(server_addr);
+    // 启动服务端 - 简化API
+    let tcp_config = TcpServerConfig::new("127.0.0.1:9001")?;
         
     let server = TransportServerBuilder::new()
         .with_protocol(tcp_config)
@@ -106,10 +104,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(Duration::from_millis(500)).await;
     println!("🚀 服务端已启动，现在启动客户端");
     
-    // 启动客户端
-    let client_addr: std::net::SocketAddr = "127.0.0.1:9001".parse().unwrap();
-    let client_config = TcpClientConfig::new()
-        .with_target_address(client_addr);
+    // 启动客户端 - 简化API
+    let client_config = TcpClientConfig::new("127.0.0.1:9001")?;
     let mut client = TransportClientBuilder::new()
         .with_protocol(client_config)
         .build()
