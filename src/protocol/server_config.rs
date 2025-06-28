@@ -1,32 +1,32 @@
-//! 服务端配置模块 - 分离的服务端配置实现
+//! Server configuration module - Separated server configuration implementation
 
 use serde::{Serialize, Deserialize};
 use std::time::Duration;
 use crate::protocol::{ProtocolConfig, ConfigError};
 use crate::protocol::adapter::DynProtocolConfig;
 
-/// TCP服务端配置
+/// TCP server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TcpServerConfig {
-    /// 绑定地址
+    /// Bind address
     pub bind_address: std::net::SocketAddr,
-    /// 最大连接数
+    /// Maximum connections
     pub max_connections: usize,
-    /// TCP_NODELAY选项
+    /// TCP_NODELAY option
     pub nodelay: bool,
-    /// keepalive时间
+    /// Keepalive time
     pub keepalive: Option<Duration>,
-    /// 读缓冲区大小
+    /// Read buffer size
     pub read_buffer_size: usize,
-    /// 写缓冲区大小
+    /// Write buffer size
     pub write_buffer_size: usize,
-    /// 服务器接受超时
+    /// Server accept timeout
     pub accept_timeout: Duration,
-    /// 连接空闲超时
+    /// Connection idle timeout
     pub idle_timeout: Option<Duration>,
-    /// 是否允许端口复用
+    /// Whether to allow port reuse
     pub reuse_port: bool,
-    /// 是否允许地址复用
+    /// Whether to allow address reuse
     pub reuse_addr: bool,
 }
 
@@ -65,7 +65,7 @@ impl ProtocolConfig for TcpServerConfig {
     }
     
     fn merge(mut self, other: Self) -> Self {
-        // 简化的合并逻辑
+        // Simplified merge logic
         if other.bind_address.to_string() != "127.0.0.1:8080" {
             self.bind_address = other.bind_address;
         }
@@ -98,7 +98,7 @@ impl DynProtocolConfig for TcpServerConfig {
     }
 }
 
-/// 🔧 新增：实现服务端专用配置
+/// [CONFIG] New: Implement server-specific configuration
 impl crate::protocol::adapter::DynServerConfig for TcpServerConfig {
     fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
@@ -117,7 +117,7 @@ impl crate::protocol::adapter::DynServerConfig for TcpServerConfig {
 }
 
 impl TcpServerConfig {
-    /// 创建新的TCP服务端配置
+    /// Create new TCP server configuration
     pub fn new(bind_address: &str) -> Result<Self, ConfigError> {
         let addr = bind_address.parse()
             .map_err(|e| ConfigError::InvalidAddress {
@@ -132,98 +132,98 @@ impl TcpServerConfig {
         })
     }
     
-    /// 创建默认配置（用于需要默认地址的场景）
+    /// Create default configuration (for scenarios requiring default address)
     pub fn default_config() -> Self {
         Self::default()
     }
     
-    /// 设置绑定地址
+    /// Set bind address
     pub fn with_bind_address<A: Into<std::net::SocketAddr>>(mut self, addr: A) -> Self {
         self.bind_address = addr.into();
         self
     }
     
-    /// 设置最大连接数
+    /// Set maximum connections
     pub fn with_max_connections(mut self, max: usize) -> Self {
         self.max_connections = max;
         self
     }
     
-    /// 设置TCP_NODELAY选项
+    /// Set TCP_NODELAY option
     pub fn with_nodelay(mut self, nodelay: bool) -> Self {
         self.nodelay = nodelay;
         self
     }
     
-    /// 设置keepalive时间
+    /// Set keepalive time
     pub fn with_keepalive(mut self, keepalive: Option<Duration>) -> Self {
         self.keepalive = keepalive;
         self
     }
     
-    /// 设置读缓冲区大小
+    /// Set read buffer size
     pub fn with_read_buffer_size(mut self, size: usize) -> Self {
         self.read_buffer_size = size;
         self
     }
     
-    /// 设置写缓冲区大小
+    /// Set write buffer size
     pub fn with_write_buffer_size(mut self, size: usize) -> Self {
         self.write_buffer_size = size;
         self
     }
     
-    /// 设置接受超时
+    /// Set accept timeout
     pub fn with_accept_timeout(mut self, timeout: Duration) -> Self {
         self.accept_timeout = timeout;
         self
     }
     
-    /// 设置连接空闲超时
+    /// Set connection idle timeout
     pub fn with_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.idle_timeout = timeout;
         self
     }
     
-    /// 设置端口复用
+    /// Set port reuse
     pub fn with_reuse_port(mut self, reuse: bool) -> Self {
         self.reuse_port = reuse;
         self
     }
     
-    /// 设置地址复用
+    /// Set address reuse
     pub fn with_reuse_addr(mut self, reuse: bool) -> Self {
         self.reuse_addr = reuse;
         self
     }
     
-    /// 构建配置
+    /// Build configuration
     pub fn build(self) -> Result<Self, ConfigError> {
         self.validate()?;
         Ok(self)
     }
 }
 
-/// WebSocket服务端配置
+/// WebSocket server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSocketServerConfig {
-    /// 绑定地址
+    /// Bind address
     pub bind_address: std::net::SocketAddr,
-    /// WebSocket路径
+    /// WebSocket path
     pub path: String,
-    /// 支持的子协议
+    /// Supported sub-protocols
     pub subprotocols: Vec<String>,
-    /// 最大帧大小
+    /// Maximum frame size
     pub max_frame_size: usize,
-    /// 最大消息大小
+    /// Maximum message size
     pub max_message_size: usize,
-    /// ping间隔
+    /// Ping interval
     pub ping_interval: Option<Duration>,
-    /// pong超时
+    /// Pong timeout
     pub pong_timeout: Duration,
-    /// 最大连接数
+    /// Maximum connections
     pub max_connections: usize,
-    /// 连接空闲超时
+    /// Connection idle timeout
     pub idle_timeout: Option<Duration>,
 }
 
@@ -292,7 +292,7 @@ impl DynProtocolConfig for WebSocketServerConfig {
     }
 }
 
-/// 🔧 新增：实现 WebSocket 服务端专用配置
+/// [CONFIG] New: Implement WebSocket server-specific configuration
 impl crate::protocol::adapter::DynServerConfig for WebSocketServerConfig {
     fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
@@ -311,7 +311,7 @@ impl crate::protocol::adapter::DynServerConfig for WebSocketServerConfig {
 }
 
 impl WebSocketServerConfig {
-    /// 创建新的WebSocket服务端配置
+    /// Create new WebSocket server configuration
     pub fn new(bind_address: &str) -> Result<Self, ConfigError> {
         let addr = bind_address.parse()
             .map_err(|e| ConfigError::InvalidAddress {
@@ -326,72 +326,72 @@ impl WebSocketServerConfig {
         })
     }
     
-    /// 创建默认配置（用于需要默认地址的场景）
+    /// Create default configuration (for scenarios requiring default address)
     pub fn default_config() -> Self {
         Self::default()
     }
     
-    /// 设置绑定地址
+    /// Set bind address
     pub fn with_bind_address<A: Into<std::net::SocketAddr>>(mut self, addr: A) -> Self {
         self.bind_address = addr.into();
         self
     }
     
-    /// 设置WebSocket路径
+    /// Set WebSocket path
     pub fn with_path<S: Into<String>>(mut self, path: S) -> Self {
         self.path = path.into();
         self
     }
     
-    /// 设置支持的子协议
+    /// Set supported sub-protocols
     pub fn with_subprotocols(mut self, protocols: Vec<String>) -> Self {
         self.subprotocols = protocols;
         self
     }
     
-    /// 添加子协议
+    /// Add sub-protocol
     pub fn add_subprotocol<S: Into<String>>(mut self, protocol: S) -> Self {
         self.subprotocols.push(protocol.into());
         self
     }
     
-    /// 设置最大帧大小
+    /// Set maximum frame size
     pub fn with_max_frame_size(mut self, size: usize) -> Self {
         self.max_frame_size = size;
         self
     }
     
-    /// 设置最大消息大小
+    /// Set maximum message size
     pub fn with_max_message_size(mut self, size: usize) -> Self {
         self.max_message_size = size;
         self
     }
     
-    /// 设置ping间隔
+    /// Set ping interval
     pub fn with_ping_interval(mut self, interval: Option<Duration>) -> Self {
         self.ping_interval = interval;
         self
     }
     
-    /// 设置pong超时
+    /// Set pong timeout
     pub fn with_pong_timeout(mut self, timeout: Duration) -> Self {
         self.pong_timeout = timeout;
         self
     }
     
-    /// 设置最大连接数
+    /// Set maximum connections
     pub fn with_max_connections(mut self, max: usize) -> Self {
         self.max_connections = max;
         self
     }
     
-    /// 设置连接空闲超时
+    /// Set connection idle timeout
     pub fn with_idle_timeout(mut self, timeout: Option<Duration>) -> Self {
         self.idle_timeout = timeout;
         self
     }
     
-    /// 构建配置
+    /// Build configuration
     pub fn build(self) -> Result<Self, ConfigError> {
         self.validate()?;
         Ok(self)

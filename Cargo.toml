@@ -2,7 +2,7 @@
 name = "msgtrans"
 version = "1.0.0-beta.1"
 edition = "2021"
-authors = ["zoujiaqing <zoujiaqing@gmail.com>"]
+authors = ["Jiaqing Zou <zoujiaqing@gmail.com>"]
 license = "Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/zoujiaqing/msgtrans-rust"

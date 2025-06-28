@@ -1,59 +1,59 @@
 use async_trait::async_trait;
 use crate::{SessionId, packet::Packet, error::TransportError, command::ConnectionInfo};
 
-/// 统一的连接接口 - 所有协议的连接抽象
+/// Unified connection interface - Connection abstraction for all protocols
 /// 
-/// 这是 msgtrans 中唯一的连接接口，所有协议适配器都应该实现此接口
+/// This is the only connection interface in msgtrans, all protocol adapters should implement this interface
 #[async_trait]
 pub trait Connection: Send + Sync + std::any::Any {
-    /// 发送数据包
+    /// Send packet
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError>;
     
-    /// 关闭连接
+    /// Close connection
     async fn close(&mut self) -> Result<(), TransportError>;
     
-    /// 获取会话ID
+    /// Get session ID
     fn session_id(&self) -> SessionId;
     
-    /// 设置会话ID
+    /// Set session ID
     fn set_session_id(&mut self, session_id: SessionId);
     
-    /// 获取连接信息
+    /// Get connection information
     fn connection_info(&self) -> ConnectionInfo;
     
-    /// 检查连接是否活跃
+    /// Check if connection is active
     fn is_connected(&self) -> bool;
     
-    /// 刷新发送缓冲区
+    /// Flush send buffer
     async fn flush(&mut self) -> Result<(), TransportError>;
     
-    /// 获取事件流 - 事件驱动架构的核心
+    /// Get event stream - Core of event-driven architecture
     /// 
-    /// 所有连接都应该支持事件流，这是事件驱动架构的基础
+    /// All connections should support event streams, this is the foundation of event-driven architecture
     fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>>;
 }
 
-/// 统一的服务器接口 - 接受新连接
+/// Unified server interface - Accept new connections
 #[async_trait]
 pub trait Server: Send + Sync {
-    /// 接受新连接
+    /// Accept new connection
     async fn accept(&mut self) -> Result<Box<dyn Connection>, TransportError>;
     
-    /// 获取服务器绑定地址
+    /// Get server bind address
     fn local_addr(&self) -> Result<std::net::SocketAddr, TransportError>;
     
-    /// 关闭服务器
+    /// Shutdown server
     async fn shutdown(&mut self) -> Result<(), TransportError>;
 }
 
-/// 连接工厂 - 创建客户端连接
+/// Connection factory - Create client connections
 #[async_trait]
 pub trait ConnectionFactory: Send + Sync {
-    /// 建立连接
+    /// Establish connection
     async fn connect(&self) -> Result<Box<dyn Connection>, TransportError>;
 }
 
-/// TCP连接包装器
+/// TCP connection wrapper
 pub struct TcpConnection {
     adapter: crate::adapters::tcp::TcpAdapter<crate::protocol::TcpClientConfig>,
     cached_info: ConnectionInfo,
@@ -66,9 +66,9 @@ impl TcpConnection {
         Self { adapter, cached_info }
     }
     
-    /// 获取事件流接收器
+    /// Get event stream receiver
     /// 
-    /// 这允许客户端订阅TCP适配器内部事件循环发送的事件
+    /// This allows clients to subscribe to events sent by the TCP adapter's internal event loop
     pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<crate::event::TransportEvent> {
         self.adapter.subscribe_events()
     }
@@ -110,13 +110,13 @@ impl Connection for TcpConnection {
         self.adapter.flush().await.map_err(Into::into)
     }
     
-    /// 获取事件流 - TCP连接特有的实现
+    /// Get event stream - TCP connection specific implementation
     fn event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         Some(self.adapter.subscribe_events())
     }
 }
 
-/// TCP服务器包装器
+/// TCP server wrapper
 pub struct TcpServer {
     inner: crate::adapters::tcp::TcpServer,
 }
@@ -134,8 +134,8 @@ impl Server for TcpServer {
             TransportError::protocol_error("generic", format!("TCP accept failed: {:?}", e))
         })?;
         
-        // 注意：这里需要将服务器端的adapter转换为客户端连接
-        // TODO: 需要实现适当的转换逻辑
+        // Note: Need to convert server-side adapter to client connection
+        // TODO: Need to implement appropriate conversion logic
         Err(TransportError::config_error("tcp", "TCP server accept not fully implemented yet"))
     }
     
@@ -146,12 +146,12 @@ impl Server for TcpServer {
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
-        // TCP服务器没有显式的shutdown方法，这里只是标记
+        // TCP server has no explicit shutdown method, this is just a marker
         Ok(())
     }
 }
 
-/// TCP连接工厂
+/// TCP connection factory
 pub struct TcpConnectionFactory {
     target_addr: std::net::SocketAddr,
     config: crate::protocol::TcpClientConfig,

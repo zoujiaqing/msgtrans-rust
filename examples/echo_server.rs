@@ -151,7 +151,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ServerEvent::ServerStopped => {
                     println!("[STOP] Server stop notification");
                 }
-
             }
         }
         

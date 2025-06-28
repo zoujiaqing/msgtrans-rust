@@ -1,10 +1,10 @@
-/// 无锁连接对象 - 解决 Arc<Mutex<Connection>> 的锁竞争问题
+/// Lock-free connection object - Solves Arc<Mutex<Connection>> lock contention issues
 /// 
-/// 设计思路：
-/// 1. 使用 Channel 队列替代直接方法调用，避免锁竞争
-/// 2. 连接状态用原子变量管理
-/// 3. 发送操作通过无锁队列实现
-/// 4. 统计信息使用原子计数器
+/// Design approach:
+/// 1. Use Channel queues to replace direct method calls, avoiding lock contention
+/// 2. Connection state managed with atomic variables
+/// 3. Send operations implemented through lock-free queues
+/// 4. Statistics use atomic counters
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -20,46 +20,46 @@ use crate::{
     event::TransportEvent
 };
 
-/// 无锁连接命令
+/// Lock-free connection commands
 #[derive(Debug)]
 pub enum LockFreeConnectionCommand {
-    /// 发送数据包
+    /// Send packet
     Send {
         packet: Packet,
         response_tx: oneshot::Sender<Result<(), TransportError>>,
     },
-    /// 关闭连接
+    /// Close connection
     Close {
         response_tx: oneshot::Sender<Result<(), TransportError>>,
     },
-    /// 刷新缓冲区
+    /// Flush buffer
     Flush {
         response_tx: oneshot::Sender<Result<(), TransportError>>,
     },
-    /// 检查连接状态
+    /// Check connection status
     IsConnected {
         response_tx: oneshot::Sender<bool>,
     },
-    /// 获取连接信息
+    /// Get connection information
     GetConnectionInfo {
         response_tx: oneshot::Sender<ConnectionInfo>,
     },
 }
 
-/// 无锁连接统计
+/// Lock-free connection statistics
 #[derive(Debug)]
 pub struct LockFreeConnectionStats {
-    /// 发送的数据包数量
+    /// Number of packets sent
     pub packets_sent: AtomicU64,
-    /// 发送的字节数
+    /// Number of bytes sent
     pub bytes_sent: AtomicU64,
-    /// 发送失败次数
+    /// Number of send failures
     pub send_failures: AtomicU64,
-    /// 命令队列长度
+    /// Command queue depth
     pub queue_depth: AtomicU64,
-    /// 最后活跃时间
+    /// Last activity time
     pub last_activity: AtomicU64,
-    /// 连接创建时间
+    /// Connection created time
     pub created_at: AtomicU64,
 }
 
@@ -94,31 +94,31 @@ impl LockFreeConnectionStats {
     }
 }
 
-/// 无锁连接对象 - 核心实现
+/// Lock-free connection object - Core implementation
 /// 
-/// 这个结构体完全无锁，通过消息传递实现所有操作
+/// This structure is completely lock-free, implementing all operations through message passing
 pub struct LockFreeConnection {
-    /// 会话ID（原子操作）
+    /// Session ID (atomic operation)
     session_id: AtomicU64,
-    /// 连接状态（原子操作）
+    /// Connection state (atomic operation)
     is_connected: AtomicBool,
-    /// 命令发送器（无锁）
+    /// Command sender (lock-free)
     command_tx: Sender<LockFreeConnectionCommand>,
-    /// 事件广播器
+    /// Event broadcaster
     event_tx: broadcast::Sender<TransportEvent>,
-    /// 统计信息（原子操作）
+    /// Statistics information (atomic operations)
     stats: Arc<LockFreeConnectionStats>,
-    /// 缓存的连接信息
+    /// Cached connection information
     cached_info: ConnectionInfo,
 }
 
 impl LockFreeConnection {
-    /// 创建新的无锁连接
+    /// Create new lock-free connection
     /// 
-    /// 参数：
-    /// - connection: 底层连接对象
-    /// - session_id: 会话ID
-    /// - buffer_size: 命令队列缓冲区大小
+    /// Parameters:
+    /// - connection: Underlying connection object
+    /// - session_id: Session ID
+    /// - buffer_size: Command queue buffer size
     pub fn new(
         mut connection: Box<dyn Connection>,
         session_id: SessionId,
@@ -130,22 +130,22 @@ impl LockFreeConnection {
         
         let cached_info = connection.connection_info();
         
-        // 🚀 桥接底层连接的事件流到无锁连接的事件通道
+        // [BRIDGE] Bridge underlying connection event stream to lock-free connection event channel
         let event_tx_for_bridge = event_tx.clone();
         if let Some(mut connection_events) = connection.event_stream() {
             tokio::spawn(async move {
-                tracing::debug!("🌉 启动事件桥接器 (会话: {})", session_id);
+                tracing::debug!("[BRIDGE] Starting event bridge (session: {})", session_id);
                 while let Ok(event) = connection_events.recv().await {
-                    tracing::trace!("🌉 桥接事件: {:?}", event);
+                    tracing::trace!("[BRIDGE] Bridging event: {:?}", event);
                     if let Err(_) = event_tx_for_bridge.send(event) {
-                        tracing::debug!("🌉 事件桥接器停止 - 接收方已断开");
+                        tracing::debug!("[BRIDGE] Event bridge stopped - receiver disconnected");
                         break;
                     }
                 }
-                tracing::debug!("🌉 事件桥接器结束 (会话: {})", session_id);
+                tracing::debug!("[BRIDGE] Event bridge ended (session: {})", session_id);
             });
         } else {
-            tracing::debug!("📭 底层连接无事件流，跳过事件桥接");
+            tracing::debug!("[BRIDGE] No event stream from underlying connection, skipping event bridge");
         }
         
         let lockfree_conn = Self {
@@ -157,7 +157,7 @@ impl LockFreeConnection {
             cached_info,
         };
         
-        // 启动后台处理任务
+        // Start background processing task
         let handle = tokio::spawn(Self::connection_worker(
             connection,
             command_rx,
@@ -168,16 +168,16 @@ impl LockFreeConnection {
         (lockfree_conn, handle)
     }
     
-    /// 后台连接工作器 - 处理所有实际的连接操作
+    /// Background connection worker - Handles all actual connection operations
     async fn connection_worker(
         mut connection: Box<dyn Connection>,
         command_rx: Receiver<LockFreeConnectionCommand>,
         event_tx: broadcast::Sender<TransportEvent>,
         stats: Arc<LockFreeConnectionStats>,
     ) {
-        tracing::debug!("🚀 启动无锁连接工作器 (会话: {})", connection.session_id());
+        tracing::debug!("[START] Starting lock-free connection worker (session: {})", connection.session_id());
         
-        // 处理命令队列
+        // Process command queue
         while let Ok(command) = command_rx.recv() {
             stats.update_queue_depth(command_rx.len() as u64);
             
@@ -185,9 +185,9 @@ impl LockFreeConnection {
                 LockFreeConnectionCommand::Send { packet, response_tx } => {
                     let packet_size = packet.payload.len();
                     
-                    // 为发送操作添加超时，避免工作器卡住
+                    // Add timeout for send operation to prevent worker from getting stuck
                     let send_result = tokio::time::timeout(
-                        std::time::Duration::from_secs(5), // 5秒超时
+                        std::time::Duration::from_secs(5), // 5 second timeout
                         connection.send(packet)
                     ).await;
                     
@@ -201,19 +201,19 @@ impl LockFreeConnection {
                             let _ = response_tx.send(Err(e));
                         }
                         Err(_) => {
-                            // 超时错误
+                            // Timeout error
                             stats.record_send_failure();
                             let _ = response_tx.send(Err(TransportError::connection_error(
-                                "发送操作超时", false
+                                "Send operation timeout", false
                             )));
                         }
                     }
                 }
                 
                 LockFreeConnectionCommand::Close { response_tx } => {
-                    // 为关闭操作也添加超时
+                    // Also add timeout for close operation
                     let close_result = tokio::time::timeout(
-                        std::time::Duration::from_secs(3), // 3秒超时
+                        std::time::Duration::from_secs(3), // 3 second timeout
                         connection.close()
                     ).await;
                     
@@ -222,7 +222,7 @@ impl LockFreeConnection {
                             let should_break = result.is_ok();
                             let _ = response_tx.send(result);
                             
-                            // 关闭后退出工作器
+                            // Exit worker after close
                             if should_break {
                                 let _ = event_tx.send(TransportEvent::ConnectionClosed {
                                     reason: crate::CloseReason::Normal,
@@ -231,19 +231,19 @@ impl LockFreeConnection {
                             }
                         }
                         Err(_) => {
-                            // 超时，强制关闭
+                            // Timeout, force close
                             let _ = response_tx.send(Err(TransportError::connection_error(
-                                "关闭操作超时", false
+                                "Close operation timeout", false
                             )));
-                            break; // 超时也要退出工作器
+                            break; // Also exit worker on timeout
                         }
                     }
                 }
                 
                 LockFreeConnectionCommand::Flush { response_tx } => {
-                    // 为刷新操作添加超时
+                    // Add timeout for flush operation
                     let flush_result = tokio::time::timeout(
-                        std::time::Duration::from_secs(2), // 2秒超时
+                        std::time::Duration::from_secs(2), // 2 second timeout
                         connection.flush()
                     ).await;
                     
@@ -253,7 +253,7 @@ impl LockFreeConnection {
                         }
                         Err(_) => {
                             let _ = response_tx.send(Err(TransportError::connection_error(
-                                "刷新操作超时", false
+                                "Flush operation timeout", false
                             )));
                         }
                     }
@@ -271,12 +271,12 @@ impl LockFreeConnection {
             }
         }
         
-        tracing::debug!("🔚 无锁连接工作器结束 (会话: {})", connection.session_id());
+        tracing::debug!("[END] Lock-free connection worker ended (session: {})", connection.session_id());
     }
     
-    /// 🚀 无锁发送 - 核心优化方法
+    /// [PERF] Lock-free send - Core optimization method
     /// 
-    /// 通过消息队列实现，完全避免锁竞争
+    /// Implemented through message queues, completely avoiding lock contention
     pub async fn send_lockfree(&self, packet: Packet) -> Result<(), TransportError> {
         let (response_tx, response_rx) = oneshot::channel();
         
@@ -285,26 +285,26 @@ impl LockFreeConnection {
             response_tx,
         };
         
-        // 无阻塞发送命令
+        // Non-blocking send command
         self.command_tx.send(command)
-            .map_err(|_| TransportError::connection_error("连接已关闭", false))?;
+            .map_err(|_| TransportError::connection_error("Connection closed", false))?;
         
-        // 等待响应
+        // Wait for response
         response_rx.await
-            .map_err(|_| TransportError::connection_error("响应通道关闭", false))?
+            .map_err(|_| TransportError::connection_error("Response channel closed", false))?
     }
     
-    /// 🚀 无锁关闭
+    /// [PERF] Lock-free close
     pub async fn close_lockfree(&self) -> Result<(), TransportError> {
         let (response_tx, response_rx) = oneshot::channel();
         
         let command = LockFreeConnectionCommand::Close { response_tx };
         
         self.command_tx.send(command)
-            .map_err(|_| TransportError::connection_error("连接已关闭", false))?;
+            .map_err(|_| TransportError::connection_error("Connection closed", false))?;
         
         let result = response_rx.await
-            .map_err(|_| TransportError::connection_error("响应通道关闭", false))?;
+            .map_err(|_| TransportError::connection_error("Response channel closed", false))?;
         
         if result.is_ok() {
             self.is_connected.store(false, Ordering::SeqCst);
@@ -313,61 +313,61 @@ impl LockFreeConnection {
         result
     }
     
-    /// 🚀 无锁刷新
+    /// [PERF] Lock-free flush
     pub async fn flush_lockfree(&self) -> Result<(), TransportError> {
         let (response_tx, response_rx) = oneshot::channel();
         
         let command = LockFreeConnectionCommand::Flush { response_tx };
         
         self.command_tx.send(command)
-            .map_err(|_| TransportError::connection_error("连接已关闭", false))?;
+            .map_err(|_| TransportError::connection_error("Connection closed", false))?;
         
         response_rx.await
-            .map_err(|_| TransportError::connection_error("响应通道关闭", false))?
+            .map_err(|_| TransportError::connection_error("Response channel closed", false))?
     }
     
-    /// 🚀 无锁状态检查 - 使用原子操作，超快速
+    /// [PERF] Lock-free status check - Uses atomic operations, ultra-fast
     pub fn is_connected_lockfree(&self) -> bool {
         self.is_connected.load(Ordering::Relaxed)
     }
     
-    /// 获取会话ID - 原子操作
+    /// Get session ID - Atomic operation
     pub fn session_id_lockfree(&self) -> SessionId {
         SessionId(self.session_id.load(Ordering::Relaxed))
     }
     
-    /// 设置会话ID - 原子操作
+    /// Set session ID - Atomic operation
     pub fn set_session_id_lockfree(&self, session_id: SessionId) {
         self.session_id.store(session_id.0, Ordering::SeqCst);
     }
     
-    /// 获取连接信息 - 使用缓存，避免异步调用
+    /// Get connection information - Uses cache to avoid async calls
     pub fn connection_info_lockfree(&self) -> ConnectionInfo {
         self.cached_info.clone()
     }
     
-    /// 订阅事件流
+    /// Subscribe to event stream  
     pub fn subscribe_events(&self) -> broadcast::Receiver<TransportEvent> {
         self.event_tx.subscribe()
     }
     
-    /// 获取统计信息
+    /// Get statistics information
     pub fn stats(&self) -> &LockFreeConnectionStats {
         &self.stats
     }
     
-    /// 获取命令队列深度
+    /// Get command queue depth
     pub fn queue_depth(&self) -> usize {
         self.command_tx.len()
     }
     
-    /// 检查连接是否健康
+    /// Check if connection is healthy
     pub fn is_healthy(&self) -> bool {
-        self.is_connected_lockfree() && self.queue_depth() < 1000 // 队列不能太深
+        self.is_connected_lockfree() && self.queue_depth() < 1000 // Queue cannot be too deep
     }
 }
 
-/// 实现 Clone，便于在多个地方使用同一个连接
+/// Implement Clone for convenient use of the same connection in multiple places
 impl Clone for LockFreeConnection {
     fn clone(&self) -> Self {
         Self {
@@ -381,11 +381,11 @@ impl Clone for LockFreeConnection {
     }
 }
 
-/// 为了兼容性，实现 Send + Sync
+/// Implement Send + Sync for compatibility
 unsafe impl Send for LockFreeConnection {}
 unsafe impl Sync for LockFreeConnection {}
 
-/// 实现 Connection trait 以便与现有系统兼容
+/// Implement Connection trait for compatibility with existing systems
 #[async_trait::async_trait]
 impl crate::Connection for LockFreeConnection {
     async fn send(&mut self, packet: Packet) -> Result<(), TransportError> {
@@ -421,13 +421,13 @@ impl crate::Connection for LockFreeConnection {
     }
 }
 
-/// 🎯 批量操作支持 - 进一步优化性能
+/// [TARGET] Batch operation support - Further performance optimization
 impl LockFreeConnection {
-    /// 批量发送多个数据包
+    /// Send multiple packets in batch
     pub async fn send_batch_lockfree(&self, packets: Vec<Packet>) -> Vec<Result<(), TransportError>> {
         let mut results = Vec::with_capacity(packets.len());
         
-        // 并发发送所有数据包
+        // Send all packets concurrently
         let mut tasks = Vec::new();
         
         for packet in packets {
