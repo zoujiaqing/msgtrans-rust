@@ -1,4 +1,4 @@
-/// Phase 3.2.1: Flume异步协议适配器
+/// [PROTOCOL] Flume-powered asynchronous protocol adapter
 /// 
 /// 核心优化：
 /// 1. Flume异步管道替代传统async/await模式
@@ -180,7 +180,7 @@ pub enum ProtocolEvent {
     ConnectionStatus(bool),      // 连接状态
 }
 
-/// Phase 3.2 Flume驱动的协议适配器
+/// [OPTIMIZED] Flume-driven protocol adapter
 pub struct FlumePoweredProtocolAdapter {
     // Flume发送管道
     send_tx: FlumeSender<Packet>,

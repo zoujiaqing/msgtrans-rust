@@ -1,6 +1,6 @@
-/// 调试传输事件流的专用程序
+/// Specialized program for debugging transport event streams
 /// 
-/// 用于诊断无锁连接的事件桥接和服务端事件处理
+/// Used to diagnose event bridging and server-side event handling for lock-free connections
 
 use std::time::Duration;
 use msgtrans::{
@@ -14,17 +14,17 @@ use msgtrans::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 启用最详细的日志以观察所有事件流
+    // Enable most verbose logging to observe all event flows
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)  // 🔍 最详细的日志级别
+        .with_max_level(tracing::Level::TRACE)  // [DEBUG] Most verbose log level
         .init();
     
-    println!("🔍 传输事件流调试程序");
+    println!("[DEBUG] Transport event stream debug program");
     println!("====================");
-    println!("观察无锁连接的事件桥接和服务端事件处理");
+    println!("Observe event bridging and server-side event handling for lock-free connections");
     println!();
     
-    // 启动服务端 - 简化API
+    // Start server - simplified API
     let tcp_config = TcpServerConfig::new("127.0.0.1:9001")?;
         
     let server = TransportServerBuilder::new()
@@ -32,38 +32,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .await?;
     
-    println!("✅ 服务端创建完成: 127.0.0.1:9001");
+    println!("[SUCCESS] Server created: 127.0.0.1:9001");
     
-    // 订阅服务端事件
+    // Subscribe to server events
     let mut server_events = server.subscribe_events();
     let server_clone = server.clone();
     
-    // 服务端事件处理
+    // Server event handling
     let server_task = tokio::spawn(async move {
-        println!("🎧 服务端事件处理启动");
+        println!("[START] Server event handling started");
         let mut event_count = 0;
         
         while let Ok(event) = server_events.recv().await {
             event_count += 1;
-            println!("📥 服务端事件 #{}: {:?}", event_count, event);
+            println!("[RECV] Server event #{}: {:?}", event_count, event);
             
             match event {
                 ServerEvent::ConnectionEstablished { session_id, .. } => {
-                    println!("🎉 新连接建立: {}", session_id);
+                    println!("[CONNECT] New connection established: {}", session_id);
                     
-                    // 🚀 修复：将发送操作移到单独的异步任务中，避免阻塞事件循环
+                    // [ASYNC] Fix: move send operation to separate async task to avoid blocking event loop
                     let server_for_send = server_clone.clone();
                     tokio::spawn(async move {
-                        // 立即发送一条消息测试
+                        // Send a test message immediately
                         if let Err(e) = server_for_send.send(session_id, b"Hello from server!").await {
-                            println!("❌ 服务端发送失败: {:?}", e);
+                            println!("[ERROR] Server send failed: {:?}", e);
                         } else {
-                            println!("✅ 服务端发送成功");
+                            println!("[SUCCESS] Server send successful");
                         }
                     });
                 }
                 ServerEvent::MessageReceived { session_id, context } => {
-                    println!("📨 收到消息 (会话: {}, ID: {}, 请求: {}): {}", 
+                    println!("[RECV] Message received (session: {}, ID: {}, request: {}): {}", 
                         session_id, 
                         context.message_id, 
                         context.is_request(),
@@ -72,39 +72,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     
                     if context.is_request() {
                         let response = format!("Echo: {}", context.as_text_lossy());
-                        println!("📤 响应请求...");
+                        println!("[SEND] Responding to request...");
                         context.respond(response.into_bytes());
-                        println!("✅ 请求已响应");
+                        println!("[SUCCESS] Request responded");
                     }
                 }
                 ServerEvent::MessageSent { session_id, message_id } => {
-                    println!("📤 消息发送确认: 会话 {}, ID {}", session_id, message_id);
+                    println!("[SEND] Message send confirmation: session {}, ID {}", session_id, message_id);
                 }
                 ServerEvent::ConnectionClosed { session_id, reason } => {
-                    println!("🔌 连接关闭: 会话 {}, 原因: {:?}", session_id, reason);
+                    println!("[CLOSE] Connection closed: session {}, reason: {:?}", session_id, reason);
                     break;
                 }
                 _ => {
-                    println!("📝 其他事件: {:?}", event);
+                    println!("[INFO] Other event: {:?}", event);
                 }
             }
         }
         
-        println!("⚠️ 服务端事件处理结束 (处理了 {} 个事件)", event_count);
+        println!("[WARN] Server event handling ended (processed {} events)", event_count);
     });
     
-    // 启动服务端
+    // Start server
     let server_handle = tokio::spawn(async move {
         if let Err(e) = server.serve().await {
-            println!("❌ 服务端错误: {:?}", e);
+            println!("[ERROR] Server error: {:?}", e);
         }
     });
     
-    // 等待服务端启动
+    // Wait for server startup
     tokio::time::sleep(Duration::from_millis(500)).await;
-    println!("🚀 服务端已启动，现在启动客户端");
+    println!("[START] Server started, now starting client");
     
-    // 启动客户端 - 简化API
+    // Start client - simplified API
     let client_config = TcpClientConfig::new("127.0.0.1:9001")?;
     let mut client = TransportClientBuilder::new()
         .with_protocol(client_config)
@@ -113,86 +113,86 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let mut client_events = client.subscribe_events();
     
-    // 客户端事件处理
+    // Client event handling
     let client_task = tokio::spawn(async move {
-        println!("🎧 客户端事件处理启动");
+        println!("[START] Client event handling started");
         let mut event_count = 0;
         
         while let Ok(event) = client_events.recv().await {
             event_count += 1;
-            println!("📥 客户端事件 #{}: {:?}", event_count, event);
+            println!("[RECV] Client event #{}: {:?}", event_count, event);
             
             match event {
                 ClientEvent::Connected { .. } => {
-                    println!("🎉 客户端连接成功");
+                    println!("[CONNECT] Client connected successfully");
                 }
                 ClientEvent::MessageReceived(context) => {
-                    println!("📨 客户端收到消息 (ID: {}): {}", 
+                    println!("[RECV] Client received message (ID: {}): {}", 
                         context.message_id, 
                         context.as_text_lossy()
                     );
                     
                     if context.is_request() {
-                        println!("📤 响应服务端请求...");
+                        println!("[SEND] Responding to server request...");
                         context.respond(b"Client response!".to_vec());
-                        println!("✅ 已响应服务端请求");
+                        println!("[SUCCESS] Server request responded");
                     }
                 }
                 ClientEvent::MessageSent { message_id } => {
-                    println!("📤 客户端消息发送确认: ID {}", message_id);
+                    println!("[SEND] Client message send confirmation: ID {}", message_id);
                 }
                 ClientEvent::Disconnected { .. } => {
-                    println!("🔌 客户端连接断开");
+                    println!("[CLOSE] Client disconnected");
                     break;
                 }
                 _ => {
-                    println!("📝 客户端其他事件: {:?}", event);
+                    println!("[INFO] Client other event: {:?}", event);
                 }
             }
         }
         
-        println!("⚠️ 客户端事件处理结束 (处理了 {} 个事件)", event_count);
+        println!("[WARN] Client event handling ended (processed {} events)", event_count);
     });
     
-    // 连接到服务端
-    println!("🔌 客户端正在连接...");
+    // Connect to server
+    println!("[CONNECT] Client connecting...");
     client.connect().await?;
-    println!("✅ 客户端连接成功");
+    println!("[SUCCESS] Client connected");
     
-    // 等待连接稳定
+    // Wait for connection to stabilize
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    // 发送单向消息
-    println!("📤 发送单向消息...");
+    // Send one-way message
+    println!("[SEND] Sending one-way message...");
     let result = client.send(b"Hello Server!").await?;
-    println!("✅ 单向消息发送成功 (ID: {})", result.message_id);
+    println!("[SUCCESS] One-way message sent (ID: {})", result.message_id);
     
-    // 等待一下
+    // Wait a moment
     tokio::time::sleep(Duration::from_millis(100)).await;
     
-    // 发送请求
-    println!("🔄 发送请求...");
+    // Send request
+    println!("[REQUEST] Sending request...");
     let response = client.request(b"What time is it?").await?;
     if let Some(data) = response.data {
-        println!("✅ 收到响应: {}", String::from_utf8_lossy(&data));
+        println!("[SUCCESS] Received response: {}", String::from_utf8_lossy(&data));
     } else {
-        println!("⚠️ 请求超时或无响应");
+        println!("[WARN] Request timeout or no response");
     }
     
-    // 等待事件处理
+    // Wait for event processing
     tokio::time::sleep(Duration::from_millis(1000)).await;
     
-    // 断开连接
-    println!("🔌 断开连接...");
+    // Disconnect
+    println!("[CLOSE] Disconnecting...");
     client.disconnect().await?;
     
-    // 等待任务完成
+    // Wait for tasks to complete
     tokio::time::sleep(Duration::from_millis(500)).await;
     
-    // 清理
+    // Cleanup
     server_handle.abort();
     let _ = tokio::join!(server_task, client_task);
     
-    println!("🏁 调试程序完成");
+    println!("[STOP] Debug program completed");
     Ok(())
 } 

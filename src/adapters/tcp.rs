@@ -16,7 +16,7 @@ use crate::{
 use std::sync::Arc;
 use bytes::BytesMut;
 
-/// TCP适配器错误类型
+/// TCP adapter error types
 #[derive(Debug, thiserror::Error)]
 pub enum TcpError {
     #[error("IO error: {0}")]
@@ -51,36 +51,36 @@ impl From<TcpError> for TransportError {
     }
 }
 
-/// 优化的TCP读缓冲区
+/// Optimized TCP read buffer
 /// 
-/// 特性：
-/// 1. 零拷贝数据包解析
-/// 2. 流式读取缓冲
-/// 3. 内存池复用
+/// Features:
+/// 1. Zero-copy packet parsing
+/// 2. Streaming read buffering
+/// 3. Memory pool reuse
 #[derive(Debug)]
 struct OptimizedReadBuffer {
-    /// 主读缓冲区
+    /// Main read buffer
     buffer: BytesMut,
-    /// 缓冲区目标大小
+    /// Target buffer size
     target_capacity: usize,
-    /// 统计信息
+    /// Statistics
     stats: ReadBufferStats,
 }
 
 #[derive(Debug, Default)]
 struct ReadBufferStats {
-    /// 读取次数
+    /// Number of reads
     reads: u64,
-    /// 解析的数据包数
+    /// Number of parsed packets
     packets_parsed: u64,
-    /// 缓冲区重分配次数
+    /// Number of buffer reallocations
     reallocations: u64,
-    /// 总字节读取量
+    /// Total bytes read
     bytes_read: u64,
 }
 
 impl OptimizedReadBuffer {
-    /// 创建新的读缓冲区
+    /// Create new read buffer
     fn new(initial_capacity: usize) -> Self {
         Self {
             buffer: BytesMut::with_capacity(initial_capacity),
@@ -89,55 +89,55 @@ impl OptimizedReadBuffer {
         }
     }
 
-    /// 尝试从缓冲区解析下一个完整数据包
+    /// Try to parse next complete packet from buffer
     /// 
-    /// 返回：
-    /// - Ok(Some(packet)) - 成功解析一个完整数据包
-    /// - Ok(None) - 缓冲区中没有完整数据包
-    /// - Err(error) - 解析错误
+    /// Returns:
+    /// - Ok(Some(packet)) - Successfully parsed a complete packet
+    /// - Ok(None) - No complete packet in buffer
+    /// - Err(error) - Parse error
     fn try_parse_next_packet(&mut self) -> Result<Option<Packet>, TcpError> {
-        // 检查是否有足够的数据解析固定头部
+        // Check if there's enough data to parse fixed header
         if self.buffer.len() < 16 {
             return Ok(None);
         }
 
-        // 解析固定头部（零拷贝）- 使用新的字段顺序
+        // Parse fixed header (zero-copy) - using new field order
         let header_bytes = &self.buffer[0..16];
-        // 新字段顺序: version(1) + compression(1) + packet_type(1) + biz_type(1) + message_id(4) + ext_header_len(2) + payload_len(4) + reserved(2)
+        // New field order: version(1) + compression(1) + packet_type(1) + biz_type(1) + message_id(4) + ext_header_len(2) + payload_len(4) + reserved(2)
         let ext_header_len = u16::from_be_bytes([header_bytes[8], header_bytes[9]]) as usize;
         let payload_len = u32::from_be_bytes([header_bytes[10], header_bytes[11], header_bytes[12], header_bytes[13]]) as usize;
 
-        // 安全检查
+        // Safety check
         if payload_len > 1024 * 1024 || ext_header_len > 64 * 1024 {
             return Err(TcpError::BufferOverflow);
         }
 
         let total_packet_len = 16 + ext_header_len + payload_len;
 
-        // 检查是否有完整数据包
+        // Check if there's a complete packet
         if self.buffer.len() < total_packet_len {
             return Ok(None);
         }
 
-        // 零拷贝解析：直接从缓冲区分割数据包
+        // Zero-copy parsing: directly split packet from buffer
         let packet_bytes = self.buffer.split_to(total_packet_len).freeze();
         
-        // 解析数据包
+        // Parse packet
         let packet = Packet::from_bytes(&packet_bytes).map_err(TcpError::Packet)?;
         
         self.stats.packets_parsed += 1;
         Ok(Some(packet))
     }
 
-    /// 从流中读取更多数据到缓冲区
+    /// Read more data from stream to buffer
     async fn fill_from_stream(&mut self, read_half: &mut tokio::net::tcp::OwnedReadHalf) -> Result<usize, TcpError> {
-        // 确保缓冲区有足够空间
+        // Ensure buffer has enough space
         if self.buffer.capacity() - self.buffer.len() < 4096 {
             self.buffer.reserve(self.target_capacity);
             self.stats.reallocations += 1;
         }
 
-        // 读取数据
+        // Read data
         let bytes_read = read_half.read_buf(&mut self.buffer).await.map_err(TcpError::Io)?;
         
         self.stats.reads += 1;
@@ -146,41 +146,41 @@ impl OptimizedReadBuffer {
         Ok(bytes_read)
     }
 
-    /// 获取缓冲区统计信息
+    /// Get buffer statistics
     fn stats(&self) -> &ReadBufferStats {
         &self.stats
     }
 
-    /// 清理缓冲区（保留容量）
+    /// Clear buffer (preserving capacity)
     fn clear(&mut self) {
         self.buffer.clear();
     }
 }
 
-/// TCP协议适配器 - 事件驱动版本
+/// TCP protocol adapter - event-driven version
 pub struct TcpAdapter<C> {
-    /// 会话ID (使用原子类型以便事件循环访问)
+    /// Session ID (using atomic type for event loop access)
     session_id: Arc<std::sync::atomic::AtomicU64>,
-    /// 配置
+    /// Configuration
     config: C,
-    /// 统计信息
+    /// Statistics
     stats: AdapterStats,
-    /// 连接信息
+    /// Connection information
     connection_info: ConnectionInfo,
-    /// 发送队列
+    /// Send queue
     send_queue: mpsc::UnboundedSender<Packet>,
-    /// 事件发送器
+    /// Event sender
     event_sender: broadcast::Sender<TransportEvent>,
-    /// 关闭信号发送器
+    /// Shutdown signal sender
     shutdown_sender: mpsc::UnboundedSender<()>,
-    /// 事件循环句柄
+    /// Event loop handle
     event_loop_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<C> TcpAdapter<C> {
-    /// 创建新的TCP适配器
+    /// Create new TCP adapter
     pub async fn new(stream: TcpStream, config: C, event_sender: broadcast::Sender<TransportEvent>) -> Result<Self, TcpError> {
-        // 设置基本TCP选项
+        // Set basic TCP options
         stream.set_nodelay(true)?;
         
         let local_addr = stream.local_addr()?;
@@ -193,13 +193,13 @@ impl<C> TcpAdapter<C> {
         connection_info.state = ConnectionState::Connected;
         connection_info.established_at = std::time::SystemTime::now();
         
-        let session_id = Arc::new(std::sync::atomic::AtomicU64::new(0)); // 临时ID，稍后会被设置
+        let session_id = Arc::new(std::sync::atomic::AtomicU64::new(0)); // Temporary ID, will be set later
         
-        // 创建通信通道
+        // Create communication channels
         let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
         
-        // 启动事件循环
+        // Start event loop
         let event_loop_handle = Self::start_event_loop(
             stream,
             session_id.clone(),
@@ -220,14 +220,14 @@ impl<C> TcpAdapter<C> {
         })
     }
     
-    /// 获取事件流接收器
+    /// Get event stream receiver
     /// 
-    /// 这允许客户端订阅TCP适配器内部事件循环发送的事件
+    /// This allows clients to subscribe to events sent by TCP adapter internal event loop
     pub fn subscribe_events(&self) -> broadcast::Receiver<TransportEvent> {
         self.event_sender.subscribe()
     }
 
-    /// 启动基于 tokio::select! 的事件循环
+    /// Start tokio::select! based event loop
     async fn start_event_loop(
         stream: TcpStream,
         session_id: Arc<std::sync::atomic::AtomicU64>,
@@ -237,23 +237,23 @@ impl<C> TcpAdapter<C> {
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
-            tracing::debug!("🚀 TCP事件循环启动 (会话: {})", current_session_id);
+            tracing::debug!("[START] TCP event loop started (session: {})", current_session_id);
             
-            // 分离读写流
+            // Split read/write streams
             let (mut read_half, mut write_half) = stream.into_split();
             
             loop {
-                // 获取当前会话ID
+                // Get current session ID
                 let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
                 
                 tokio::select! {
-                    // 🔍 处理接收数据 - 使用优化的缓冲区方法
+                    // [RECV] Handle receive data - using optimized buffer method
                     read_result = async { 
                         let mut temp_buffer = OptimizedReadBuffer::new(8192);
                         match temp_buffer.fill_from_stream(&mut read_half).await {
-                            Ok(0) => Ok(None), // 连接关闭
+                            Ok(0) => Ok(None), // Connection closed
                             Ok(_) => {
-                                // 尝试解析数据包
+                                // Try to parse packet
                                 temp_buffer.try_parse_next_packet()
                             }
                             Err(e) => Err(e),
@@ -261,66 +261,66 @@ impl<C> TcpAdapter<C> {
                     } => {
                         match read_result {
                             Ok(Some(packet)) => {
-                                tracing::debug!("📥 TCP接收到数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
-                                tracing::debug!("🔍 数据包详情: ID={}, 类型={:?}, 负载长度={}", packet.header.message_id, packet.header.packet_type, packet.payload.len());
+                                tracing::debug!("[RECV] TCP received packet: {} bytes (session: {})", packet.payload.len(), current_session_id);
+                                tracing::debug!("[DETAIL] Packet details: ID={}, type={:?}, payload_len={}", packet.header.message_id, packet.header.packet_type, packet.payload.len());
                                 
-                                // 发送接收事件
+                                // Send receive event
                                 let event = TransportEvent::MessageReceived(packet);
                                 
                                 if let Err(e) = event_sender.send(event) {
-                                    tracing::warn!("📥 发送接收事件失败: {:?}", e);
+                                    tracing::warn!("[RECV] Failed to send receive event: {:?}", e);
                                 }
                             }
                             Ok(None) => {
-                                tracing::debug!("📥 对端主动关闭TCP连接 (会话: {})", current_session_id);
-                                // 对端主动关闭：通知上层应用连接已关闭，以便清理资源
+                                tracing::debug!("[RECV] Peer actively closed TCP connection (session: {})", current_session_id);
+                                // Peer actively closed: notify upper layer that connection is closed for resource cleanup
                                 let close_event = TransportEvent::ConnectionClosed { reason: crate::error::CloseReason::Normal };
                                 
                                 if let Err(e) = event_sender.send(close_event) {
-                                    tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                    tracing::debug!("[CONNECT] Failed to notify upper layer of connection close: session {} - {:?}", current_session_id, e);
                                 } else {
-                                    tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
+                                    tracing::debug!("[NOTIFY] Notified upper layer of connection close: session {}", current_session_id);
                                 }
                                 break;
                             }
                             Err(e) => {
-                                tracing::error!("📥 TCP连接错误: {:?} (会话: {})", e, current_session_id);
-                                // 网络异常：通知上层应用连接出错，以便清理资源
+                                tracing::error!("[RECV] TCP connection error: {:?} (session: {})", e, current_session_id);
+                                // Network error: notify upper layer of connection error for resource cleanup
                                 let close_event = TransportEvent::ConnectionClosed { reason: crate::error::CloseReason::Error(format!("{:?}", e)) };
                                 
                                 if let Err(e) = event_sender.send(close_event) {
-                                    tracing::debug!("🔗 通知上层连接错误失败: 会话 {} - {:?}", current_session_id, e);
+                                    tracing::debug!("[CONNECT] Failed to notify upper layer of connection error: session {} - {:?}", current_session_id, e);
                                 } else {
-                                    tracing::debug!("📡 已通知上层连接错误: 会话 {}", current_session_id);
+                                    tracing::debug!("[NOTIFY] Notified upper layer of connection error: session {}", current_session_id);
                                 }
                                 break;
                             }
                         }
                     }
                     
-                    // 📤 处理发送数据
+                    // [SEND] Handle send data
                     packet = send_queue.recv() => {
                         if let Some(packet) = packet {
                             match Self::write_packet_to_stream(&mut write_half, &packet).await {
                                 Ok(_) => {
-                                    tracing::debug!("📤 TCP发送成功: {} bytes (会话: {})", packet.payload.len(), current_session_id);
+                                    tracing::debug!("[SEND] TCP send successful: {} bytes (session: {})", packet.payload.len(), current_session_id);
                                     
-                                    // 发送发送事件
+                                    // Send send event
                                     let event = TransportEvent::MessageSent { packet_id: packet.header.message_id };
                                     
                                     if let Err(e) = event_sender.send(event) {
-                                        tracing::warn!("📤 发送发送事件失败: {:?}", e);
+                                        tracing::warn!("[SEND] Failed to send send event: {:?}", e);
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!("📤 TCP发送错误: {:?} (会话: {})", e, current_session_id);
-                                    // 发送错误：通知上层应用连接出错，以便清理资源
+                                    tracing::error!("[SEND] TCP send error: {:?} (session: {})", e, current_session_id);
+                                    // Send error: notify upper layer of connection error for resource cleanup
                                     let close_event = TransportEvent::ConnectionClosed { reason: crate::error::CloseReason::Error(format!("{:?}", e)) };
                                     
                                     if let Err(e) = event_sender.send(close_event) {
-                                        tracing::debug!("🔗 通知上层发送错误失败: 会话 {} - {:?}", current_session_id, e);
+                                        tracing::debug!("[CONNECT] Failed to notify upper layer of send error: session {} - {:?}", current_session_id, e);
                                     } else {
-                                        tracing::debug!("📡 已通知上层发送错误: 会话 {}", current_session_id);
+                                        tracing::debug!("[NOTIFY] Notified upper layer of send error: session {}", current_session_id);
                                     }
                                     break;
                                 }
@@ -328,24 +328,24 @@ impl<C> TcpAdapter<C> {
                         }
                     }
                     
-                    // 🛑 处理关闭信号
+                    // [STOP] Handle shutdown signal
                     _ = shutdown_signal.recv() => {
-                        tracing::info!("🛑 收到关闭信号，停止TCP事件循环 (会话: {})", current_session_id);
-                        // 主动关闭：不需要发送关闭事件，因为是上层主动发起的关闭
-                        // 底层协议关闭已经通知了对端，上层也已经知道要关闭了
-                        tracing::debug!("🔌 主动关闭，不发送关闭事件");
+                        tracing::info!("[STOP] Received shutdown signal, stopping TCP event loop (session: {})", current_session_id);
+                        // Active close: no need to send close event, as upper layer initiated the close
+                        // Lower layer protocol close already notified peer, upper layer also knows about the close
+                        tracing::debug!("[CLOSE] Active close, not sending close event");
                         break;
                     }
                 }
             }
             
-            tracing::debug!("✅ TCP事件循环已结束 (会话: {})", current_session_id);
+            tracing::debug!("[SUCCESS] TCP event loop ended (session: {})", current_session_id);
         })
     }
     
 
     
-    /// 向流中写入数据包
+    /// Write packet to stream
     async fn write_packet_to_stream(write_half: &mut tokio::net::tcp::OwnedWriteHalf, packet: &Packet) -> Result<(), TcpError> {
         let packet_bytes = packet.to_bytes();
         write_half.write_all(&packet_bytes).await.map_err(TcpError::Io)?;
@@ -354,11 +354,11 @@ impl<C> TcpAdapter<C> {
     }
 }
 
-// 客户端适配器实现
+// Client adapter implementation
 impl TcpAdapter<TcpClientConfig> {
-    /// 连接到TCP服务器
+    /// Connect to TCP server
     pub async fn connect(addr: std::net::SocketAddr, config: TcpClientConfig) -> Result<Self, TcpError> {
-        tracing::debug!("🔌 TCP客户端连接到: {}", addr);
+        tracing::debug!("[CONNECT] TCP client connecting to: {}", addr);
         
         let stream = if config.connect_timeout != std::time::Duration::from_secs(0) {
             tokio::time::timeout(config.connect_timeout, TcpStream::connect(addr))
@@ -369,7 +369,7 @@ impl TcpAdapter<TcpClientConfig> {
             TcpStream::connect(addr).await.map_err(TcpError::Io)?
         };
         
-        tracing::debug!("✅ TCP连接建立成功");
+        tracing::debug!("[SUCCESS] TCP connection established successfully");
         
         Self::new(stream, config, broadcast::channel(16).0).await
     }
@@ -382,9 +382,9 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
-        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
+        tracing::debug!("[SEND] TCP sending packet: {} bytes (session: {})", packet.payload.len(), current_session_id);
         
-        // 通过队列发送数据包，事件循环会处理实际的发送
+        // Send packet through queue, event loop will handle actual sending
         self.send_queue.send(packet)
             .map_err(|_| TcpError::ConnectionClosed)?;
         
@@ -393,12 +393,12 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     
     async fn close(&mut self) -> Result<(), Self::Error> {
         let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
-        tracing::debug!("🔗 关闭TCP连接 (会话: {})", current_session_id);
+        tracing::debug!("[CLOSE] Closing TCP connection (session: {})", current_session_id);
         
-        // 发送关闭信号
+        // Send shutdown signal
         let _ = self.shutdown_sender.send(());
         
-        // 等待事件循环结束
+        // Wait for event loop to end
         if let Some(handle) = self.event_loop_handle.take() {
             let _ = handle.await;
         }
@@ -436,7 +436,7 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     }
 }
 
-// 服务端适配器实现
+// Server adapter implementation
 #[async_trait]
 impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     type Config = TcpServerConfig;
@@ -444,9 +444,9 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error> {
         let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
-        tracing::debug!("📤 TCP发送数据包: {} bytes (会话: {})", packet.payload.len(), current_session_id);
+        tracing::debug!("[SEND] TCP sending packet: {} bytes (session: {})", packet.payload.len(), current_session_id);
         
-        // 通过队列发送数据包，事件循环会处理实际的发送
+        // Send packet through queue, event loop will handle actual sending
         self.send_queue.send(packet)
             .map_err(|_| TcpError::ConnectionClosed)?;
         
@@ -455,12 +455,12 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     
     async fn close(&mut self) -> Result<(), Self::Error> {
         let current_session_id = SessionId(self.session_id.load(std::sync::atomic::Ordering::SeqCst));
-        tracing::debug!("🔗 关闭TCP连接 (会话: {})", current_session_id);
+        tracing::debug!("[CLOSE] Closing TCP connection (session: {})", current_session_id);
         
-        // 发送关闭信号
+        // Send shutdown signal
         let _ = self.shutdown_sender.send(());
         
-        // 等待事件循环结束
+        // Wait for event loop to end
         if let Some(handle) = self.event_loop_handle.take() {
             let _ = handle.await;
         }
@@ -493,12 +493,12 @@ impl ProtocolAdapter for TcpAdapter<TcpServerConfig> {
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // 在事件驱动模式下，flush由事件循环自动处理
+        // In event-driven mode, flush is automatically handled by event loop
         Ok(())
     }
 }
 
-/// TCP服务器构建器
+/// TCP server builder
 pub(crate) struct TcpServerBuilder {
     config: TcpServerConfig,
     bind_address: Option<std::net::SocketAddr>,
@@ -525,11 +525,11 @@ impl TcpServerBuilder {
     pub(crate) async fn build(self) -> Result<TcpServer, TcpError> {
         let bind_addr = self.bind_address.unwrap_or(self.config.bind_address);
         
-        tracing::debug!("🚀 TCP服务器启动在: {}", bind_addr);
+        tracing::debug!("[START] TCP server starting on: {}", bind_addr);
         
         let listener = TcpListener::bind(bind_addr).await?;
         
-        tracing::info!("✅ TCP服务器成功启动在: {}", listener.local_addr()?);
+        tracing::info!("[SUCCESS] TCP server successfully started on: {}", listener.local_addr()?);
         
         Ok(TcpServer {
             listener,
@@ -544,7 +544,7 @@ impl Default for TcpServerBuilder {
     }
 }
 
-/// TCP服务器
+/// TCP server
 pub(crate) struct TcpServer {
     listener: TcpListener,
     config: TcpServerConfig,
@@ -558,7 +558,7 @@ impl TcpServer {
     pub(crate) async fn accept(&mut self) -> Result<TcpAdapter<TcpServerConfig>, TcpError> {
         let (stream, peer_addr) = self.listener.accept().await?;
         
-        tracing::debug!("🔗 TCP新连接来自: {}", peer_addr);
+        tracing::debug!("[CONNECT] TCP new connection from: {}", peer_addr);
         
         TcpAdapter::new(stream, self.config.clone(), broadcast::channel(16).0).await
     }
@@ -568,7 +568,7 @@ impl TcpServer {
     }
 }
 
-/// TCP客户端构建器
+/// TCP client builder
 pub(crate) struct TcpClientBuilder {
     config: TcpClientConfig,
     target_address: Option<std::net::SocketAddr>,

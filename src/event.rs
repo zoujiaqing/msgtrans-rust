@@ -4,53 +4,52 @@ use crate::command::ConnectionInfo;
 use crate::error::TransportError;
 use crate::packet::Packet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use crate::packet::PacketType;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// 传输层事件的统一抽象
+/// Unified abstraction for transport layer events
 #[derive(Debug, Clone)]
 pub enum TransportEvent {
-    /// 连接相关事件
+    /// Connection related events
     ConnectionEstablished { info: ConnectionInfo },
     ConnectionClosed { reason: CloseReason },
     
-    /// 数据传输事件
+    /// Data transmission events
     MessageReceived(Packet),
     MessageSent { packet_id: PacketId },
     
-    /// 错误事件
+    /// Error events
     TransportError { error: TransportError },
     
-    /// 服务器事件
+    /// Server events
     ServerStarted { address: SocketAddr },
     ServerStopped,
     
-    /// 客户端事件
+    /// Client events
     ClientConnected { address: SocketAddr },
     ClientDisconnected,
 
     RequestReceived(RequestContext),
 }
 
-/// 协议特定事件trait
+/// Protocol specific event trait
 /// 
-/// 此trait允许各协议定义自己的特定事件类型，同时保持与统一事件系统的兼容性
+/// This trait allows each protocol to define its own specific event types while maintaining compatibility with the unified event system
 pub trait ProtocolEvent: Clone + Send + std::fmt::Debug + 'static {
-    /// 转换为通用传输事件
+    /// Convert to generic transport event
     fn into_transport_event(self) -> TransportEvent;
     
-    /// 获取相关的会话ID（如果有）
+    /// Get related session ID (if any)
     fn session_id(&self) -> Option<SessionId>;
     
-    /// 判断是否为数据传输事件
+    /// Check if it's a data transmission event
     fn is_data_event(&self) -> bool;
     
-    /// 判断是否为错误事件
+    /// Check if it's an error event
     fn is_error_event(&self) -> bool;
 }
 
-/// 连接事件的简化表示
+/// Simplified representation of connection events
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
     Established { 
@@ -64,7 +63,7 @@ pub enum ConnectionEvent {
 }
 
 impl TransportEvent {
-    /// 获取事件相关的会话ID
+    /// Get event related session ID
     pub fn session_id(&self) -> Option<SessionId> {
         match self {
             TransportEvent::ConnectionEstablished { .. } => None,
@@ -80,7 +79,7 @@ impl TransportEvent {
         }
     }
     
-    /// 判断是否为连接相关事件
+    /// Check if it's a connection related event
     pub fn is_connection_event(&self) -> bool {
         matches!(self, 
             TransportEvent::ConnectionEstablished { .. } | 
@@ -88,7 +87,7 @@ impl TransportEvent {
         )
     }
     
-    /// 判断是否为数据传输事件
+    /// Check if it's a data transmission event
     pub fn is_data_event(&self) -> bool {
         matches!(self, 
             TransportEvent::MessageReceived(..) | 
@@ -96,12 +95,12 @@ impl TransportEvent {
         )
     }
     
-    /// 判断是否为错误事件
+    /// Check if it's an error event
     pub fn is_error_event(&self) -> bool {
         matches!(self, TransportEvent::TransportError { .. })
     }
     
-    /// 判断是否为服务器事件
+    /// Check if it's a server event
     pub fn is_server_event(&self) -> bool {
         matches!(self, 
             TransportEvent::ServerStarted { .. } | 
@@ -109,7 +108,7 @@ impl TransportEvent {
         )
     }
     
-    /// 判断是否为客户端事件
+    /// Check if it's a client event
     pub fn is_client_event(&self) -> bool {
         matches!(self, 
             TransportEvent::ClientConnected { .. } | 
@@ -118,7 +117,7 @@ impl TransportEvent {
     }
 }
 
-/// TCP协议特定事件
+/// TCP protocol specific events
 #[derive(Debug, Clone)]
 pub enum TcpEvent {
     ListenerBound { 
@@ -167,7 +166,7 @@ impl ProtocolEvent for TcpEvent {
     }
 }
 
-/// WebSocket协议特定事件
+/// WebSocket protocol specific events
 #[derive(Debug, Clone)]
 pub enum WebSocketEvent {
     HandshakeCompleted { 
@@ -189,9 +188,9 @@ impl ProtocolEvent for WebSocketEvent {
     fn into_transport_event(self) -> TransportEvent {
         match self {
             WebSocketEvent::HandshakeCompleted { session_id } => {
-                // 这个应该已经通过ConnectionEstablished处理了
+                // This should already be handled through ConnectionEstablished
                 TransportEvent::ConnectionEstablished {
-                    info: ConnectionInfo::default(), // 临时实现
+                    info: ConnectionInfo::default(), // Temporary implementation
                 }
             }
             WebSocketEvent::InvalidFrame { session_id, error } => {
@@ -200,7 +199,7 @@ impl ProtocolEvent for WebSocketEvent {
                 }
             }
             _ => {
-                // Ping/Pong 事件不需要转换为通用事件
+                // Ping/Pong events don't need to be converted to generic events
                 TransportEvent::TransportError {
                     error: TransportError::protocol_error("generic", "Unhandled WebSocket event".to_string()),
                 }
@@ -229,7 +228,7 @@ impl ProtocolEvent for WebSocketEvent {
     }
 }
 
-/// QUIC协议特定事件
+/// QUIC protocol specific events
 #[derive(Debug, Clone)]
 pub enum QuicEvent {
     StreamOpened { 
@@ -253,7 +252,7 @@ impl ProtocolEvent for QuicEvent {
     fn into_transport_event(self) -> TransportEvent {
         match self {
             QuicEvent::StreamOpened { session_id, .. } => {
-                // QUIC流开启不等同于连接建立，可能需要特殊处理
+                // QUIC stream opening doesn't equal connection establishment, may need special handling
                 TransportEvent::ConnectionEstablished {
                     info: ConnectionInfo::default(),
                 }
@@ -264,7 +263,7 @@ impl ProtocolEvent for QuicEvent {
                 }
             }
             _ => {
-                // 其他QUIC事件暂时不转换
+                // Other QUIC events are not converted for now
                 TransportEvent::TransportError {
                     error: TransportError::protocol_error("generic", "Unhandled QUIC event".to_string()),
                 }
@@ -290,52 +289,52 @@ impl ProtocolEvent for QuicEvent {
     }
 }
 
-/// 🎯 用户友好的消息结构 - 已解包的纯数据
+/// [SIMPLE] User-friendly message structure - unpacked pure data
 #[derive(Debug, Clone)]
 pub struct Message {
-    /// 消息来源会话（客户端为None，服务端为Some）
+    /// Message source session (None for client, Some for server)
     pub peer: Option<SessionId>,
-    /// 已解压和解包的原始数据
+    /// Decompressed and unpacked raw data
     pub data: Vec<u8>,
-    /// 消息ID（用于调试和日志）
+    /// Message ID (for debugging and logging)
     pub message_id: u32,
 }
 
 impl Message {
-    /// 尝试将消息数据转换为UTF-8字符串
+    /// Try to convert message data to UTF-8 string
     pub fn as_text(&self) -> Result<String, std::string::FromUtf8Error> {
         String::from_utf8(self.data.clone())
     }
     
-    /// 将消息数据转换为UTF-8字符串（lossy）
+    /// Convert message data to UTF-8 string (lossy)
     pub fn as_text_lossy(&self) -> String {
         String::from_utf8_lossy(&self.data).to_string()
     }
     
-    /// 获取原始字节数据
+    /// Get raw byte data
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
     }
 }
 
-/// 🎯 用户友好的请求上下文 - 已解包，提供简单响应接口
+/// [SIMPLE] User-friendly request context - unpacked, provides simple response interface
 pub struct RequestContext {
-    /// 请求来源会话（客户端为None，服务端为Some）
+    /// Request source session (None for client, Some for server)
     pub peer: Option<SessionId>,
-    /// 已解压和解包的请求数据
+    /// Decompressed and unpacked request data
     pub data: Vec<u8>,
-    /// 请求ID（用于调试和日志）
+    /// Request ID (for debugging and logging)
     pub request_id: u32,
-    /// 响应回调（内部处理所有协议细节）
+    /// Response callback (handles all protocol details internally)
     responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
-    /// 确保只响应一次（使用Arc共享状态）
+    /// Ensure response only once (using Arc shared state)
     responded: Arc<std::sync::atomic::AtomicBool>,
-    /// 🔧 标记：是否为负责检查响应的主实例（防止clone实例触发警告）
+    /// [FLAG] Mark: whether it's the primary instance responsible for checking response (prevents clone instances from triggering warnings)
     is_primary: bool,
 }
 
 impl RequestContext {
-    /// 创建新的请求上下文
+    /// Create new request context
     pub fn new(
         peer: Option<SessionId>,
         data: Vec<u8>,
@@ -348,40 +347,40 @@ impl RequestContext {
             request_id,
             responder,
             responded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            is_primary: false, // 🔧 新创建的实例默认不是主实例，等待事件转发时设置
+            is_primary: false, // [FLAG] New instances default to non-primary, waiting for event forwarding to set
         }
     }
     
-    /// 尝试将请求数据转换为UTF-8字符串
+    /// Try to convert request data to UTF-8 string
     pub fn as_text(&self) -> Result<String, std::string::FromUtf8Error> {
         String::from_utf8(self.data.clone())
     }
     
-    /// 将请求数据转换为UTF-8字符串（lossy）
+    /// Convert request data to UTF-8 string (lossy)
     pub fn as_text_lossy(&self) -> String {
         String::from_utf8_lossy(&self.data).to_string()
     }
     
-    /// 获取原始字节数据
+    /// Get raw byte data
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
     }
     
-    /// 🎯 使用字符串响应请求
+    /// [SIMPLE] Respond to request using string
     pub fn respond_text(&mut self, response: &str) {
         self.respond_bytes(response.as_bytes());
     }
     
-    /// 🎯 使用字节数据响应请求
+    /// [SIMPLE] Respond to request using byte data
     pub fn respond_bytes(&mut self, response: &[u8]) {
         if self.responded.compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok() {
             (self.responder)(response.to_vec());
         } else {
-            tracing::warn!("⚠️ RequestContext 已经响应过了 (ID: {})", self.request_id);
+            tracing::warn!("[WARN] RequestContext already responded (ID: {})", self.request_id);
         }
     }
     
-    /// 🔧 设置为主实例（负责检查响应状态）
+    /// [FLAG] Set as primary instance (responsible for checking response status)
     pub(crate) fn set_primary(&mut self) {
         self.is_primary = true;
     }
@@ -393,9 +392,9 @@ impl Clone for RequestContext {
             peer: self.peer,
             data: self.data.clone(),
             request_id: self.request_id,
-            responder: self.responder.clone(), // 🔧 修复：共享响应状态
-            responded: self.responded.clone(), // 🔧 克隆实例不是主实例，不负责检查响应
-            is_primary: false, // 🔧 克隆实例不是主实例，不负责检查响应
+            responder: self.responder.clone(), // [FIX] Share response state
+            responded: self.responded.clone(), // [FIX] Clone instances are not primary, not responsible for checking response
+            is_primary: false, // [FIX] Clone instances are not primary, not responsible for checking response
         }
     }
 }
@@ -413,49 +412,49 @@ impl std::fmt::Debug for RequestContext {
 
 impl Drop for RequestContext {
     fn drop(&mut self) {
-        // 🔧 只有主实例才负责检查响应状态，避免clone实例触发误报警告
+        // [FIX] Only primary instances are responsible for checking response status, avoiding false warning from clone instances
         if self.is_primary && !self.responded.load(std::sync::atomic::Ordering::SeqCst) {
-            tracing::warn!("⚠️ RequestContext被丢弃但未响应 (ID: {})", self.request_id);
+            tracing::warn!("[WARN] RequestContext dropped without response (ID: {})", self.request_id);
         }
     }
 }
 
-/// 🎯 用户友好的客户端事件 - 完全隐藏Packet复杂性
+/// [SIMPLE] User-friendly client events - completely hide Packet complexity
 #[derive(Debug, Clone)]
 pub enum ClientEvent {
-    /// 连接已建立
+    /// Connection established
     Connected { info: ConnectionInfo },
-    /// 连接已断开
+    /// Connection disconnected
     Disconnected { reason: CloseReason },
     
-    /// 🎯 收到消息（统一上下文，包含所有信息）
+    /// [SIMPLE] Message received (unified context, contains all information)
     MessageReceived(TransportContext),
     
-    /// 消息发送确认
+    /// Message send confirmation
     MessageSent { message_id: u32 },
     
-    /// 传输错误
+    /// Transport error
     Error { error: TransportError },
 }
 
-/// 🎯 用户友好的服务端事件 - 完全隐藏Packet复杂性  
+/// [SIMPLE] User-friendly server events - completely hide Packet complexity  
 #[derive(Debug, Clone)]
 pub enum ServerEvent {
-    /// 新连接建立
+    /// New connection established
     ConnectionEstablished { session_id: SessionId, info: ConnectionInfo },
-    /// 连接关闭
+    /// Connection closed
     ConnectionClosed { session_id: SessionId, reason: CloseReason },
     
-    /// 🎯 收到消息（统一上下文，包含所有信息）
+    /// [SIMPLE] Message received (unified context, contains all information)
     MessageReceived { session_id: SessionId, context: TransportContext },
     
-    /// 消息发送确认
+    /// Message send confirmation
     MessageSent { session_id: SessionId, message_id: u32 },
     
-    /// 传输错误
+    /// Transport error
     TransportError { session_id: Option<SessionId>, error: TransportError },
     
-    /// 服务器生命周期事件
+    /// Server lifecycle events
     ServerStarted { address: std::net::SocketAddr },
     ServerStopped,
 }
@@ -578,46 +577,46 @@ impl ClientEvent {
         )
     }
     
-    /// 判断是否为错误事件
+    /// Check if it's an error event
     pub fn is_error_event(&self) -> bool {
         matches!(self, ClientEvent::Error { .. })
     }
 }
 
-/// 🎯 统一的传输上下文 - 用于所有接收的消息
+/// [TARGET] Unified transport context - used for all received messages
 #[derive(Clone)]
 pub struct TransportContext {
-    /// 消息来源会话ID（客户端为None，服务端为Some）
+    /// Message source session ID (None for client, Some for server)
     pub peer: Option<SessionId>,
-    /// 系统分配的消息ID
+    /// System-assigned message ID
     pub message_id: u32,
-    /// 业务类型
+    /// Business type
     pub biz_type: u8,
-    /// 扩展头内容
+    /// Extension header content
     pub ext_header: Option<Vec<u8>>,
-    /// 解压后的纯数据
+    /// Decompressed raw data
     pub data: Vec<u8>,
-    /// 接收时间戳
+    /// Reception timestamp
     pub timestamp: Instant,
-    /// 消息类型（内部使用）
+    /// Message type (internal use)
     kind: TransportContextKind,
 }
 
-/// 消息类型枚举
+/// Message type enumeration
 #[derive(Clone)]
 enum TransportContextKind {
-    /// 单向消息（不需要响应）
+    /// One-way message (no response needed)
     OneWay,
-    /// 请求消息（需要响应）
+    /// Request message (requires response)
     Request {
         responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
         responded: Arc<AtomicBool>,
-        is_primary: bool, // 标记是否为主实例
+        is_primary: bool, // Mark whether it's the primary instance
     },
 }
 
 impl TransportContext {
-    /// 创建单向消息上下文
+    /// Create one-way message context
     pub fn new_oneway(
         peer: Option<SessionId>,
         message_id: u32,
@@ -636,7 +635,7 @@ impl TransportContext {
         }
     }
 
-    /// 创建请求消息上下文
+    /// Create request message context
     pub fn new_request(
         peer: Option<SessionId>,
         message_id: u32,
@@ -655,45 +654,45 @@ impl TransportContext {
             kind: TransportContextKind::Request {
                 responder,
                 responded: Arc::new(AtomicBool::new(false)),
-                is_primary: false, // 默认不是主实例
+                is_primary: false, // Default not primary instance
             },
         }
     }
 
-    /// 设置为主实例（负责检查响应状态）
+    /// Set as primary instance (responsible for checking response status)
     pub(crate) fn set_primary(&mut self) {
         if let TransportContextKind::Request { is_primary, .. } = &mut self.kind {
             *is_primary = true;
         }
     }
 
-    /// 检查是否为请求类型
+    /// Check if it's a request type
     pub fn is_request(&self) -> bool {
         matches!(self.kind, TransportContextKind::Request { .. })
     }
     
-    /// 将数据转换为字符串（损失转换）
+    /// Convert data to string (lossy conversion)
     pub fn as_text_lossy(&self) -> String {
         String::from_utf8_lossy(&self.data).to_string()
     }
 
-    /// 响应请求（仅请求类型可用）
+    /// Respond to request (only available for request type)
     pub fn respond(mut self, response: Vec<u8>) {
         match &mut self.kind {
             TransportContextKind::Request { responder, responded, .. } => {
                 if responded.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
                     responder(response);
                 } else {
-                    tracing::warn!("⚠️ TransportContext 已经响应过了 (ID: {})", self.message_id);
+                    tracing::warn!("[WARN] TransportContext already responded (ID: {})", self.message_id);
                 }
             }
             TransportContextKind::OneWay => {
-                tracing::warn!("⚠️ 无法响应单向消息 (ID: {})", self.message_id);
+                tracing::warn!("[WARN] Cannot respond to one-way message (ID: {})", self.message_id);
             }
         }
     }
 
-    /// 便利方法：响应字节数据
+    /// Convenience method: respond with byte data
     pub fn respond_bytes(self, response: &[u8]) {
         self.respond(response.to_vec());
     }
@@ -714,21 +713,21 @@ impl std::fmt::Debug for TransportContext {
 impl Drop for TransportContext {
     fn drop(&mut self) {
         if let TransportContextKind::Request { responded, is_primary, .. } = &self.kind {
-            // 只有主实例才检查响应状态
+            // Only primary instance checks response status
             if *is_primary && !responded.load(Ordering::SeqCst) {
-                // 🚀 修复：延迟检查，给应用层一些时间处理事件
-                // 克隆检查所需的数据
+                // [PERF] Fix: delayed check, give application layer some time to handle event
+                // Clone data needed for checking
                 let message_id = self.message_id;
                 let responded_clone = responded.clone();
                 
-                // 在单独的任务中进行延迟检查
+                // Perform delayed check in separate task
                 tokio::spawn(async move {
-                    // 给应用层 10ms 时间处理事件
+                    // Give application layer 10ms to handle event
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                     
-                    // 再次检查是否已响应
+                    // Check again if responded
                     if !responded_clone.load(Ordering::SeqCst) {
-                        tracing::warn!("⚠️ TransportContext被丢弃但未响应 (ID: {})", message_id);
+                        tracing::warn!("[WARN] TransportContext dropped without response (ID: {})", message_id);
                     }
                 });
             }
@@ -736,36 +735,36 @@ impl Drop for TransportContext {
     }
 }
 
-/// 🎯 统一的传输结果 - 用于所有发送操作的返回值
+/// [TARGET] Unified transport result - return value for all send operations
 #[derive(Debug, Clone)]
 pub struct TransportResult {
-    /// 目标会话ID（客户端为None，服务端为Some）
+    /// Target session ID (None for client, Some for server)
     pub peer: Option<SessionId>,
-    /// 系统分配的消息ID
+    /// System-assigned message ID
     pub message_id: u32,
-    /// 发送时间戳
+    /// Send timestamp
     pub timestamp: Instant,
-    /// 响应数据（仅request有，send为None）
+    /// Response data (only for requests, None for sends)
     pub data: Option<Vec<u8>>,
-    /// 传输状态
+    /// Transport status
     pub status: TransportStatus,
 }
 
-/// 传输状态枚举
+/// Transport status enumeration
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransportStatus {
-    /// 发送成功
+    /// Send successful
     Sent,
-    /// 请求超时
+    /// Request timeout
     Timeout,
-    /// 连接错误
+    /// Connection error
     ConnectionError,
-    /// 发送成功并收到响应
+    /// Send successful and response received
     Completed,
 }
 
 impl TransportResult {
-    /// 创建发送结果
+    /// Create send result  
     pub fn new_sent(peer: Option<SessionId>, message_id: u32) -> Self {
         Self {
             peer,
@@ -776,7 +775,7 @@ impl TransportResult {
         }
     }
 
-    /// 创建请求完成结果
+    /// Create request completion result
     pub fn new_completed(peer: Option<SessionId>, message_id: u32, data: Vec<u8>) -> Self {
         Self {
             peer,
@@ -787,7 +786,7 @@ impl TransportResult {
         }
     }
 
-    /// 创建超时结果
+    /// Create timeout result
     pub fn new_timeout(peer: Option<SessionId>, message_id: u32) -> Self {
         Self {
             peer,
@@ -798,7 +797,7 @@ impl TransportResult {
         }
     }
     
-    /// 创建连接错误结果
+    /// Create connection error result
     pub fn new_connection_error(peer: Option<SessionId>, message_id: u32) -> Self {
         Self {
             peer,
@@ -809,12 +808,12 @@ impl TransportResult {
         }
     }
 
-    /// 检查是否发送成功
+    /// Check if send was successful
     pub fn is_sent(&self) -> bool {
         matches!(self.status, TransportStatus::Sent | TransportStatus::Completed)
     }
 
-    /// 检查是否有响应数据
+    /// Check if has response data
     pub fn has_response(&self) -> bool {
         self.data.is_some()
     }

@@ -42,7 +42,7 @@ impl Default for SmartPoolConfig {
             shrink_cooldown: Duration::from_secs(60),
             min_connections: 10,
             enable_warmup: true,
-            expansion_factors: vec![2.0, 1.5, 1.2, 1.1], // Phase 2 渐进式因子
+            expansion_factors: vec![2.0, 1.5, 1.2, 1.1], // Progressive expansion factors
         }
     }
 }

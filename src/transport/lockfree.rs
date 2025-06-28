@@ -1,9 +1,9 @@
-/// 无锁优化增强模块 - 专注于第一阶段无锁优化
+/// Lock-free optimization enhancement module - focused on first-stage lock-free optimization
 /// 
-/// 目标：
-/// - 替换Arc<RwLock<HashMap>>热点
-/// - 提供50-150%的性能提升
-/// - 保持现有API兼容性
+/// Goals:
+/// - Replace Arc<RwLock<HashMap>> hotspots
+/// - Provide 50-150% performance improvement
+/// - Maintain existing API compatibility
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
@@ -17,40 +17,40 @@ use crossbeam_channel::{unbounded, Sender, Receiver};
 
 use crate::error::TransportError;
 
-/// 无锁哈希表 - 替代Arc<RwLock<HashMap>>
+/// Lock-free hash map - replacement for Arc<RwLock<HashMap>>
 /// 
-/// 使用crossbeam的epoch-based内存管理，实现wait-free读取
+/// Uses crossbeam's epoch-based memory management to achieve wait-free reads
 pub struct LockFreeHashMap<K, V> 
 where 
     K: Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// 分片数组，减少争用
+    /// Shard array to reduce contention
     shards: Vec<CachePadded<LockFreeShard<K, V>>>,
-    /// 分片数量（必须是2的幂）
+    /// Number of shards (must be a power of 2)
     shard_count: usize,
-    /// 操作统计
+    /// Operation statistics
     stats: Arc<LockFreeStats>,
 }
 
-/// 无锁分片
+/// Lock-free shard
 struct LockFreeShard<K, V> {
-    /// 原子指针指向HashMap
+    /// Atomic pointer to HashMap
     map: Atomic<HashMap<K, V>>,
-    /// 版本号，用于CAS操作
+    /// Version number for CAS operations
     version: AtomicU64,
 }
 
-/// 无锁统计
+/// Lock-free statistics
 #[derive(Debug)]
 pub struct LockFreeStats {
-    /// 读取次数
+    /// Number of reads
     pub reads: AtomicU64,
-    /// 写入次数
+    /// Number of writes
     pub writes: AtomicU64,
-    /// CAS重试次数
+    /// Number of CAS retries
     pub cas_retries: AtomicU64,
-    /// 平均读取延迟（纳秒）
+    /// Average read latency (nanoseconds)
     pub avg_read_latency_ns: AtomicU64,
 }
 
@@ -59,12 +59,12 @@ where
     K: Hash + Eq + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// 创建新的无锁哈希表
+    /// Create new lock-free hash map
     pub fn new() -> Self {
-        Self::with_capacity(16) // 默认16个分片
+        Self::with_capacity(16) // Default 16 shards
     }
     
-    /// 创建指定容量的无锁哈希表
+    /// Create lock-free hash map with specified capacity
     pub fn with_capacity(shard_count: usize) -> Self {
         let shard_count = shard_count.next_power_of_two();
         let mut shards = Vec::with_capacity(shard_count);
@@ -83,14 +83,14 @@ where
         }
     }
     
-    /// 获取分片索引
+    /// Get shard index
     fn shard_index(&self, key: &K) -> usize {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         key.hash(&mut hasher);
         (hasher.finish() as usize) & (self.shard_count - 1)
     }
     
-    /// Wait-free读取 - 核心优化点
+    /// Wait-free read - core optimization point
     pub fn get(&self, key: &K) -> Option<V> {
         let start = Instant::now();
         self.stats.reads.fetch_add(1, Ordering::Relaxed);
@@ -107,14 +107,14 @@ where
             unsafe { map_ptr.as_ref() }.unwrap().get(key).cloned()
         };
         
-        // 记录延迟
+        // Record latency
         let latency = start.elapsed().as_nanos() as u64;
         self.stats.avg_read_latency_ns.store(latency, Ordering::Relaxed);
         
         result
     }
     
-    /// 无锁写入 - 使用CAS操作
+    /// Lock-free write using CAS operations
     pub fn insert(&self, key: K, value: V) -> Result<Option<V>, TransportError> {
         self.stats.writes.fetch_add(1, Ordering::Relaxed);
         
@@ -128,7 +128,7 @@ where
             let guard = epoch::pin();
             let current_ptr = shard.map.load(Ordering::Acquire, &guard);
             
-            // 创建新的HashMap
+            // Create new HashMap
             let mut new_map = if current_ptr.is_null() {
                 HashMap::new()
             } else {
@@ -137,7 +137,7 @@ where
             
             let old_value = new_map.insert(key.clone(), value.clone());
             
-            // 尝试CAS更新
+            // Attempt CAS update
             let new_ptr = Owned::new(new_map);
             match shard.map.compare_exchange_weak(
                 current_ptr,
@@ -147,10 +147,10 @@ where
                 &guard,
             ) {
                 Ok(_) => {
-                    // 成功更新版本号
+                    // Successfully update version number
                     shard.version.fetch_add(1, Ordering::Relaxed);
                     
-                    // 延迟释放旧数据
+                    // Defer release of old data
                     if !current_ptr.is_null() {
                         unsafe {
                             guard.defer_unchecked(move || {
@@ -172,7 +172,7 @@ where
                     }
                     self.stats.cas_retries.fetch_add(1, Ordering::Relaxed);
                     
-                    // 退避策略
+                    // Backoff strategy
                     if retry_count > 10 {
                         std::thread::yield_now();
                     }
@@ -181,7 +181,7 @@ where
         }
     }
     
-    /// 无锁删除
+    /// Lock-free remove
     pub fn remove(&self, key: &K) -> Result<Option<V>, TransportError> {
         self.stats.writes.fetch_add(1, Ordering::Relaxed);
         
@@ -240,7 +240,7 @@ where
         }
     }
     
-    /// 🚀 Phase 1: 获取所有键值对快照 - 用于异步操作
+    /// Get all key-value pairs snapshot for async operations
     pub fn snapshot(&self) -> Result<Vec<(K, V)>, String> {
         let mut result = Vec::new();
         
@@ -259,7 +259,7 @@ where
         Ok(result)
     }
     
-    /// 获取条目数量
+    /// Get number of entries
     pub fn len(&self) -> usize {
         let mut count = 0;
         
@@ -275,12 +275,12 @@ where
         count
     }
     
-    /// 是否为空
+    /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
     
-    /// 🚀 Phase 1: 获取所有键 - 用于迭代
+    /// Get all keys for iteration
     pub fn keys(&self) -> Result<Vec<K>, String> {
         let mut all_keys = Vec::new();
         
@@ -299,7 +299,7 @@ where
         Ok(all_keys)
     }
     
-    /// 🚀 Phase 1: 遍历操作 - 替代 RwLock::read().await 的 iter()
+    /// Traverse operation - replacement for RwLock::read().await iter()
     pub fn for_each<F>(&self, mut f: F) -> Result<(), String>
     where
         F: FnMut(&K, &V),
@@ -321,7 +321,7 @@ where
     
 
     
-    /// 获取统计信息
+    /// Get statistics
     pub fn stats(&self) -> LockFreeStats {
         LockFreeStats {
             reads: AtomicU64::new(self.stats.reads.load(Ordering::Relaxed)),
@@ -342,7 +342,7 @@ impl LockFreeStats {
         }
     }
     
-    /// 获取CAS成功率
+    /// Get CAS success rate
     pub fn cas_success_rate(&self) -> f64 {
         let writes = self.writes.load(Ordering::Relaxed) as f64;
         let retries = self.cas_retries.load(Ordering::Relaxed) as f64;
@@ -355,7 +355,7 @@ impl LockFreeStats {
     }
 }
 
-/// 高性能无锁队列 - 替代VecDeque
+/// High-performance lock-free queue - replacement for VecDeque
 pub struct LockFreeQueue<T> 
 where 
     T: Send + Sync + 'static,
@@ -365,7 +365,7 @@ where
     stats: Arc<QueueStats>,
 }
 
-/// 队列统计
+/// Queue statistics
 #[derive(Debug)]
 pub struct QueueStats {
     pub enqueued: AtomicU64,
@@ -377,7 +377,7 @@ impl<T> LockFreeQueue<T>
 where
     T: Send + Sync + 'static,
 {
-    /// 创建新的无锁队列
+    /// Create new lock-free queue
     pub fn new() -> Self {
         let (sender, receiver) = unbounded();
         
@@ -392,7 +392,7 @@ where
         }
     }
     
-    /// 无锁入队
+    /// Lock-free enqueue
     pub fn push(&self, item: T) -> Result<(), TransportError> {
         match self.sender.send(item) {
             Ok(_) => {
@@ -404,7 +404,7 @@ where
         }
     }
     
-    /// 无锁出队
+    /// Lock-free dequeue
     pub fn pop(&self) -> Option<T> {
         match self.receiver.try_recv() {
             Ok(item) => {
@@ -416,29 +416,29 @@ where
         }
     }
     
-    /// 获取队列长度
+    /// Get queue length
     pub fn len(&self) -> usize {
         self.stats.current_size.load(Ordering::Relaxed)
     }
     
-    /// 是否为空
+    /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
     
-    /// 获取统计信息
+    /// Get statistics
     pub fn stats(&self) -> &QueueStats {
         &self.stats
     }
 }
 
-/// 高性能原子计数器 - 替代RwLock<usize>
+/// High-performance atomic counter - replacement for RwLock<usize>
 pub struct LockFreeCounter {
     value: AtomicUsize,
     stats: Arc<CounterStats>,
 }
 
-/// 计数器统计
+/// Counter statistics
 #[derive(Debug)]
 pub struct CounterStats {
     pub increments: AtomicU64,
@@ -447,7 +447,7 @@ pub struct CounterStats {
 }
 
 impl LockFreeCounter {
-    /// 创建新的无锁计数器
+    /// Create new lock-free counter
     pub fn new(initial: usize) -> Self {
         Self {
             value: AtomicUsize::new(initial),
@@ -459,35 +459,35 @@ impl LockFreeCounter {
         }
     }
     
-    /// 原子递增
+    /// Atomic increment
     pub fn increment(&self) -> usize {
         self.stats.increments.fetch_add(1, Ordering::Relaxed);
         self.value.fetch_add(1, Ordering::Relaxed) + 1
     }
     
-    /// 原子递减
+    /// Atomic decrement
     pub fn decrement(&self) -> usize {
         self.stats.decrements.fetch_add(1, Ordering::Relaxed);
         self.value.fetch_sub(1, Ordering::Relaxed).saturating_sub(1)
     }
     
-    /// 原子读取
+    /// Atomic read
     pub fn get(&self) -> usize {
         self.stats.reads.fetch_add(1, Ordering::Relaxed);
         self.value.load(Ordering::Relaxed)
     }
     
-    /// 原子设置
+    /// Atomic set
     pub fn set(&self, value: usize) {
         self.value.store(value, Ordering::Relaxed);
     }
     
-    /// 原子交换
+    /// Atomic swap
     pub fn swap(&self, value: usize) -> usize {
         self.value.swap(value, Ordering::Relaxed)
     }
     
-    /// 获取统计信息
+    /// Get statistics
     pub fn stats(&self) -> &CounterStats {
         &self.stats
     }
@@ -504,15 +504,15 @@ mod tests {
     fn test_lockfree_hashmap_basic() {
         let map = LockFreeHashMap::new();
         
-        // 测试插入
+        // Test insert
         assert!(map.insert("key1".to_string(), "value1".to_string()).is_ok());
         assert_eq!(map.get(&"key1".to_string()), Some("value1".to_string()));
         
-        // 测试更新
+        // Test update
         assert!(map.insert("key1".to_string(), "value2".to_string()).is_ok());
         assert_eq!(map.get(&"key1".to_string()), Some("value2".to_string()));
         
-        // 测试删除
+        // Test remove
         assert!(map.remove(&"key1".to_string()).is_ok());
         assert_eq!(map.get(&"key1".to_string()), None);
     }
@@ -522,7 +522,7 @@ mod tests {
         let map = Arc::new(LockFreeHashMap::new());
         let mut handles = vec![];
         
-        // 并发写入
+        // Concurrent writes
         for i in 0..10 {
             let map_clone = Arc::clone(&map);
             let handle = thread::spawn(move || {
@@ -535,7 +535,7 @@ mod tests {
             handles.push(handle);
         }
         
-        // 并发读取
+        // Concurrent reads
         for i in 0..5 {
             let map_clone = Arc::clone(&map);
             let handle = thread::spawn(move || {
@@ -551,17 +551,17 @@ mod tests {
             handle.join().unwrap();
         }
         
-        // 验证结果
+        // Verify results
         assert_eq!(map.len(), 1000);
         let stats = map.stats();
-        println!("CAS成功率: {:.2}%", stats.cas_success_rate() * 100.0);
+        println!("CAS success rate: {:.2}%", stats.cas_success_rate() * 100.0);
     }
     
     #[test]
     fn test_lockfree_queue() {
         let queue = LockFreeQueue::new();
         
-        // 测试基本操作
+        // Test basic operations
         assert!(queue.push(1).is_ok());
         assert!(queue.push(2).is_ok());
         assert_eq!(queue.len(), 2);

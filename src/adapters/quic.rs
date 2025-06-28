@@ -1,10 +1,10 @@
-/// 🔧 事件驱动QUIC适配器
+/// [CONFIG] Event-driven QUIC adapter
 /// 
-/// 这是QUIC适配器的现代化版本，支持：
-/// - 双向流复用
-/// - 事件驱动架构
-/// - 读写分离
-/// - 异步队列
+/// This is the modernized version of QUIC adapter, supporting:
+/// - Bidirectional stream multiplexing
+/// - Event-driven architecture
+/// - Read-write separation
+/// - Asynchronous queues
 
 use async_trait::async_trait;
 use quinn::{
@@ -157,11 +157,11 @@ fn configure_client_insecure() -> ClientConfig {
 /// Configure client with QuicClientConfig parameters
 fn configure_client_with_config(config: &QuicClientConfig) -> Result<ClientConfig, QuicError> {
     let crypto = if config.verify_certificate {
-        // 使用证书验证模式
+        // Use certificate verification mode
         let mut root_store = rustls::RootCertStore::empty();
         
         if let Some(ca_cert_pem) = &config.ca_cert_pem {
-            // 如果提供了自定义 CA 证书，使用它
+            // If custom CA certificate is provided, use it
             let cert_bytes = ca_cert_pem.as_bytes();
             let ca_certs = rustls_pemfile::certs(&mut std::io::Cursor::new(cert_bytes))
                 .collect::<Result<Vec<_>, _>>()
@@ -172,19 +172,19 @@ fn configure_client_with_config(config: &QuicClientConfig) -> Result<ClientConfi
                     .map_err(|e| QuicError::Config(format!("Failed to add CA certificate to store: {}", e)))?;
             }
             
-            tracing::debug!("🔐 使用自定义 CA 证书进行 QUIC 客户端证书验证");
+            tracing::debug!("[SECURITY] Using custom CA certificate for QUIC client certificate verification");
         } else {
-            // 使用系统根证书
+            // Use system root certificates
             root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            tracing::debug!("🔐 使用系统根证书进行 QUIC 客户端证书验证");
+            tracing::debug!("[SECURITY] Using system root certificates for QUIC client certificate verification");
         }
         
         rustls::ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth()
     } else {
-        // 不验证证书（不安全模式）
-        tracing::debug!("🔓 QUIC 客户端使用不安全模式（跳过证书验证）");
+        // Do not verify certificates (insecure mode)
+        tracing::debug!("[SECURITY] QUIC client using insecure mode (skip certificate verification)");
         rustls::ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(SkipServerVerification))
@@ -196,7 +196,7 @@ fn configure_client_with_config(config: &QuicClientConfig) -> Result<ClientConfi
             .map_err(|e| QuicError::Config(format!("QUIC client config error: {}", e)))?)
     );
     
-    // 配置传输参数
+    // Configure transport parameters
     let mut transport_config = quinn::TransportConfig::default();
     transport_config.max_idle_timeout(Some(config.max_idle_timeout.try_into()
         .map_err(|e| QuicError::Config(format!("Invalid idle timeout: {}", e)))?));
@@ -280,20 +280,20 @@ fn configure_server_with_pem(cert_pem: &str, key_pem: &str, config: &QuicServerC
     Ok((server_config, first_cert))
 }
 
-/// QUIC协议适配器（泛型支持客户端和服务端配置）
+/// QUIC protocol adapter (generic support for client and server configurations)
 pub struct QuicAdapter<C> {
-    /// 会话ID (使用原子类型以便事件循环访问)
+    /// Session ID (using atomic type for event loop access)
     session_id: Arc<std::sync::atomic::AtomicU64>,
     config: C,
     stats: AdapterStats,
     connection_info: ConnectionInfo,
-    /// 发送队列
+    /// Send queue
     send_queue: mpsc::UnboundedSender<Packet>,
-    /// 事件发送器
+    /// Event sender
     event_sender: broadcast::Sender<TransportEvent>,
-    /// 关闭信号发送器
+    /// Shutdown signal sender
     shutdown_sender: mpsc::UnboundedSender<()>,
-    /// 事件循环句柄
+    /// Event loop handle
     event_loop_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -305,21 +305,21 @@ impl<C> QuicAdapter<C> {
     ) -> Result<Self, QuicError> {
         let session_id = Arc::new(std::sync::atomic::AtomicU64::new(0));
         
-        // 创建连接信息
+        // Create connection info
         let mut connection_info = ConnectionInfo::default();
         connection_info.protocol = "quic".to_string();
         connection_info.session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
         
-        // 获取地址信息
+        // Get address information
         if let Some(local_addr) = connection.local_ip() {
             connection_info.local_addr = format!("{}:0", local_addr).parse().unwrap_or(connection_info.local_addr);
         }
         
-        // 创建通信通道
+        // Create communication channels
         let (send_queue_tx, send_queue_rx) = mpsc::unbounded_channel();
         let (shutdown_tx, shutdown_rx) = mpsc::unbounded_channel();
         
-        // 启动事件循环
+        // Start event loop
         let event_loop_handle = Self::start_event_loop(
             connection,
             session_id.clone(),
@@ -340,14 +340,14 @@ impl<C> QuicAdapter<C> {
         })
     }
     
-    /// 获取事件流接收器
+    /// Get event stream receiver
     /// 
-    /// 这允许客户端订阅QUIC适配器内部事件循环发送的事件
+    /// This allows clients to subscribe to events sent by QUIC adapter's internal event loop
     pub fn subscribe_events(&self) -> broadcast::Receiver<TransportEvent> {
         self.event_sender.subscribe()
     }
 
-    /// 启动基于 tokio::select! 的事件循环
+    /// Start event loop based on tokio::select!
     async fn start_event_loop(
         connection: Connection,
         session_id: Arc<std::sync::atomic::AtomicU64>,
@@ -357,50 +357,50 @@ impl<C> QuicAdapter<C> {
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
-            tracing::debug!("🚀 QUIC事件循环启动 (会话: {})", current_session_id);
+            tracing::debug!("[START] QUIC event loop started (session: {})", current_session_id);
             
             loop {
-                // 获取当前会话ID
+                // Get current session ID
                 let current_session_id = SessionId(session_id.load(std::sync::atomic::Ordering::SeqCst));
                 
                 tokio::select! {
-                    // 🔍 处理接收数据
+                    // [RECV] Handle incoming data
                     recv_result = connection.accept_uni() => {
                         match recv_result {
                             Ok(mut recv_stream) => {
                                 match recv_stream.read_to_end(1024 * 1024).await {
                                     Ok(buf) => {
-                                        tracing::debug!("📥 QUIC接收到流数据: {} bytes (会话: {})", buf.len(), current_session_id);
+                                        tracing::debug!("[RECV] QUIC received stream data: {} bytes (session: {})", buf.len(), current_session_id);
                                         
-                                        // ✅ 优化：QUIC流保证数据完整性，预检查避免无效解析
+                                        // [PERF] Optimization: QUIC stream guarantees data integrity, pre-check to avoid invalid parsing
                                         let packet = if buf.len() < 16 {
-                                            // 数据太短，不可能是有效的Packet，直接创建基本数据包
-                                            tracing::debug!("📥 QUIC数据太短，创建基本数据包: {} bytes", buf.len());
+                                            // Data too short, cannot be valid Packet, create basic data packet directly
+                                            tracing::debug!("[RECV] QUIC data too short, creating basic data packet: {} bytes", buf.len());
                                             Packet::one_way(0, buf)
                                         } else {
-                                            // 尝试解析为完整的Packet
+                                            // Try to parse as complete Packet
                                             match Packet::from_bytes(&buf) {
                                                 Ok(packet) => {
-                                                    tracing::debug!("📥 QUIC解析数据包成功: {} bytes", packet.payload.len());
+                                                    tracing::debug!("[RECV] QUIC packet parsing successful: {} bytes", packet.payload.len());
                                                     packet
                                                 }
                                                 Err(e) => {
-                                                    tracing::debug!("📥 QUIC数据包解析失败: {:?}, 创建基本数据包", e);
-                                                    // ✅ 优化：避免切片拷贝，直接使用buf
+                                                    tracing::debug!("[RECV] QUIC packet parsing failed: {:?}, creating basic data packet", e);
+                                                    // [PERF] Optimization: avoid slice copying, use buf directly
                                                     Packet::one_way(0, buf)
                                                 }
                                             }
                                         };
                                         
-                                        // 发送接收事件
+                                        // Send receive event
                                         let event = TransportEvent::MessageReceived(packet);
                                         
                                         if let Err(e) = event_sender.send(event) {
-                                            tracing::warn!("📥 发送接收事件失败: {:?}", e);
+                                            tracing::warn!("[RECV] Failed to send receive event: {:?}", e);
                                         }
                                     }
                                     Err(e) => {
-                                        // ✅ 优化：更精细的QUIC错误分类处理
+                                        // [PERF] Optimization: more fine-grained QUIC error classification handling
                                         let (should_notify, reason, log_level) = match e {
                                             quinn::ReadToEndError::Read(quinn::ReadError::ConnectionLost(_)) => {
                                                 (true, crate::error::CloseReason::Normal, "debug")
@@ -416,22 +416,22 @@ impl<C> QuicAdapter<C> {
                                             }
                                         };
                                         
-                                        // ✅ 优化：更详细的日志记录
+                                        // [PERF] Optimization: more detailed logging
                                         match log_level {
-                                            "debug" => tracing::debug!("📥 QUIC流正常关闭: {:?} (会话: {})", e, current_session_id),
-                                            "warn" => tracing::warn!("📥 QUIC流警告: {:?} (会话: {})", e, current_session_id),
-                                            "error" => tracing::error!("📥 QUIC流错误: {:?} (会话: {})", e, current_session_id),
+                                            "debug" => tracing::debug!("[CLOSE] QUIC stream closed normally: {:?} (session: {})", e, current_session_id),
+                                            "warn" => tracing::warn!("[WARN] QUIC stream warning: {:?} (session: {})", e, current_session_id),
+                                            "error" => tracing::error!("[ERROR] QUIC stream error: {:?} (session: {})", e, current_session_id),
                                             _ => {}
                                         }
                                         
-                                        // 通知上层连接关闭（网络异常或对端关闭）
+                                        // Notify upper layer connection closed (network exception or peer closed)
                                         if should_notify {
                                             let close_event = TransportEvent::ConnectionClosed { reason };
                                             
                                             if let Err(e) = event_sender.send(close_event) {
-                                                tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                                tracing::debug!("[CLOSE] Failed to notify upper layer connection closed: session {} - {:?}", current_session_id, e);
                                             } else {
-                                                tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
+                                                tracing::debug!("[CLOSE] Notified upper layer connection closed: session {}", current_session_id);
                                             }
                                         }
                                         
@@ -440,7 +440,7 @@ impl<C> QuicAdapter<C> {
                                 }
                             }
                             Err(e) => {
-                                // ✅ 优化：增强QUIC连接错误分类
+                                // [PERF] Optimization: enhanced QUIC connection error classification
                                 let (should_notify, reason, log_level) = match e {
                                     quinn::ConnectionError::TimedOut => {
                                         (true, crate::error::CloseReason::Timeout, "info")
@@ -455,32 +455,32 @@ impl<C> QuicAdapter<C> {
                                         (true, crate::error::CloseReason::Normal, "debug")
                                     }
                                     quinn::ConnectionError::LocallyClosed => {
-                                        (false, crate::error::CloseReason::Normal, "debug") // 本地关闭不需要通知
+                                        (false, crate::error::CloseReason::Normal, "debug") // Local close doesn't need notification
                                     }
                                     _ => {
                                         (true, crate::error::CloseReason::Error(format!("QUIC connection error: {:?}", e)), "error")
                                     }
                                 };
                                 
-                                // ✅ 优化：更精确的日志级别
+                                // [PERF] Optimization: more precise log levels
                                 match log_level {
-                                    "debug" => tracing::debug!("📥 QUIC连接正常关闭: {:?} (会话: {})", e, current_session_id),
-                                    "info" => tracing::info!("📥 QUIC连接超时: {:?} (会话: {})", e, current_session_id),
-                                    "error" => tracing::error!("📥 QUIC连接错误: {:?} (会话: {})", e, current_session_id),
+                                    "debug" => tracing::debug!("[CLOSE] QUIC connection closed normally: {:?} (session: {})", e, current_session_id),
+                                    "info" => tracing::info!("[TIMEOUT] QUIC connection timeout: {:?} (session: {})", e, current_session_id),
+                                    "error" => tracing::error!("[ERROR] QUIC connection error: {:?} (session: {})", e, current_session_id),
                                     _ => {}
                                 }
                                 
-                                // 通知上层连接关闭（网络异常或对端关闭）
+                                // Notify upper layer connection closed (network exception or peer closed)
                                 if should_notify {
                                     let close_event = TransportEvent::ConnectionClosed { reason };
                                     
                                     if let Err(e) = event_sender.send(close_event) {
-                                        tracing::debug!("🔗 通知上层连接关闭失败: 会话 {} - {:?}", current_session_id, e);
+                                        tracing::debug!("[CLOSE] Failed to notify upper layer connection closed: session {} - {:?}", current_session_id, e);
                                     } else {
-                                        tracing::debug!("📡 已通知上层连接关闭: 会话 {}", current_session_id);
+                                        tracing::debug!("[CLOSE] Notified upper layer connection closed: session {}", current_session_id);
                                     }
                                 } else {
-                                    tracing::debug!("🔌 本地关闭，无需通知上层 (会话: {})", current_session_id);
+                                    tracing::debug!("[CLOSE] Local close, no need to notify upper layer (session: {})", current_session_id);
                                 }
                                 
                                 break;
@@ -488,87 +488,87 @@ impl<C> QuicAdapter<C> {
                         }
                     }
                     
-                    // 📤 处理发送数据 - 优化版本
+                    // [SEND] Handle outgoing data - optimized version
                     packet = send_queue.recv() => {
                         if let Some(packet) = packet {
                             match connection.open_uni().await {
                                 Ok(mut send_stream) => {
-                                    // ✅ 优化：准备发送数据
+                                    // [PERF] Optimization: prepare send data
                                     let data = packet.to_bytes();
                                     let packet_size = packet.payload.len();
                                     let packet_id = packet.header.message_id;
                                     
                                     match send_stream.write_all(&data).await {
                                         Ok(_) => {
-                                            // ✅ 优化：使用更高效的流关闭方式
+                                            // [PERF] Optimization: use more efficient stream closing method
                                             match send_stream.finish() {
                                                 Ok(_) => {
-                                                    tracing::debug!("📤 QUIC发送成功: {} bytes (ID: {}, 会话: {})", 
+                                                    tracing::debug!("[SEND] QUIC send successful: {} bytes (ID: {}, session: {})", 
                                                         packet_size, packet_id, current_session_id);
                                                     
-                                                    // 发送发送事件
+                                                    // Send send event
                                                     let event = TransportEvent::MessageSent { packet_id };
                                                     
                                                     if let Err(e) = event_sender.send(event) {
-                                                        tracing::warn!("📤 发送发送事件失败: {:?}", e);
+                                                        tracing::warn!("[SEND] Failed to send send event: {:?}", e);
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    tracing::error!("📤 QUIC流关闭错误: {:?} (会话: {})", e, current_session_id);
+                                                    tracing::error!("[ERROR] QUIC stream close error: {:?} (session: {})", e, current_session_id);
                                                 }
                                             }
                                         }
                                         Err(e) => {
-                                            tracing::error!("📤 QUIC发送错误: {:?} (会话: {})", e, current_session_id);
+                                            tracing::error!("[ERROR] QUIC send error: {:?} (session: {})", e, current_session_id);
                                             break;
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!("📤 QUIC打开发送流错误: {:?} (会话: {})", e, current_session_id);
+                                    tracing::error!("[ERROR] QUIC open send stream error: {:?} (session: {})", e, current_session_id);
                                     break;
                                 }
                             }
                         }
                     }
                     
-                    // 🛑 处理关闭信号
+                    // [STOP] Handle shutdown signal
                     _ = shutdown_signal.recv() => {
-                        tracing::info!("🛑 收到关闭信号，停止QUIC事件循环 (会话: {})", current_session_id);
-                        // 主动关闭：不需要发送关闭事件，因为是上层主动发起的关闭
-                        // 底层协议关闭已经通知了对端，上层也已经知道要关闭了
-                        tracing::debug!("🔌 主动关闭，不发送关闭事件");
+                        tracing::info!("[STOP] Received shutdown signal, stopping QUIC event loop (session: {})", current_session_id);
+                        // Active close: no need to send close event, because it was initiated by upper layer
+                        // Lower layer protocol close has already notified peer, upper layer already knows about the close
+                        tracing::debug!("[CLOSE] Active close, not sending close event");
                         break;
                     }
                 }
             }
             
-            tracing::debug!("✅ QUIC事件循环已结束 (会话: {})", current_session_id);
+            tracing::debug!("[SUCCESS] QUIC event loop ended (session: {})", current_session_id);
         })
     }
 }
 
 // 客户端适配器实现
 impl QuicAdapter<QuicClientConfig> {
-    /// 连接到QUIC服务器
+    /// Connect to QUIC server
     pub async fn connect(addr: SocketAddr, config: QuicClientConfig) -> Result<Self, QuicError> {
-        tracing::debug!("🔌 QUIC客户端连接到: {}", addr);
+        tracing::debug!("[CONNECT] QUIC client connecting to: {}", addr);
         
-        // 根据配置创建客户端配置
+        // Create client configuration based on config
         let client_config = configure_client_with_config(&config)?;
         let mut endpoint = Endpoint::client(config.local_bind_address.unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 0))))?;
         endpoint.set_default_client_config(client_config);
         
-        // 使用配置的服务器名称或默认值
+        // Use configured server name or default
         let server_name = config.server_name.as_deref().unwrap_or("localhost");
         
-        // 连接到服务器（使用配置的超时时间）
+        // Connect to server (using configured timeout)
         let connecting = endpoint.connect(addr, server_name)?;
         let connection = tokio::time::timeout(config.connect_timeout, connecting)
             .await
             .map_err(|_| QuicError::Config(format!("Connection timeout after {:?}", config.connect_timeout)))?
             .map_err(QuicError::Connection)?;
-        tracing::debug!("✅ QUIC客户端已连接到: {} (服务器名称: {}) 超时: {:?}", addr, server_name, config.connect_timeout);
+        tracing::debug!("[SUCCESS] QUIC client connected to: {} (server name: {}) timeout: {:?}", addr, server_name, config.connect_timeout);
         
         Self::new_with_connection(connection, config, broadcast::channel(1000).0).await
     }
@@ -585,17 +585,17 @@ impl ProtocolAdapter for QuicAdapter<QuicClientConfig> {
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
-        tracing::debug!("🔌 关闭QUIC客户端连接");
+        tracing::debug!("[CLOSE] Close QUIC client connection");
         
-        // 发送关闭信号
+        // Send shutdown signal
         if let Err(e) = self.shutdown_sender.send(()) {
-            tracing::warn!("发送关闭信号失败: {:?}", e);
+            tracing::warn!("Failed to send shutdown signal: {:?}", e);
         }
         
-        // 等待事件循环结束
+        // Wait for event loop to end
         if let Some(handle) = self.event_loop_handle.take() {
             if let Err(e) = handle.await {
-                tracing::warn!("等待事件循环结束失败: {:?}", e);
+                tracing::warn!("Failed to wait for event loop to end: {:?}", e);
             }
         }
         
@@ -626,12 +626,12 @@ impl ProtocolAdapter for QuicAdapter<QuicClientConfig> {
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // QUIC流会自动刷新
+        // QUIC streams auto-flush
         Ok(())
     }
 }
 
-// 服务端适配器实现
+// Server adapter implementation
 #[async_trait]
 impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
     type Config = QuicServerConfig;
@@ -643,17 +643,17 @@ impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
     }
     
     async fn close(&mut self) -> Result<(), Self::Error> {
-        tracing::debug!("🔌 关闭QUIC服务端连接");
+        tracing::debug!("[CLOSE] Close QUIC server connection");
         
-        // 发送关闭信号
+        // Send shutdown signal
         if let Err(e) = self.shutdown_sender.send(()) {
-            tracing::warn!("发送关闭信号失败: {:?}", e);
+            tracing::warn!("Failed to send shutdown signal: {:?}", e);
         }
         
-        // 等待事件循环结束
+        // Wait for event loop to end
         if let Some(handle) = self.event_loop_handle.take() {
             if let Err(e) = handle.await {
-                tracing::warn!("等待事件循环结束失败: {:?}", e);
+                tracing::warn!("Failed to wait for event loop to end: {:?}", e);
             }
         }
         
@@ -684,12 +684,12 @@ impl ProtocolAdapter for QuicAdapter<QuicServerConfig> {
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // QUIC流会自动刷新
+        // QUIC streams auto-flush
         Ok(())
     }
 }
 
-// 服务器构建器和相关结构体保持不变...
+// Server builder and related structures remain unchanged...
 pub(crate) struct QuicServerBuilder {
     config: QuicServerConfig,
     bind_address: Option<SocketAddr>,
@@ -716,17 +716,17 @@ impl QuicServerBuilder {
     pub(crate) async fn build(self) -> Result<QuicServer, QuicError> {
         let bind_addr = self.bind_address.unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
         
-        // 根据配置选择证书模式
+        // Choose certificate mode based on configuration
         let server_config = match (&self.config.cert_pem, &self.config.key_pem) {
             (Some(cert_pem), Some(key_pem)) if !cert_pem.is_empty() && !key_pem.is_empty() => {
-                // 使用传入的 PEM 证书和私钥
-                tracing::debug!("🔐 使用传入的 PEM 证书启动 QUIC 服务器");
+                // Use provided PEM certificate and private key
+                tracing::debug!("[SECURITY] Starting QUIC server with provided PEM certificate");
                 let (server_config, _cert) = configure_server_with_pem(cert_pem, key_pem, &self.config)?;
                 server_config
             }
             _ => {
-                // 使用自签名证书
-                tracing::debug!("🔓 使用自签名证书启动 QUIC 服务器");
+                // Use self-signed certificate
+                tracing::debug!("[SECURITY] Starting QUIC server with self-signed certificate");
                 let (server_config, _cert) = configure_server_insecure_with_config(&self.config);
                 server_config
             }
@@ -734,7 +734,7 @@ impl QuicServerBuilder {
         
         let endpoint = Endpoint::server(server_config, bind_addr)?;
         
-        tracing::debug!("🚀 QUIC服务器启动在: {}", endpoint.local_addr()?);
+        tracing::debug!("[START] QUIC server started on: {}", endpoint.local_addr()?);
         
         Ok(QuicServer {
             config: self.config,
@@ -763,7 +763,7 @@ impl QuicServer {
         let incoming = self.endpoint.accept().await.ok_or(QuicError::ConnectionClosed)?;
         let connection = incoming.await?;
         
-        tracing::debug!("✅ QUIC服务器接受连接: {}", connection.remote_address());
+        tracing::debug!("[SUCCESS] QUIC server accepted connection: {}", connection.remote_address());
         
         QuicAdapter::new_with_connection(connection, self.config.clone(), broadcast::channel(1000).0).await
     }

@@ -1,10 +1,10 @@
-/// 🎯 单连接传输抽象 - 每个实例只管理一个socket连接
+/// [TARGET] Single connection transport abstraction - each instance manages one socket connection
 /// 
-/// 这是 Transport 的正确抽象：
-/// - 每个 Transport 对应一个 socket 连接
-/// - 提供 send() 方法直接向 socket 发送数据
-/// - 协议无关的设计
-/// - 由 TransportClient(单连接) 和 TransportServer(多连接管理) 使用
+/// This is the correct Transport abstraction:
+/// - Each Transport corresponds to one socket connection
+/// - Provides send() method to send data directly to socket
+/// - Protocol-agnostic design
+/// - Used by TransportClient (single connection) and TransportServer (multi-connection management)
 
 use std::{
     sync::{Arc, atomic::{AtomicU32, Ordering}},
@@ -27,21 +27,21 @@ use crate::{
     event::{TransportEvent, RequestContext},
 };
 
-/// 🎯 单连接传输抽象 - 真正符合架构设计的 Transport
+/// [TARGET] Single connection transport abstraction - properly aligned with architecture design
 pub struct Transport {
-    /// 配置
+    /// Configuration
     config: TransportConfig,
-    /// 协议注册表
+    /// Protocol registry
     protocol_registry: Arc<ProtocolRegistry>,
-    /// 🚀 Phase 3: 优化后的连接池
+    /// Optimized connection pool
     connection_pool: Arc<ConnectionPool>,
-    /// 🚀 Phase 3: 优化后的内存池
+    /// Optimized memory pool
     memory_pool: Arc<OptimizedMemoryPool>,
-    /// 🎯 单个连接适配器 - 代表这个socket连接
+    /// [TARGET] Single connection adapter - represents this socket connection
     connection_adapter: Arc<Mutex<Option<Arc<Mutex<Box<dyn Connection>>>>>>,
-    /// 当前连接的会话ID
+    /// Current connection session ID
     session_id: Arc<Mutex<Option<SessionId>>>,
-    /// 连接状态管理器
+    /// Connection state manager
     state_manager: ConnectionStateManager,
     event_sender: broadcast::Sender<TransportEvent>,
     request_tracker: Arc<RequestTracker>,
@@ -60,7 +60,7 @@ impl RequestTracker {
         }
     }
     
-    /// 创建带自定义起始ID的RequestTracker
+    /// Create RequestTracker with custom starting ID
     pub fn new_with_start_id(start_id: u32) -> Self {
         Self {
             pending: DashMap::new(),
@@ -74,7 +74,7 @@ impl RequestTracker {
         (id, rx)
     }
     
-    /// 🔧 新增：使用指定的ID注册请求跟踪
+    /// [FIX] Register request tracking with specified ID
     pub fn register_with_id(&self, id: u32) -> (u32, oneshot::Receiver<Packet>) {
         let (tx, rx) = oneshot::channel();
         self.pending.insert(id, tx);
@@ -96,14 +96,14 @@ impl RequestTracker {
 
 
 impl Transport {
-    /// 创建新的单连接传输
+    /// Create new single connection transport
     pub async fn new(config: TransportConfig) -> Result<Self, TransportError> {
-        tracing::info!("🚀 创建 Transport");
+        tracing::info!("[PERF] Creating Transport");
         
-        // 创建协议注册表
+        // Create protocol registry
         let protocol_registry = Arc::new(create_standard_registry().await?);
         
-        // 创建连接池和内存池 (简化版本)
+        // Create connection pool and memory pool (simplified version)
         let connection_pool = Arc::new(
             ConnectionPool::new(2, 10).initialize_pool().await?
         );
@@ -125,42 +125,42 @@ impl Transport {
         })
     }
     
-    /// 🎯 核心方法：使用协议配置建立连接
-    /// 这是 TransportClient 需要的连接方法
+    /// [TARGET] Core method: establish connection with protocol configuration
+    /// This is the connection method needed by TransportClient
     pub async fn connect_with_config<T>(self: &Arc<Self>, config: T) -> Result<SessionId, TransportError>
     where
         T: crate::protocol::client_config::ConnectableConfig,
     {
-        // 直接使用当前的 Transport Arc 实例
+        // Directly use the current Transport Arc instance
         config.connect(Arc::clone(self)).await
     }
 
     
-    /// 🎯 核心方法：发送数据包到当前连接
+    /// [TARGET] Core method: send data packet to current connection
     pub async fn send(&self, packet: Packet) -> Result<(), TransportError> {
         if let Some(session_id) = self.session_id.lock().await.as_ref() {
-            // 🔧 实现真实的发送逻辑
+            // [FIX] Implement real sending logic
             if let Some(connection_adapter) = &self.connection_adapter.lock().await.as_ref() {
-                tracing::debug!("📤 Transport 发送数据包 (会话: {})", session_id);
+                tracing::debug!("[SEND] Transport sending packet (session: {})", session_id);
                 
-                // 获取锁并直接调用通用的 send 方法
+                // Get lock and directly call the generic send method
                 let mut connection = connection_adapter.lock().await;
                 
-                tracing::debug!("📤 使用通用连接发送数据包");
+                tracing::debug!("[SEND] Using generic connection to send packet");
                 
-                // 调用通用的 Connection::send 方法
+                // Call generic Connection::send method
                 match connection.send(packet).await {
                     Ok(_) => {
-                        tracing::debug!("📤 数据包发送成功");
+                        tracing::debug!("[SEND] Packet sent successfully");
                         Ok(())
                     }
                     Err(e) => {
-                        tracing::error!("📤 数据包发送失败: {:?}", e);
+                        tracing::error!("[SEND] Packet send failed: {:?}", e);
                         Err(e)
                     }
                 }
             } else {
-                tracing::error!("❌ 没有可用的连接适配器");
+                tracing::error!("[ERROR] No connection adapter available");
                 Err(TransportError::connection_error("No connection adapter available", false))
             }
         } else {
@@ -168,7 +168,7 @@ impl Transport {
         }
     }
     
-    /// 🎯 核心方法：断开连接（优雅关闭）
+    /// [TARGET] Core method: disconnect connection (graceful shutdown)
     pub async fn disconnect(&self) -> Result<(), TransportError> {
         if let Some(session_id) = self.current_session_id().await {
             self.close_session(session_id).await
@@ -177,81 +177,81 @@ impl Transport {
         }
     }
     
-    /// 🎯 统一关闭方法：优雅关闭会话
+    /// [TARGET] Unified close method: graceful session shutdown
     pub async fn close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
-        // 1. 检查是否可以开始关闭
+        // 1. Check if we can start closing
         if !self.state_manager.try_start_closing(session_id).await {
-            tracing::debug!("会话 {} 已经在关闭或已关闭，跳过关闭逻辑", session_id);
+            tracing::debug!("Session {} already closing or closed, skipping close logic", session_id);
             return Ok(());
         }
         
-        tracing::info!("🔌 开始优雅关闭会话: {}", session_id);
+        tracing::info!("[CONN] Starting graceful session shutdown: {}", session_id);
         
-        // 2. 执行实际关闭逻辑（底层适配器会自动发送关闭事件）
+        // 2. Execute actual close logic (underlying adapter will automatically send close event)
         self.do_close_session(session_id).await?;
         
-        // 3. 标记为已关闭
+        // 3. Mark as closed
         self.state_manager.mark_closed(session_id).await;
         
-        // 4. 清理本地状态
+        // 4. Clean up local state
         if self.session_id.lock().await.as_ref() == Some(&session_id) {
             *self.session_id.lock().await = None;
             *self.connection_adapter.lock().await = None;
         }
         
-        tracing::info!("✅ 会话 {} 关闭完成", session_id);
+        tracing::info!("[SUCCESS] Session {} shutdown complete", session_id);
         Ok(())
     }
     
-    /// 🎯 强制关闭会话
+    /// [TARGET] Force close session
     pub async fn force_close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
-        // 1. 检查是否可以开始关闭
+        // 1. Check if we can start closing
         if !self.state_manager.try_start_closing(session_id).await {
-            tracing::debug!("会话 {} 已经在关闭或已关闭，跳过强制关闭", session_id);
+            tracing::debug!("Session {} already closing or closed, skipping force close", session_id);
             return Ok(());
         }
         
-        tracing::info!("🔌 强制关闭会话: {}", session_id);
+        tracing::info!("[CONN] Force closing session: {}", session_id);
         
-        // 2. 立即强制关闭，不等待
+        // 2. Immediately force close, don't wait
         if let Some(connection_adapter) = &self.connection_adapter.lock().await.as_ref() {
             let mut conn = connection_adapter.lock().await;
-            let _ = conn.close().await; // 忽略错误，直接关闭
+            let _ = conn.close().await; // Ignore errors, close directly
         }
         
-        // 3. 标记为已关闭
+        // 3. Mark as closed
         self.state_manager.mark_closed(session_id).await;
         
-        // 4. 清理本地状态
+        // 4. Clean up local state
         if self.session_id.lock().await.as_ref() == Some(&session_id) {
             *self.session_id.lock().await = None;
             *self.connection_adapter.lock().await = None;
         }
         
-        tracing::info!("✅ 会话 {} 强制关闭完成", session_id);
+        tracing::info!("[SUCCESS] Session {} force close complete", session_id);
         Ok(())
     }
     
-    /// 内部方法：执行实际关闭逻辑
+    /// Internal method: perform actual session close
     async fn do_close_session(&self, session_id: SessionId) -> Result<(), TransportError> {
         if let Some(connection_adapter) = &self.connection_adapter.lock().await.as_ref() {
             let mut conn = connection_adapter.lock().await;
             
-            // 尝试优雅关闭
+            // Try graceful close
             match tokio::time::timeout(
                 self.config.graceful_timeout,
                 self.try_graceful_close(&mut **conn)
             ).await {
                 Ok(Ok(_)) => {
-                    tracing::debug!("✅ 会话 {} 优雅关闭成功", session_id);
+                    tracing::debug!("[SUCCESS] Session {} graceful close successful", session_id);
                 }
                 Ok(Err(e)) => {
-                    tracing::warn!("⚠️ 会话 {} 优雅关闭失败，执行强制关闭: {:?}", session_id, e);
-                    let _ = conn.close().await; // 忽略错误，直接关闭
+                    tracing::warn!("[WARN] Session {} graceful close failed, executing force close: {:?}", session_id, e);
+                    let _ = conn.close().await; // Ignore errors, close directly
                 }
                 Err(_) => {
-                    tracing::warn!("⚠️ 会话 {} 优雅关闭超时，执行强制关闭", session_id);
-                    let _ = conn.close().await; // 忽略错误，直接关闭
+                    tracing::warn!("[WARN] Session {} graceful close timeout, executing force close", session_id);
+                    let _ = conn.close().await; // Ignore errors, close directly
                 }
             }
         }
@@ -259,107 +259,107 @@ impl Transport {
         Ok(())
     }
     
-    /// 尝试优雅关闭连接
+    /// Try graceful close with timeout
     async fn try_graceful_close(&self, conn: &mut dyn Connection) -> Result<(), TransportError> {
-        // 直接使用底层协议的关闭机制
-        // 每个协议都有自己的关闭信号：
-        // - QUIC: CONNECTION_CLOSE 帧
-        // - TCP: FIN 包  
-        // - WebSocket: Close 帧
-        tracing::debug!("🔌 使用底层协议的优雅关闭机制");
+        // Directly use underlying protocol close mechanism
+        // Each protocol has its own close signal:
+        // - QUIC: CONNECTION_CLOSE frame
+        // - TCP: FIN packet  
+        // - WebSocket: Close frame
+        tracing::debug!("[CONN] Using underlying protocol graceful close mechanism");
         conn.close().await
     }
     
-    /// 检查连接是否应该忽略消息
+    /// Check if messages should be ignored for this session
     pub async fn should_ignore_messages(&self, session_id: SessionId) -> bool {
         self.state_manager.should_ignore_messages(session_id).await
     }
     
-    /// 🎯 核心方法：检查连接状态
+    /// [TARGET] Core method: check connection status
     pub async fn is_connected(&self) -> bool {
         self.session_id.lock().await.is_some()
     }
     
-    /// 🎯 核心方法：获取当前会话ID
+    /// [TARGET] Core method: get current session ID
     pub async fn current_session_id(&self) -> Option<SessionId> {
         self.session_id.lock().await.as_ref().cloned()
     }
     
-    /// 设置连接适配器和会话ID (内部使用)
+    /// Set connection adapter and session ID (internal use)
     pub async fn set_connection(self: &Arc<Self>, mut connection: Box<dyn Connection>, session_id: SessionId) {
-        // 🔧 修复：设置连接的 session_id
+        // [FIX] Set connection session_id
         connection.set_session_id(session_id);
         
         *self.connection_adapter.lock().await = Some(Arc::new(Mutex::new(connection)));
         *self.session_id.lock().await = Some(session_id);
         self.state_manager.add_connection(session_id);
-        tracing::debug!("✅ Transport 连接设置完成: {}", session_id);
+        tracing::debug!("[SUCCESS] Transport connection setup complete: {}", session_id);
         
-        // ⭐️ 启动事件消费循环，确保所有 TransportEvent 都在 on_event 里统一处理
+        // Start event consumer loop, ensure all TransportEvent are handled uniformly in on_event
         let this = Arc::clone(self);
         let adapter = self.connection_adapter.lock().await.as_ref().unwrap().clone();
         tokio::spawn(async move {
             let conn = adapter.lock().await;
             if let Some(mut event_receiver) = conn.event_stream() {
                 drop(conn);
-                tracing::debug!("🎧 Transport 事件消费循环启动 (会话: {})", session_id);
+                tracing::debug!("[LISTEN] Transport event consumer loop started (session: {})", session_id);
                 while let Ok(event) = event_receiver.recv().await {
-                    tracing::trace!("📥 Transport 收到事件: {:?}", event);
+                    tracing::trace!("[RECV] Transport received event: {:?}", event);
                     this.on_event(event).await;
                 }
-                tracing::debug!("📡 Transport 事件消费循环结束 (会话: {})", session_id);
+                tracing::debug!("[LISTEN] Transport event consumer loop ended (session: {})", session_id);
             } else {
-                tracing::warn!("⚠️ 连接不支持事件流 (会话: {})", session_id);
+                tracing::warn!("[WARN] Connection doesn't support event stream (session: {})", session_id);
             }
         });
     }
     
-    /// 获取协议注册表
+    /// Get protocol registry
     pub fn protocol_registry(&self) -> &ProtocolRegistry {
         &self.protocol_registry
     }
     
-    /// 获取配置
+    /// Get configuration
     pub fn config(&self) -> &TransportConfig {
         &self.config
     }
     
-    /// 🚀 Phase 3: 获取连接池统计
+    /// Get connection pool statistics
     pub fn connection_pool_stats(&self) -> crate::transport::pool::OptimizedPoolStatsSnapshot {
         self.connection_pool.get_performance_stats()
     }
     
-    /// 🚀 Phase 3: 获取内存池统计
+    /// Get memory pool statistics
     pub fn memory_pool_stats(&self) -> crate::transport::memory_pool::OptimizedMemoryStatsSnapshot {
         self.memory_pool.get_stats()
     }
     
-    /// 获取连接适配器（用于消息接收）
+    /// Get connection adapter (for message reception)
     pub async fn connection_adapter(&self) -> Option<Arc<Mutex<Box<dyn Connection>>>> {
         self.connection_adapter.lock().await.as_ref().cloned()
     }
     
-    /// 获取连接的事件流（如果支持）
+    /// Get connection event stream (if supported)
     /// 
-    /// 🔧 修复：返回Transport的高级事件流，而不是Connection的原始事件流
-    /// 这样才能接收到RequestReceived等Transport处理后的事件
+    /// [FIX] Return Transport's high-level event stream, not Connection's raw event stream
+    /// This way we can receive RequestReceived and other events processed by Transport
     pub async fn get_event_stream(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
-        // 检查是否有连接
+        // Check if there's a connection
         if self.connection_adapter.lock().await.is_some() {
-            // 返回Transport的事件发送器订阅
+            // Return Transport's event sender subscription
             Some(self.event_sender.subscribe())
         } else {
             None
         }
     }
 
-    /// 🚀 发送数据包并等待响应
+    /// Send data packet and wait for response
     pub async fn request(&self, packet: Packet) -> Result<Packet, TransportError> {
         if packet.header.packet_type != crate::packet::PacketType::Request {
             return Err(TransportError::connection_error("Not a Request packet", false));
         }
         
-        // 🔧 修复：使用客户端设置的message_id，而不是覆盖它
+        // [FIX] Use client-set message_id instead of overriding it
         let client_message_id = packet.header.message_id;
         let (_, rx) = self.request_tracker.register_with_id(client_message_id);
         
@@ -371,15 +371,15 @@ impl Transport {
         }
     }
 
-    /// 🎯 解压和解包 Packet payload，隐藏协议复杂性
+    /// [TARGET] Decompress and unpack Packet payload, hiding protocol complexity
     fn decode_payload(&self, packet: &Packet) -> Result<Vec<u8>, TransportError> {
-        // 🔧 如果数据包有压缩，则解压
+        // [FIX] If packet is compressed, decompress it
         if packet.header.compression != crate::packet::CompressionType::None {
             let mut packet_copy = packet.clone();
             match packet_copy.decompress_payload() {
                 Ok(_) => Ok(packet_copy.payload),
                 Err(e) => {
-                    tracing::warn!("⚠️ 解压缩数据包失败: {}, 使用原始数据", e);
+                    tracing::warn!("[WARN] Failed to decompress packet: {}, using raw data", e);
                     Ok(packet.payload.clone())
                 }
             }
@@ -388,58 +388,58 @@ impl Transport {
         }
     }
 
-    /// 🎯 统一事件处理入口 - 在此层完成解包并发送用户友好事件
+    /// [TARGET] Unified event handling entry point - complete unpacking and send user-friendly events at this layer
     pub async fn on_event(&self, event: crate::event::TransportEvent) {
         match event {
             crate::event::TransportEvent::MessageReceived(packet) => {
-                tracing::debug!("🎯 Transport::on_event 处理消息包: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
+                tracing::debug!("[TARGET] Transport::on_event processing message packet: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
                 
                 match packet.header.packet_type {
                     crate::packet::PacketType::Response => {
                         let id = packet.header.message_id;
-                        tracing::debug!("📥 处理响应包: ID={}, type={:?}", id, packet.header.packet_type);
+                        tracing::debug!("[RECV] Processing response packet: ID={}, type={:?}", id, packet.header.packet_type);
                         let completed = self.request_tracker.complete(id, packet);
-                        tracing::debug!("🔄 响应包处理结果: ID={}, completed={}", id, completed);
+                        tracing::debug!("[PROC] Response packet processing result: ID={}, completed={}", id, completed);
                     }
                     
                     crate::packet::PacketType::Request => {
                         let id = packet.header.message_id;
-                        tracing::debug!("🔄 收到请求包，创建统一的 TransportContext: ID={}, type={:?}", id, packet.header.packet_type);
+                        tracing::debug!("[PROC] Received request packet, creating unified TransportContext: ID={}, type={:?}", id, packet.header.packet_type);
                         
-                        // 🎯 直接发送 MessageReceived 事件，让 ClientEvent 转换时处理 Request 逻辑
-                        tracing::debug!("📤 发送统一的 MessageReceived 事件 (Request): ID={}", id);
+                        // [TARGET] Send MessageReceived event directly, let ClientEvent handle Request logic during conversion
+                        tracing::debug!("[SEND] Sending unified MessageReceived event (Request): ID={}", id);
                         let _ = self.event_sender.send(crate::event::TransportEvent::MessageReceived(packet));
                     }
                     
                     crate::packet::PacketType::OneWay => {
-                        tracing::debug!("📥 处理单向消息包: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
+                        tracing::debug!("[RECV] Processing one-way message packet: ID={}, type={:?}", packet.header.message_id, packet.header.packet_type);
                         
-                        // 🎯 解包数据
+                        // [TARGET] Unpack data
                         match self.decode_payload(&packet) {
                             Ok(data) => {
                                 let session_id = self.session_id.lock().await.as_ref().cloned();
                                 
-                                // 🎯 创建用户友好的 Message
+                                // [TARGET] Create user-friendly Message
                                 let message = crate::event::Message {
                                     peer: session_id,
                                     data,
                                     message_id: packet.header.message_id,
                                 };
                                 
-                                // 🎯 发送用户友好的消息事件 (保持向后兼容)
+                                // [TARGET] Send user-friendly message event (maintain backward compatibility)
                                 let _ = self.event_sender.send(crate::event::TransportEvent::MessageReceived(packet));
                             }
                             Err(e) => {
-                                tracing::error!("❌ 解包消息数据失败: {}", e);
+                                tracing::error!("[ERROR] Failed to unpack message data: {}", e);
                                 let _ = self.event_sender.send(crate::event::TransportEvent::TransportError { error: e });
                             }
                         }
                     }
                 }
             }
-            // 其它事件直接转发
+            // Forward other events directly
             _ => {
-                tracing::trace!("📤 转发其他事件: {:?}", event);
+                tracing::trace!("[SEND] Forwarding other event: {:?}", event);
                 let _ = self.event_sender.send(event);
             }
         }
@@ -449,14 +449,14 @@ impl Transport {
         self.event_sender.subscribe()
     }
 
-    /// 🚀 发送数据包并等待响应（带选项）
+    /// Send data packet and wait for response (with options)
     pub async fn request_with_options(&self, data: Bytes, options: super::TransportOptions) -> Result<Bytes, TransportError> {
-        // 使用用户提供的 message_id 或生成新的
+        // Use user-provided message_id or generate new one
         let message_id = options.message_id.unwrap_or_else(|| {
             self.request_tracker.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         });
         
-        // 创建请求包
+        // Create request packet
         let mut packet = crate::packet::Packet {
             header: crate::packet::FixedHeader {
                 version: 1,
@@ -472,28 +472,28 @@ impl Transport {
             payload: data.to_vec(),
         };
         
-        // 🔧 如果需要压缩，则压缩数据包
+        // [FIX] If compression is needed, compress the packet
         if options.compression.is_some() && options.compression != Some(crate::packet::CompressionType::None) {
             if let Err(e) = packet.compress_payload() {
-                tracing::warn!("⚠️ 压缩数据包失败: {}, 使用原始数据", e);
+                tracing::warn!("[WARN] Failed to compress packet: {}, using raw data", e);
             }
         }
         
-        // 注册请求跟踪
+        // Register request tracking
         let (_id, rx) = self.request_tracker.register_with_id(message_id);
         
-        // 发送数据包
+        // Send packet
         self.send(packet).await?;
         
-        // 等待响应（使用自定义超时）
+        // Wait for response (with custom timeout)
         let timeout_duration = options.timeout.unwrap_or(std::time::Duration::from_secs(10));
         match tokio::time::timeout(timeout_duration, rx).await {
             Ok(Ok(resp)) => {
-                // 🔧 解压响应数据
+                // [FIX] Decompress response data
                 match self.decode_payload(&resp) {
                     Ok(decoded_data) => Ok(Bytes::from(decoded_data)),
                     Err(e) => {
-                        tracing::warn!("⚠️ 解压响应数据失败: {}, 使用原始数据", e);
+                        tracing::warn!("[WARN] Failed to decompress response data: {}, using raw data", e);
                         Ok(Bytes::from(resp.payload))
                     }
                 }
@@ -503,14 +503,14 @@ impl Transport {
         }
     }
 
-    /// 🚀 发送单向消息（带选项）
+    /// Send one-way message (with options)
     pub async fn send_with_options(&self, data: Bytes, options: super::TransportOptions) -> Result<(), TransportError> {
-        // 使用用户提供的 message_id 或生成新的
+        // Use user-provided message_id or generate new one
         let message_id = options.message_id.unwrap_or_else(|| {
             self.request_tracker.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         });
         
-        // 创建单向消息包
+        // Create one-way message packet
         let mut packet = crate::packet::Packet {
             header: crate::packet::FixedHeader {
                 version: 1,
@@ -526,14 +526,14 @@ impl Transport {
             payload: data.to_vec(),
         };
         
-        // 🔧 如果需要压缩，则压缩数据包
+        // [FIX] If compression is needed, compress the packet
         if options.compression.is_some() && options.compression != Some(crate::packet::CompressionType::None) {
             if let Err(e) = packet.compress_payload() {
-                tracing::warn!("⚠️ 压缩数据包失败: {}, 使用原始数据", e);
+                tracing::warn!("[WARN] Failed to compress packet: {}, using raw data", e);
             }
         }
         
-        // 发送数据包
+        // Send packet
         self.send(packet).await?;
         Ok(())
     }
@@ -546,7 +546,7 @@ impl Clone for Transport {
             protocol_registry: self.protocol_registry.clone(),
             connection_pool: self.connection_pool.clone(),
             memory_pool: self.memory_pool.clone(),
-            // 🔧 修复：Clone应该共享连接状态，而不是重置
+            // [FIX] Clone should share connection state, not reset it
             connection_adapter: self.connection_adapter.clone(),
             session_id: self.session_id.clone(),
             state_manager: self.state_manager.clone(),

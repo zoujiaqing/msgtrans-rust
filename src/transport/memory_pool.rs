@@ -1,11 +1,11 @@
-/// Phase 3.1.2: 完全 LockFree 内存池实现
+/// [MEMORY] Fully lock-free memory pool implementation
 /// 
-/// 优化重点：
-/// - 完全移除 RwLock，使用 LockFree 数据结构
-/// - 同步API，避免异步开销
-/// - 智能缓存管理和自适应调整
-/// - 零拷贝缓冲区复用
-/// - 实时性能监控和事件广播
+/// Optimization features:
+/// - Complete removal of RwLock, using lock-free data structures
+/// - Synchronous API to avoid async overhead
+/// - Intelligent cache management and adaptive adjustment
+/// - Zero-copy buffer reuse
+/// - Real-time performance monitoring and event broadcasting
 
 use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -15,30 +15,30 @@ use bytes::BytesMut;
 
 use crate::transport::lockfree::LockFreeQueue;
 
-/// 🚀 Phase 3.1.2: 完全 LockFree 内存池
+/// [OPTIMIZED] Fully lock-free memory pool
 #[derive(Clone)]
 pub struct OptimizedMemoryPool {
-    /// 🚀 LockFree 缓冲区队列 (替代 RwLock)
+    /// [LOCKFREE] Buffer queues replacing RwLock
     small_buffers: Arc<LockFreeQueue<BytesMut>>,
     medium_buffers: Arc<LockFreeQueue<BytesMut>>,
     large_buffers: Arc<LockFreeQueue<BytesMut>>,
     
-    /// 🚀 Phase 3: 优化后的统计
+    /// [STATS] Optimized statistics
     stats: Arc<OptimizedMemoryStats>,
     
-    /// 🚀 LockFree 配置
-    small_max_cached: Arc<AtomicUsize>,  // 小缓冲区最大缓存数
-    medium_max_cached: Arc<AtomicUsize>, // 中缓冲区最大缓存数
-    large_max_cached: Arc<AtomicUsize>,  // 大缓冲区最大缓存数
+    /// [CONFIG] Lock-free configuration
+    small_max_cached: Arc<AtomicUsize>,  // Maximum cached small buffers
+    medium_max_cached: Arc<AtomicUsize>, // Maximum cached medium buffers
+    large_max_cached: Arc<AtomicUsize>,  // Maximum cached large buffers
     
-    /// 📡 事件广播
+    /// [EVENT] Event broadcaster
     event_broadcaster: tokio::sync::broadcast::Sender<MemoryPoolEvent>,
 }
 
-/// 🚀 Phase 3: 优化后的内存池统计
+/// [OPTIMIZED] Memory pool statistics
 #[derive(Debug, Default)]
 pub struct OptimizedMemoryStats {
-    /// 缓冲区操作统计
+    /// Buffer operation statistics
     pub small_get_operations: AtomicU64,
     pub medium_get_operations: AtomicU64,
     pub large_get_operations: AtomicU64,
@@ -46,7 +46,7 @@ pub struct OptimizedMemoryStats {
     pub medium_return_operations: AtomicU64,
     pub large_return_operations: AtomicU64,
     
-    /// 缓冲区分配统计
+    /// Buffer allocation statistics
     pub small_allocated: AtomicU64,
     pub medium_allocated: AtomicU64,
     pub large_allocated: AtomicU64,
@@ -54,21 +54,21 @@ pub struct OptimizedMemoryStats {
     pub medium_cached: AtomicU64,
     pub large_cached: AtomicU64,
     
-    /// 性能统计
+    /// Performance statistics
     pub total_get_operations: AtomicU64,
     pub total_return_operations: AtomicU64,
     pub cache_hit_count: AtomicU64,
     pub cache_miss_count: AtomicU64,
     
-    /// 内存统计 (字节)
+    /// Memory statistics (bytes)
     pub total_memory_allocated: AtomicU64,
     pub total_memory_cached: AtomicU64,
 }
 
-/// 内存池统计快照
+/// Memory pool statistics snapshot
 #[derive(Debug, Clone)]
 pub struct OptimizedMemoryStatsSnapshot {
-    // 操作统计
+    // Operation statistics
     pub small_get_operations: u64,
     pub medium_get_operations: u64,
     pub large_get_operations: u64,
@@ -76,7 +76,7 @@ pub struct OptimizedMemoryStatsSnapshot {
     pub medium_return_operations: u64,
     pub large_return_operations: u64,
     
-    // 分配统计
+    // Allocation statistics
     pub small_allocated: u64,
     pub medium_allocated: u64,
     pub large_allocated: u64,
@@ -84,18 +84,18 @@ pub struct OptimizedMemoryStatsSnapshot {
     pub medium_cached: u64,
     pub large_cached: u64,
     
-    // 性能统计
+    // Performance statistics
     pub total_operations: u64,
     pub cache_hit_rate: f64,
     pub cache_miss_rate: f64,
     
-    // 内存统计
+    // Memory statistics
     pub total_memory_allocated_mb: f64,
     pub total_memory_cached_mb: f64,
     pub memory_efficiency: f64,
 }
 
-/// 📡 内存池事件
+/// [EVENT] Memory pool events
 #[derive(Debug, Clone)]
 pub enum MemoryPoolEvent {
     BufferAllocated { size: BufferSize, capacity: usize },
@@ -106,7 +106,7 @@ pub enum MemoryPoolEvent {
     MemoryPressure { total_mb: f64, threshold_mb: f64 },
 }
 
-/// 缓冲区大小枚举
+/// Buffer size enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BufferSize {
     Small,   // 1KB
@@ -115,7 +115,7 @@ pub enum BufferSize {
 }
 
 impl BufferSize {
-    /// 获取缓冲区容量
+    /// Get buffer capacity
     pub const fn capacity(self) -> usize {
         match self {
             BufferSize::Small => 1024,
@@ -124,7 +124,7 @@ impl BufferSize {
         }
     }
     
-    /// 获取缓冲区描述
+    /// Get buffer description
     pub const fn description(self) -> &'static str {
         match self {
             BufferSize::Small => "Small(1KB)",
@@ -135,7 +135,7 @@ impl BufferSize {
 }
 
 impl OptimizedMemoryStats {
-    /// 获取统计快照
+    /// Get statistics snapshot
     pub fn snapshot(&self) -> OptimizedMemoryStatsSnapshot {
         let small_get = self.small_get_operations.load(Ordering::Relaxed);
         let medium_get = self.medium_get_operations.load(Ordering::Relaxed);
@@ -185,7 +185,7 @@ impl OptimizedMemoryStats {
 }
 
 impl OptimizedMemoryPool {
-    /// 🚀 Phase 3.1.2: 创建完全 LockFree 内存池
+    /// [PERF] Create fully lock-free memory pool
     pub fn new() -> Self {
         let (event_broadcaster, _) = tokio::sync::broadcast::channel(512);
         
@@ -194,16 +194,16 @@ impl OptimizedMemoryPool {
             medium_buffers: Arc::new(LockFreeQueue::new()),
             large_buffers: Arc::new(LockFreeQueue::new()),
             stats: Arc::new(OptimizedMemoryStats::default()),
-            small_max_cached: Arc::new(AtomicUsize::new(500)),   // 小缓冲区最大缓存
-            medium_max_cached: Arc::new(AtomicUsize::new(200)),  // 中缓冲区最大缓存
-            large_max_cached: Arc::new(AtomicUsize::new(50)),    // 大缓冲区最大缓存
+            small_max_cached: Arc::new(AtomicUsize::new(500)),   // Maximum small buffer cache
+            medium_max_cached: Arc::new(AtomicUsize::new(200)),  // Maximum medium buffer cache
+            large_max_cached: Arc::new(AtomicUsize::new(50)),    // Maximum large buffer cache
             event_broadcaster,
         }
     }
     
-    /// 🚀 Phase 3.1.2: 预分配缓冲区池
+    /// [PERF] Pre-allocate buffer pool
     pub fn with_preallocation(self, small_count: usize, medium_count: usize, large_count: usize) -> Self {
-        // 预分配小缓冲区
+        // Pre-allocate small buffers
         for _ in 0..small_count {
             let buffer = BytesMut::with_capacity(BufferSize::Small.capacity());
             let _ = self.small_buffers.push(buffer);
@@ -211,7 +211,7 @@ impl OptimizedMemoryPool {
             self.stats.total_memory_cached.fetch_add(BufferSize::Small.capacity() as u64, Ordering::Relaxed);
         }
         
-        // 预分配中缓冲区
+        // Pre-allocate medium buffers
         for _ in 0..medium_count {
             let buffer = BytesMut::with_capacity(BufferSize::Medium.capacity());
             let _ = self.medium_buffers.push(buffer);
@@ -219,7 +219,7 @@ impl OptimizedMemoryPool {
             self.stats.total_memory_cached.fetch_add(BufferSize::Medium.capacity() as u64, Ordering::Relaxed);
         }
         
-        // 预分配大缓冲区
+        // Pre-allocate large buffers
         for _ in 0..large_count {
             let buffer = BytesMut::with_capacity(BufferSize::Large.capacity());
             let _ = self.large_buffers.push(buffer);
@@ -227,13 +227,13 @@ impl OptimizedMemoryPool {
             self.stats.total_memory_cached.fetch_add(BufferSize::Large.capacity() as u64, Ordering::Relaxed);
         }
         
-        tracing::info!("🚀 Phase 3.1.2: 内存池预分配完成 - Small:{}, Medium:{}, Large:{}", 
+        tracing::info!("[PERF] Memory pool pre-allocation completed - Small:{}, Medium:{}, Large:{}", 
                       small_count, medium_count, large_count);
         
         self
     }
     
-    /// 🚀 Phase 3.1.2: 同步获取缓冲区 (LockFree + Zero-Copy)
+    /// [PERF] Synchronous buffer acquisition (LockFree + Zero-Copy)
     pub fn get_buffer(&self, size: BufferSize) -> BytesMut {
         let (queue, get_stat, cached_stat, alloc_stat) = match size {
             BufferSize::Small => (
@@ -256,52 +256,52 @@ impl OptimizedMemoryPool {
             ),
         };
         
-        // 更新操作统计
+        // Update operation statistics
         get_stat.fetch_add(1, Ordering::Relaxed);
         self.stats.total_get_operations.fetch_add(1, Ordering::Relaxed);
         
-        // 尝试从缓存获取
+        // Try to get from cache
         if let Some(mut buffer) = queue.pop() {
-            // 缓存命中
+            // Cache hit
             cached_stat.fetch_sub(1, Ordering::Relaxed);
             self.stats.cache_hit_count.fetch_add(1, Ordering::Relaxed);
             self.stats.total_memory_cached.fetch_sub(size.capacity() as u64, Ordering::Relaxed);
             
-            // 清理缓冲区以确保零拷贝
+            // Clear buffer to ensure zero-copy
             buffer.clear();
             
-            // 发送缓存命中事件
+            // Send cache hit event
             let _ = self.event_broadcaster.send(MemoryPoolEvent::CacheHit { size });
             
-            tracing::trace!("🎯 缓存命中: {} 容量={}", size.description(), buffer.capacity());
+            tracing::trace!("[TARGET] Cache hit: {} capacity={}", size.description(), buffer.capacity());
             return buffer;
         }
         
-        // 缓存未命中，创建新缓冲区
+        // Cache miss, create new buffer
         let capacity = size.capacity();
         let buffer = BytesMut::with_capacity(capacity);
         
-        // 更新统计
+        // Update statistics
         alloc_stat.fetch_add(1, Ordering::Relaxed);
         self.stats.cache_miss_count.fetch_add(1, Ordering::Relaxed);
         self.stats.total_memory_allocated.fetch_add(capacity as u64, Ordering::Relaxed);
         
-        // 发送事件
+        // Send events
         let _ = self.event_broadcaster.send(MemoryPoolEvent::CacheMiss { size });
         let _ = self.event_broadcaster.send(MemoryPoolEvent::BufferAllocated { 
             size, 
             capacity 
         });
         
-        tracing::trace!("🆕 新分配: {} 容量={}", size.description(), capacity);
+        tracing::trace!("[NEW] New allocation: {} capacity={}", size.description(), capacity);
         buffer
     }
     
-    /// 🚀 Phase 3.1.2: 同步归还缓冲区 (LockFree + 智能缓存管理)
+    /// [PERF] Synchronous buffer return (LockFree + intelligent cache management)
     pub fn return_buffer(&self, buffer: BytesMut, size: BufferSize) {
-        // 验证缓冲区大小合理性
-        if buffer.capacity() == 0 || buffer.capacity() > 10 * 1024 * 1024 { // 超过10MB拒绝
-            tracing::warn!("🚫 拒绝归还异常缓冲区: 容量={}", buffer.capacity());
+        // Validate buffer size reasonableness
+        if buffer.capacity() == 0 || buffer.capacity() > 10 * 1024 * 1024 { // Reject buffers over 10MB
+            tracing::warn!("[REJECT] Rejecting abnormal buffer: capacity={}", buffer.capacity());
             return;
         }
         
@@ -326,50 +326,50 @@ impl OptimizedMemoryPool {
             ),
         };
         
-        // 更新操作统计
+        // Update operation statistics
         return_stat.fetch_add(1, Ordering::Relaxed);
         self.stats.total_return_operations.fetch_add(1, Ordering::Relaxed);
         
-        // 检查缓存限制
+        // Check cache limits
         let current_cached = cached_stat.load(Ordering::Relaxed);
         let max_limit = max_cached.load(Ordering::Relaxed) as u64;
         
         if current_cached >= max_limit {
-            // 缓存已满，直接丢弃
-            tracing::trace!("💧 缓存已满，丢弃 {} 缓冲区 (当前={}/最大={})", 
+            // Cache is full, discard directly
+            tracing::trace!("[DROP] Cache full, dropping {} buffer (current={}/max={})", 
                            size.description(), current_cached, max_limit);
             return;
         }
         
-        // 尝试归还到缓存
+        // Try to return to cache
         match queue.push(buffer) {
             Ok(()) => {
-                // 成功缓存
+                // Successfully cached
                 cached_stat.fetch_add(1, Ordering::Relaxed);
                 self.stats.total_memory_cached.fetch_add(size.capacity() as u64, Ordering::Relaxed);
                 
-                // 发送归还事件
+                // Send return event
                 let _ = self.event_broadcaster.send(MemoryPoolEvent::BufferReturned { 
                     size, 
                     capacity: size.capacity() 
                 });
                 
-                tracing::trace!("♻️ 缓冲区已归还: {} 缓存数={}", size.description(), current_cached + 1);
+                tracing::trace!("[RECYCLE] Buffer returned: {} cache_count={}", size.description(), current_cached + 1);
             },
             Err(_) => {
-                // 队列操作失败（极罕见）
-                tracing::warn!("⚠️ 归还缓冲区失败: {}", size.description());
+                // Queue operation failed (extremely rare)
+                tracing::warn!("[WARNING] Buffer return failed: {}", size.description());
             }
         }
     }
     
-    /// 🚀 Phase 3.1.2: 自适应缓存调整
+    /// [PERF] Adaptive cache adjustment
     pub fn adjust_cache_limits(&self, memory_pressure_threshold_mb: f64) {
         let stats = self.stats.snapshot();
         let current_memory_mb = stats.total_memory_cached_mb;
         
         if current_memory_mb > memory_pressure_threshold_mb {
-            // 内存压力过大，减少缓存限制
+            // Memory pressure too high, reduce cache limits
             let reduction_factor = 0.8;
             
             self.small_max_cached.store(
@@ -385,62 +385,62 @@ impl OptimizedMemoryPool {
                 Ordering::Relaxed
             );
             
-            // 发送内存压力事件
+            // Send memory pressure event
             let _ = self.event_broadcaster.send(MemoryPoolEvent::MemoryPressure { 
                 total_mb: current_memory_mb, 
                 threshold_mb: memory_pressure_threshold_mb 
             });
             
-            tracing::info!("📉 内存压力调整: 缓存限制降低至 80% (当前={:.1}MB)", current_memory_mb);
+            tracing::info!("[REDUCE] Memory pressure adjustment: cache limits reduced to 80% (current={:.1}MB)", current_memory_mb);
         }
     }
     
-    /// 🚀 Phase 3.1.2: 获取内存池性能统计
+    /// [PERF] Get memory pool performance statistics
     pub fn get_stats(&self) -> OptimizedMemoryStatsSnapshot {
         self.stats.snapshot()
     }
     
-    /// 🚀 Phase 3.1.2: 清理缓存 (用于低内存情况)
+    /// [PERF] Clear cache (for low memory situations)
     pub fn clear_cache(&self) -> usize {
         let mut cleared_count = 0;
         let mut cleared_memory = 0u64;
         
-        // 清理小缓冲区缓存
+        // Clear small buffer cache
         while let Some(_) = self.small_buffers.pop() {
             cleared_count += 1;
             cleared_memory += BufferSize::Small.capacity() as u64;
             self.stats.small_cached.fetch_sub(1, Ordering::Relaxed);
         }
         
-        // 清理中缓冲区缓存
+        // Clear medium buffer cache
         while let Some(_) = self.medium_buffers.pop() {
             cleared_count += 1;
             cleared_memory += BufferSize::Medium.capacity() as u64;
             self.stats.medium_cached.fetch_sub(1, Ordering::Relaxed);
         }
         
-        // 清理大缓冲区缓存
+        // Clear large buffer cache
         while let Some(_) = self.large_buffers.pop() {
             cleared_count += 1;
             cleared_memory += BufferSize::Large.capacity() as u64;
             self.stats.large_cached.fetch_sub(1, Ordering::Relaxed);
         }
         
-        // 更新总内存统计
+        // Update total memory statistics
         self.stats.total_memory_cached.store(0, Ordering::Relaxed);
         
-        tracing::info!("🧹 缓存已清理: {} 个缓冲区, {:.1}MB", 
+        tracing::info!("[CLEAN] Cache cleared: {} buffers, {:.1}MB", 
                       cleared_count, cleared_memory as f64 / (1024.0 * 1024.0));
         
         cleared_count
     }
     
-    /// 🚀 Phase 3.1.2: 获取事件接收器 (用于监控)
+    /// [PERF] Get event receiver (for monitoring)
     pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<MemoryPoolEvent> {
         self.event_broadcaster.subscribe()
     }
     
-    /// 🚀 Phase 3.1.2: 获取内存池状态 (兼容旧API)
+    /// [PERF] Get memory pool status (compatible with old API)
     pub async fn status(&self) -> OptimizedMemoryStatsSnapshot {
         self.get_stats()
     }

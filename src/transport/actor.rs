@@ -1,10 +1,10 @@
-/// Phase 3.3: 前端Actor层完全迁移
+/// Frontend Actor layer complete migration
 /// 
-/// 核心优化：
-/// 1. 真实网络适配器集成
-/// 2. 数据管道与命令管道分离  
-/// 3. 批量数据处理
-/// 4. Flume高性能通信
+/// Core optimizations:
+/// 1. Real network adapter integration
+/// 2. Data pipeline and command pipeline separation  
+/// 3. Batch data processing
+/// 4. Flume high-performance communication
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -20,64 +20,64 @@ use crate::{
     protocol::adapter::ProtocolAdapter,
 };
 
-/// 🚀 Phase 3.3: 优化的Actor事件类型
+/// Optimized Actor event types
 #[derive(Debug, Clone)]
 pub enum ActorEvent {
-    /// 连接建立
+    /// Connection established
     Connected,
-    /// 数据包发送完成
+    /// Packet sent completed
     PacketSent { packet_id: u32, size: usize },
-    /// 数据包接收完成  
+    /// Packet received completed  
     PacketReceived { packet_id: u32, size: usize },
-    /// 批量处理完成
+    /// Batch processing completed
     BatchCompleted(usize),
-    /// 错误发生
+    /// Error occurred
     Error { message: String },
-    /// Actor关闭
+    /// Actor shutdown
     Shutdown,
-    /// 健康检查
+    /// Health check
     HealthCheck,
 }
 
-/// 🚀 Phase 3.3: 优化的Actor命令类型
+/// Optimized Actor command types
 #[derive(Debug, Clone)]
 pub enum ActorCommand {
-    /// 发送数据包
+    /// Send packet
     SendPacket(Packet),
-    /// 获取统计信息
+    /// Get statistics
     GetStats,
-    /// 健康检查
+    /// Health check
     HealthCheck,
-    /// 关闭Actor
+    /// Shutdown Actor
     Shutdown,
 }
 
-/// 🚀 Phase 3.3: LockFree Actor统计
+/// Lock-free Actor statistics
 #[derive(Debug, Default)]
 pub struct LockFreeActorStats {
-    /// 已发送数据包数
+    /// Number of packets sent
     pub packets_sent: AtomicU64,
-    /// 已接收数据包数
+    /// Number of packets received
     pub packets_received: AtomicU64,
-    /// 发送字节数
+    /// Bytes sent
     pub bytes_sent: AtomicU64,
-    /// 接收字节数
+    /// Bytes received
     pub bytes_received: AtomicU64,
-    /// 批量处理次数
+    /// Batch operation count
     pub batch_operations: AtomicU64,
-    /// 总处理的数据包数（批量）
+    /// Total packets processed (batch)
     pub total_batch_packets: AtomicU64,
-    /// 错误计数
+    /// Error count
     pub error_count: AtomicU64,
-    /// 启动时间
+    /// Start time
     pub started_at: std::sync::Mutex<Option<Instant>>,
 }
 
-/// Actor统计快照
+/// Actor statistics snapshot
 pub type ActorStats = LockFreeActorStats;
 
 impl LockFreeActorStats {
-    /// 创建新的统计实例
+    /// Create new statistics instance
     pub fn new() -> Self {
         Self {
             started_at: std::sync::Mutex::new(Some(Instant::now())),
@@ -85,30 +85,30 @@ impl LockFreeActorStats {
         }
     }
     
-    /// 记录数据包发送
+    /// Record packet sent
     pub fn record_packet_sent(&self, size: usize) {
         self.packets_sent.fetch_add(1, Ordering::Relaxed);
         self.bytes_sent.fetch_add(size as u64, Ordering::Relaxed);
     }
     
-    /// 记录数据包接收
+    /// Record packet received
     pub fn record_packet_received(&self, size: usize) {
         self.packets_received.fetch_add(1, Ordering::Relaxed);
         self.bytes_received.fetch_add(size as u64, Ordering::Relaxed);
     }
     
-    /// 记录批量操作
+    /// Record batch operation
     pub fn record_batch_operation(&self, packet_count: usize) {
         self.batch_operations.fetch_add(1, Ordering::Relaxed);
         self.total_batch_packets.fetch_add(packet_count as u64, Ordering::Relaxed);
     }
     
-    /// 记录错误
+    /// Record error
     pub fn record_error(&self) {
         self.error_count.fetch_add(1, Ordering::Relaxed);
     }
     
-    /// 平均批次大小
+    /// Average batch size
     pub fn average_batch_size(&self) -> f64 {
         let batch_ops = self.batch_operations.load(Ordering::Relaxed);
         if batch_ops == 0 {
@@ -118,7 +118,7 @@ impl LockFreeActorStats {
         }
     }
     
-    /// 获取运行时间（秒）
+    /// Get uptime in seconds
     pub fn uptime_seconds(&self) -> u64 {
         self.started_at
             .lock()
@@ -129,40 +129,40 @@ impl LockFreeActorStats {
     }
 }
 
-/// 🚀 Phase 3.3: 优化的Actor实现 - 真实网络适配器集成
+/// Optimized Actor implementation - real network adapter integration
 pub struct OptimizedActor<A: ProtocolAdapter> {
-    /// 会话ID
+    /// Session ID
     session_id: SessionId,
     
-    /// 🔧 命令接收通道（兼容传统 mpsc）
+    /// Command receive channel (compatible with traditional mpsc)
     command_receiver: mpsc::Receiver<TransportCommand>,
     
-    /// 📡 事件发送通道
+    /// Event send channel
     event_sender: FlumeSender<ActorEvent>,
     
-    /// 🚀 内部高性能数据处理通道
+    /// Internal high-performance data processing channel
     data_sender: FlumeSender<Packet>,
     data_receiver: FlumeReceiver<Packet>,
     
-    /// 🚀 内部高性能命令处理通道  
+    /// Internal high-performance command processing channel  
     internal_command_sender: FlumeSender<ActorCommand>,
     internal_command_receiver: FlumeReceiver<ActorCommand>,
     
-    /// 🌐 真实协议适配器（使用Arc<Mutex<>>共享）
+    /// Real protocol adapter (shared using Arc<Mutex<>>)
     protocol_adapter: Arc<Mutex<A>>,
     
-    /// 性能统计
+    /// Performance statistics
     stats: Arc<LockFreeActorStats>,
     
-    /// 批量处理配置
+    /// Batch processing configuration
     max_batch_size: usize,
     
-    /// 🌐 全局事件发送器（兼容现有系统）
+    /// Global event sender (compatible with existing system)
     global_event_sender: tokio::sync::broadcast::Sender<crate::TransportEvent>,
 }
 
 impl<A: ProtocolAdapter> OptimizedActor<A> {
-    /// 🚀 创建新的优化Actor（与真实网络适配器集成）
+    /// Create new optimized Actor (integrated with real network adapter)
     pub fn new_with_real_adapter(
         session_id: SessionId,
         protocol_adapter: A,
@@ -193,21 +193,21 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
         (actor, event_receiver, data_sender, command_sender)
     }
     
-    /// 🚀 运行优化的双管道处理 - 真实网络适配器版本
+    /// Run optimized dual pipeline processing - real network adapter version
     pub async fn run_dual_pipeline(self) -> Result<(), TransportError> 
     where 
         A: Send + 'static,
         A::Config: Send + 'static,
     {
-        info!("🚀 启动优化Actor双管道处理 (会话: {})", self.session_id);
+        info!("[PERF] Starting optimized Actor dual pipeline processing (session: {})", self.session_id);
         
-        // 启动命令适配任务
+        // Start command adapter task
         let internal_cmd_sender = self.internal_command_sender.clone();
         let mut command_receiver = self.command_receiver;
         let session_id = self.session_id;
         
         let cmd_adapter_task = tokio::spawn(async move {
-            info!("🎛️ 启动命令适配器 (会话: {})", session_id);
+            info!("[CONTROL] Starting command adapter (session: {})", session_id);
             while let Some(transport_cmd) = command_receiver.recv().await {
                 match transport_cmd {
                     TransportCommand::Send { session_id: cmd_session_id, packet, response_tx } => {
@@ -216,12 +216,12 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                             continue;
                         }
                         
-                        // 发送到内部数据处理管道
+                        // Send to internal data processing pipeline
                         if let Err(_) = internal_cmd_sender.send(ActorCommand::SendPacket(packet)) {
                             let _ = response_tx.send(Err(crate::error::TransportError::connection_error("Internal channel closed", false)));
                             break;
                         } else {
-                            // 发送成功，立即响应（数据会在数据处理管道中异步处理）
+                            // Send success, respond immediately (data will be processed asynchronously in data processing pipeline)
                             let _ = response_tx.send(Ok(()));
                         }
                     }
@@ -239,8 +239,8 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                         break;
                     }
                     TransportCommand::GetStats { response_tx } => {
-                        // 返回当前统计信息
-                        let stats = crate::command::TransportStats::default(); // TODO: 从实际stats转换
+                        // Return current statistics
+                        let stats = crate::command::TransportStats::default(); // TODO: Convert from actual stats
                         let _ = response_tx.send(stats);
                     }
                     TransportCommand::GetConnectionInfo { session_id: cmd_session_id, response_tx } => {
@@ -249,15 +249,15 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                             continue;
                         }
                         
-                        // TODO: 返回实际连接信息
+                        // TODO: Return actual connection info
                         let info = crate::command::ConnectionInfo::default();
                         let _ = response_tx.send(Ok(info));
                     }
                     TransportCommand::Configure { .. } => {
-                        debug!("🎛️ 配置命令暂不支持");
+                        debug!("[CONTROL] Configuration command not yet supported");
                     }
                     TransportCommand::GetActiveSessions { response_tx } => {
-                        // 返回当前会话
+                        // Return current session
                         let _ = response_tx.send(vec![session_id]);
                     }
                     TransportCommand::ForceDisconnect { session_id: cmd_session_id, reason: _, response_tx } => {
@@ -279,7 +279,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                             continue;
                         }
                         
-                        debug!("🎛️ 暂停会话命令暂不支持");
+                        debug!("[CONTROL] Pause session command not yet supported");
                         let _ = response_tx.send(Ok(()));
                     }
                     TransportCommand::ResumeSession { session_id: cmd_session_id, response_tx } => {
@@ -288,83 +288,83 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                             continue;
                         }
                         
-                        debug!("🎛️ 恢复会话命令暂不支持");
+                        debug!("[CONTROL] Resume session command not yet supported");
                         let _ = response_tx.send(Ok(()));
                     }
                 }
             }
-            info!("🎛️ 命令适配器退出 (会话: {})", session_id);
+            info!("[CONTROL] Command adapter exited (session: {})", session_id);
         });
         
-        // 启动数据处理管道
+        // Start data processing pipeline
         let data_receiver = self.data_receiver.clone();
         let stats = self.stats.clone();
         let max_batch_size = self.max_batch_size;
-        let protocol_adapter = self.protocol_adapter.clone();  // 克隆Arc
+        let protocol_adapter = self.protocol_adapter.clone();  // Clone Arc
         let event_sender = self.event_sender.clone();
         let global_event_sender = self.global_event_sender.clone();
         let session_id = self.session_id;
         
         let data_task = tokio::spawn(async move {
-            info!("📦 启动数据处理管道 (最大批次: {})", max_batch_size);
+            info!("[DATA] Starting data processing pipeline (max batch: {})", max_batch_size);
             let mut batch = Vec::with_capacity(max_batch_size);
             
             loop {
-                // 尝试收集一批数据包
+                // Try to collect a batch of packets
                 match data_receiver.recv_async().await {
                     Ok(packet) => {
                         batch.push(packet);
                         
-                        // 尝试收集更多数据包到批次中
+                        // Try to collect more packets into batch
                         while batch.len() < max_batch_size {
                             match data_receiver.try_recv() {
                                 Ok(packet) => batch.push(packet),
-                                Err(_) => break, // 没有更多数据包，处理当前批次
+                                Err(_) => break, // No more packets, process current batch
                             }
                         }
                         
-                        // 处理批次
+                        // Process batch
                         let batch_size = batch.len();
-                        debug!("📦 处理数据包批次: {} 个包", batch_size);
+                        debug!("[DATA] Processing packet batch: {} packets", batch_size);
                         
                         let mut should_break = false;
                         for packet in batch.drain(..) {
-                            // 🔧 在任务内部获取锁并发送
+                            // [CONFIG] Acquire lock within task and send
                             {
                                 let mut adapter = protocol_adapter.lock().await;
                                 
-                                // 🔍 检查连接状态 - 如果连接已关闭，直接退出整个数据处理循环
+                                // [CHECK] Check connection status - if connection is closed, exit entire data processing loop
                                 if !adapter.is_connected() {
-                                    debug!("📤 连接已关闭，停止数据处理管道");
+                                    debug!("[SEND] Connection closed, stopping data processing pipeline");
                                     should_break = true;
-                                    break; // 退出批次处理循环
+                                    break; // Exit batch processing loop
                                 }
                                 
-                                debug!("📤 发送数据包: {} bytes", packet.payload.len());
+                                debug!("[SEND] Sending packet: {} bytes", packet.payload.len());
                                 match adapter.send(packet.clone()).await {
                                     Ok(_) => {
-                                        debug!("📤 发送成功: {} bytes", packet.payload.len());
+                                        debug!("[SEND] Send successful: {} bytes", packet.payload.len());
                                         stats.record_packet_sent(packet.payload.len());
                                         
-                                        // 发送全局事件（兼容现有系统）
+                                        // Send global event (compatible with existing system)
                                         let transport_event = crate::TransportEvent::MessageSent {
                                             packet_id: packet.header.message_id,
                                         };
                                         let _ = global_event_sender.send(transport_event);
                                     }
                                     Err(e) => {
-                                        // 🔍 简化错误处理，避免重复日志
-                                        debug!("📤 发送失败（连接可能已关闭）: {:?}", e);
+                                        // Simplified error handling, avoid duplicate logs
+                                        debug!("[SEND] Send failed (connection may be closed): {:?}", e);
                                         stats.record_error();
                                         
-                                        // 如果是连接关闭错误，停止处理
+                                        // If connection close error, stop processing
                                         if !adapter.is_connected() {
-                                            debug!("📤 连接已关闭，停止数据处理管道");
+                                            debug!("[SEND] Connection closed, stopping data processing pipeline");
                                             should_break = true;
                                             break;
                                         }
                                         
-                                        // 发送错误事件
+                                        // Send error event
                                             let transport_event = crate::TransportEvent::TransportError {
                                             error: TransportError::connection_error(format!("{:?}", e), false),
                                         };
@@ -374,7 +374,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                             }
                         }
                         
-                        // 如果连接已关闭，退出主循环
+                        // If connection is closed, exit main loop
                         if should_break {
                             break;
                         }
@@ -383,80 +383,80 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                         let _ = event_sender.send(ActorEvent::BatchCompleted(batch_size));
                     }
                     Err(_) => {
-                        debug!("📦 数据处理管道：接收通道已关闭");
+                        debug!("[DATA] Data processing pipeline: receive channel closed");
                         break;
                     }
                 }
             }
             
-            info!("📦 数据处理管道退出");
+            info!("[DATA] Data processing pipeline exited");
             Ok::<(), TransportError>(())
         });
         
-        // 启动接收处理管道
+        // Start receive processing pipeline
         let stats = self.stats.clone();
         let event_sender = self.event_sender.clone();
         let global_event_sender = self.global_event_sender.clone();
-        let protocol_adapter = self.protocol_adapter.clone();  // 克隆Arc用于接收
+        let protocol_adapter = self.protocol_adapter.clone();  // Clone Arc for receive
         let session_id = self.session_id;
         
         let recv_task = tokio::spawn(async move {
-            info!("📡 启动事件驱动接收管道");
+            info!("[RECV] Starting event-driven receive pipeline");
             
-            // 🔧 在事件驱动架构中，我们不再直接调用receive()
-            // 而是通过协议适配器的事件流来接收数据
-            // 这里我们只是等待，实际的数据接收由适配器的内部事件循环处理
+            // [CONFIG] In event-driven architecture, we no longer call receive() directly
+            // but receive data through protocol adapter's event stream
+            // Here we just wait, actual data reception is handled by adapter's internal event loop
             
-            // 模拟事件驱动的接收处理
+            // Simulate event-driven receive processing
             loop {
-                // 在真正的事件驱动实现中，这里应该监听事件流
-                // 目前作为占位符，等待事件驱动架构完全实现
+                // In real event-driven implementation, this should listen to event stream
+                // Currently as placeholder, waiting for event-driven architecture complete implementation
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 
-                // 检查连接状态
+                // Check connection status
                 let is_connected = {
                     let adapter = protocol_adapter.lock().await;
                     adapter.is_connected()
                 };
                 
                 if !is_connected {
-                    info!("📡 连接已断开，退出事件驱动接收管道");
+                    info!("[RECV] Connection disconnected, exiting event-driven receive pipeline");
                     break;
                 }
             }
             
-            info!("📡 事件驱动接收管道退出");
+            info!("[RECV] Event-driven receive pipeline exited");
             Ok::<(), TransportError>(())
         });
         
-        // 启动命令处理管道
+        // Start command processing pipeline
         let internal_command_receiver = self.internal_command_receiver;
         let event_sender = self.event_sender.clone();
         let global_event_sender = self.global_event_sender.clone();
-        let data_sender = self.data_sender.clone();  // 🔧 修复：克隆data_sender
+        let data_sender = self.data_sender.clone();  // [CONFIG] Fix: clone data_sender
         let session_id = self.session_id;
         
         let command_task = tokio::spawn(async move {
-            info!("🎛️ 启动命令处理管道");
+            info!("[CONTROL] Starting command processing pipeline");
             
             while let Ok(command) = internal_command_receiver.recv_async().await {
                 match command {
                     ActorCommand::SendPacket(packet) => {
-                        // 将数据包发送到数据处理管道
+                        // Send packet to data processing pipeline
                         if let Err(_) = data_sender.send(packet) {
-                            error!("🎛️ 无法发送到数据管道：通道已关闭");
+                            error!("[CONTROL] Cannot send to data pipeline: channel closed");
                             break;
                         }
                     }
                     ActorCommand::GetStats => {
-                        debug!("🎛️ 处理统计查询");
-                        // 可以通过事件返回统计信息
+                        debug!("[CONTROL] Processing statistics query");
+                        // Can return statistics via event
                     }
                     ActorCommand::Shutdown => {
-                        info!("🛑 收到关闭命令");
+                        info!("[STOP] Received shutdown command");
                         let _ = event_sender.send(ActorEvent::Shutdown);
                         
-                        // 发送全局关闭事件
+                        // Send global shutdown event
                         let transport_event = crate::TransportEvent::ConnectionClosed {
                             reason: crate::CloseReason::Normal,
                         };
@@ -464,53 +464,53 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
                         break;
                     }
                     ActorCommand::HealthCheck => {
-                        debug!("💊 健康检查");
+                        debug!("[HEALTH] Health check");
                         let _ = event_sender.send(ActorEvent::HealthCheck);
                     }
                 }
             }
             
-            info!("🎛️ 命令处理管道退出");
+            info!("[CONTROL] Command processing pipeline exited");
             Ok::<(), TransportError>(())
         });
         
-        // 等待所有任务完成
+        // Wait for all tasks to complete
         let (cmd_adapter_result, data_result, recv_result, command_result) = 
             tokio::join!(cmd_adapter_task, data_task, recv_task, command_task);
         
         match (cmd_adapter_result, data_result, recv_result, command_result) {
             (Ok(()), Ok(Ok(())), Ok(Ok(())), Ok(Ok(()))) => {
-                info!("✅ 优化Actor正常退出 (会话: {})", self.session_id);
+                info!("[SUCCESS] Optimized Actor normal exit (session: {})", self.session_id);
                 Ok(())
             }
             (cmd_res, data_res, recv_res, cmd_pipeline_res) => {
-                error!("❌ 优化Actor异常退出 (会话: {}): cmd_adapter={:?}, data={:?}, recv={:?}, cmd_pipeline={:?}", 
+                error!("[ERROR] Optimized Actor abnormal exit (session: {}): cmd_adapter={:?}, data={:?}, recv={:?}, cmd_pipeline={:?}", 
                        self.session_id, cmd_res, data_res, recv_res, cmd_pipeline_res);
                 Err(TransportError::connection_error("Actor pipeline failed", false))
             }
         }
     }
 
-    /// 🔧 兼容方法：模拟传统Actor的运行
+    /// [CONFIG] Compatibility method: simulate traditional Actor running
     pub async fn run_flume_pipeline(self) -> Result<(), TransportError> {
         self.run_dual_pipeline().await
     }
 
-    /// 获取统计信息
+    /// Get statistics
     pub fn get_stats(&self) -> Arc<LockFreeActorStats> {
         self.stats.clone()
     }
 }
 
-/// 🚀 Phase 3.3: 类型擦除的Actor管理器
+/// Type-erased Actor manager
 pub struct ActorManager {
-    /// 使用动态分发来管理不同类型的Actor
+    /// Use dynamic dispatch to manage different types of Actors
     actor_handles: Vec<tokio::task::JoinHandle<Result<(), TransportError>>>,
     stats: Arc<LockFreeActorStats>,
 }
 
 impl ActorManager {
-    /// 创建新的ActorManager
+    /// Create new ActorManager
     pub fn new() -> Self {
         Self {
             actor_handles: Vec::new(),
@@ -518,7 +518,7 @@ impl ActorManager {
         }
     }
     
-    /// 添加Actor（启动并管理）
+    /// Add Actor (start and manage)
     pub fn add_actor<A>(&mut self, actor: OptimizedActor<A>) 
     where 
         A: ProtocolAdapter + Send + 'static,
@@ -530,25 +530,25 @@ impl ActorManager {
         self.actor_handles.push(handle);
     }
     
-    /// 并发运行所有Actor
+    /// Run all Actors concurrently
     pub async fn run_all(self) -> Result<(), TransportError> {
         let results = futures::future::join_all(self.actor_handles).await;
         
         for (index, result) in results.into_iter().enumerate() {
             match result {
                 Ok(Ok(())) => {
-                    info!("✅ Actor {} 正常完成", index);
+                    info!("[SUCCESS] Actor {} completed normally", index);
                 }
                 Ok(Err(e)) => {
-                    error!("❌ Actor {} 运行错误: {:?}", index, e);
+                    error!("[ERROR] Actor {} runtime error: {:?}", index, e);
                 }
                 Err(e) => {
-                    error!("❌ Actor {} 任务错误: {:?}", index, e);
+                    error!("[ERROR] Actor {} task error: {:?}", index, e);
                 }
             }
         }
         
-        info!("🏁 所有Actor已完成");
+        info!("[COMPLETE] All Actors completed");
         Ok(())
     }
 }

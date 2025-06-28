@@ -1,25 +1,25 @@
-/// 统一架构数据包定义
+/// Unified architecture packet definition
 /// 
-/// 为统一架构设计的简化、高效的数据包格式
+/// Simplified, efficient packet format designed for unified architecture
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use bytes::{Bytes, BytesMut, Buf, BufMut};
 
-/// 数据包类型 - 简化为3种核心类型
+/// Packet types - simplified to 3 core types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PacketType {
-    /// 单向消息（不需要回复）
+    /// One-way message (no reply required)
     OneWay = 0,
-    /// 请求（需要回复）
+    /// Request (reply required)
     Request = 1,
-    /// 回复消息
+    /// Response message
     Response = 2,
 }
 
 impl PacketType {
-    /// 向后兼容：Data 类型别名
+    /// Backward compatibility: Data type alias
     pub const Data: PacketType = PacketType::OneWay;
 }
 
@@ -29,7 +29,7 @@ impl From<u8> for PacketType {
             0 => PacketType::OneWay,
             1 => PacketType::Request,
             2 => PacketType::Response,
-            _ => PacketType::OneWay, // 默认值
+            _ => PacketType::OneWay, // Default value
         }
     }
 }
@@ -40,7 +40,7 @@ impl From<PacketType> for u8 {
     }
 }
 
-/// 压缩类型
+/// Compression types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CompressionType {
@@ -66,17 +66,17 @@ impl From<CompressionType> for u8 {
     }
 }
 
-/// 保留字段标志位
+/// Reserved field flags
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReservedFlags(u16);
 
 impl ReservedFlags {
-    /// 创建空标志
+    /// Create empty flags
     pub fn new() -> Self {
         Self(0)
     }
     
-    /// 设置分片标志
+    /// Set fragmentation flag
     pub fn with_fragmented(mut self, fragmented: bool) -> Self {
         if fragmented {
             self.0 |= 0x0001;
@@ -86,12 +86,12 @@ impl ReservedFlags {
         self
     }
     
-    /// 检查是否分片
+    /// Check if fragmented
     pub fn is_fragmented(&self) -> bool {
         (self.0 & 0x0001) != 0
     }
     
-    /// 设置优先级标志
+    /// Set priority flag
     pub fn with_priority(mut self, high_priority: bool) -> Self {
         if high_priority {
             self.0 |= 0x0002;
@@ -101,12 +101,12 @@ impl ReservedFlags {
         self
     }
     
-    /// 检查是否高优先级
+    /// Check if high priority
     pub fn is_high_priority(&self) -> bool {
         (self.0 & 0x0002) != 0
     }
     
-    /// 设置路由标签
+    /// Set route tag
     pub fn with_route_tag(mut self, has_route: bool) -> Self {
         if has_route {
             self.0 |= 0x0004;
@@ -116,17 +116,17 @@ impl ReservedFlags {
         self
     }
     
-    /// 检查是否有路由标签
+    /// Check if has route tag
     pub fn has_route_tag(&self) -> bool {
         (self.0 & 0x0004) != 0
     }
     
-    /// 获取原始值
+    /// Get raw value
     pub fn raw(&self) -> u16 {
         self.0
     }
     
-    /// 从原始值创建
+    /// Create from raw value
     pub fn from_raw(value: u16) -> Self {
         Self(value)
     }
@@ -138,36 +138,36 @@ impl Default for ReservedFlags {
     }
 }
 
-/// 16字节固定头部 - 优化的字段顺序
+/// 16-byte fixed header - optimized field order
 #[repr(C)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FixedHeader {
-    /// 协议版本 (1字节)
+    /// Protocol version (1 byte)
     pub version: u8,
-    /// 压缩算法 (1字节)
+    /// Compression algorithm (1 byte)
     pub compression: CompressionType,
-    /// 数据包类型 (1字节)
+    /// Packet type (1 byte)
     pub packet_type: PacketType,
-    /// 应用层业务类型 (1字节) - 0-255，由业务层自定义
+    /// Application business type (1 byte) - 0-255, defined by business layer
     pub biz_type: u8,
-    /// 消息ID (4字节)
+    /// Message ID (4 bytes)
     pub message_id: u32,
-    /// 扩展头长度 (2字节)
+    /// Extended header length (2 bytes)
     pub ext_header_len: u16,
-    /// 负载长度 (4字节)
+    /// Payload length (4 bytes)
     pub payload_len: u32,
-    /// 保留字段 (2字节) - 分片、优先级、路由等标志
+    /// Reserved field (2 bytes) - flags for fragmentation, priority, routing, etc.
     pub reserved: ReservedFlags,
 }
 
 impl FixedHeader {
-    /// 创建新的固定头部
+    /// Create new fixed header
     pub fn new(packet_type: PacketType, message_id: u32) -> Self {
         Self {
             version: 1,
             compression: CompressionType::None,
             packet_type,
-            biz_type: 0, // 默认业务类型
+            biz_type: 0, // Default business type
             message_id,
             ext_header_len: 0,
             payload_len: 0,
@@ -175,7 +175,7 @@ impl FixedHeader {
         }
     }
     
-    /// 序列化为字节数组 (大端序)
+    /// Serialize to byte array (big endian)
     pub fn to_bytes(&self) -> [u8; 16] {
         let mut bytes = [0u8; 16];
         bytes[0] = self.version;
@@ -189,7 +189,7 @@ impl FixedHeader {
         bytes
     }
     
-    /// 从字节数组反序列化 (大端序)
+    /// Deserialize from byte array (big endian)
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PacketError> {
         if bytes.len() < 16 {
             return Err(PacketError::InvalidHeader("Header too short".to_string()));
@@ -222,25 +222,25 @@ impl FixedHeader {
     }
 }
 
-/// 消息ID管理器 - 线程安全
+/// Message ID manager - thread safe
 #[derive(Debug)]
 pub struct MessageIdManager {
     counter: AtomicU32,
 }
 
 impl MessageIdManager {
-    /// 创建新的ID管理器
+    /// Create new ID manager
     pub fn new() -> Self {
         Self {
-            counter: AtomicU32::new(1), // 从1开始
+            counter: AtomicU32::new(1), // Start from 1
         }
     }
     
-    /// 获取下一个ID
+    /// Get next ID
     pub fn next_id(&self) -> u32 {
         let id = self.counter.fetch_add(1, Ordering::SeqCst);
         if id == u32::MAX {
-            // 达到最大值，重置为1
+            // Reset to 1 when reaching maximum value
             self.counter.store(1, Ordering::SeqCst);
             1
         } else {
@@ -268,11 +268,11 @@ impl Default for MessageIdManager {
 /// 数据包结构
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packet {
-    /// 固定头部
+    /// Fixed header
     pub header: FixedHeader,
-    /// 扩展头部（可选）
+    /// Extended header (optional)
     pub ext_header: Vec<u8>,
-    /// 负载数据
+    /// Payload data
     pub payload: Vec<u8>,
 }
 
@@ -568,25 +568,25 @@ pub enum PacketError {
     SerializationError(String),
 }
 
-/// 🚀 零拷贝优化：共享数据包
+/// [ZEROCOPY] Zero-copy optimization: shared packet
 /// 
-/// 特性：
-/// 1. 使用 Bytes 实现零拷贝
-/// 2. 支持 Arc 共享，避免克隆
-/// 3. 协议格式与 Packet 完全兼容
-/// 4. 可以与现有 Packet 互相转换
+/// Features:
+/// 1. Zero-copy implementation using Bytes
+/// 2. Arc sharing support, avoiding clones
+/// 3. Protocol format fully compatible with Packet
+/// 4. Mutual conversion with existing Packet
 #[derive(Debug, Clone)]
 pub struct SharedPacket {
-    /// 固定头部（仍使用原结构，协议兼容）
+    /// Fixed header (still using original structure, protocol compatible)
     pub header: FixedHeader,
-    /// 扩展头部（零拷贝）
+    /// Extended header (zero-copy)
     pub ext_header: Bytes,
-    /// 负载数据（零拷贝）
+    /// Payload data (zero-copy)
     pub payload: Bytes,
 }
 
 impl SharedPacket {
-    /// 创建新的共享数据包
+    /// Create new shared packet
     pub fn new(packet_type: PacketType, message_id: u32) -> Self {
         Self {
             header: FixedHeader::new(packet_type, message_id),
@@ -595,74 +595,74 @@ impl SharedPacket {
         }
     }
     
-    /// 创建单向消息（零拷贝）
+    /// Create one-way message (zero-copy)
     pub fn one_way(message_id: u32, payload: impl Into<Bytes>) -> Self {
         let mut packet = Self::new(PacketType::OneWay, message_id);
         packet.set_payload_zerocopy(payload);
         packet
     }
     
-    /// 创建请求消息（零拷贝）
+    /// Create request message (zero-copy)
     pub fn request(message_id: u32, payload: impl Into<Bytes>) -> Self {
         let mut packet = Self::new(PacketType::Request, message_id);
         packet.set_payload_zerocopy(payload);
         packet
     }
     
-    /// 创建回复消息（零拷贝）
+    /// Create response message (zero-copy)
     pub fn response(message_id: u32, payload: impl Into<Bytes>) -> Self {
         let mut packet = Self::new(PacketType::Response, message_id);
         packet.set_payload_zerocopy(payload);
         packet
     }
     
-    /// 设置负载（零拷贝）
+    /// Set payload (zero-copy)
     pub fn set_payload_zerocopy(&mut self, payload: impl Into<Bytes>) {
         self.payload = payload.into();
         self.header.payload_len = self.payload.len() as u32;
     }
     
-    /// 设置扩展头（零拷贝）
+    /// Set extended header (zero-copy)
     pub fn set_ext_header_zerocopy(&mut self, ext_header: impl Into<Bytes>) {
         self.ext_header = ext_header.into();
         self.header.ext_header_len = self.ext_header.len() as u16;
     }
     
-    /// 🚀 零拷贝序列化
+    /// [ZEROCOPY] Zero-copy serialization
     /// 
-    /// 协议格式与 Packet::to_bytes() 完全一致
+    /// Protocol format fully consistent with Packet::to_bytes()
     pub fn to_bytes_zerocopy(&self) -> Bytes {
         let total_len = 16 + self.ext_header.len() + self.payload.len();
         let mut buf = BytesMut::with_capacity(total_len);
         
-        // 固定头部（协议兼容）
+        // Fixed header (protocol compatible)
         buf.extend_from_slice(&self.header.to_bytes());
         
-        // 扩展头部（零拷贝）
+        // Extended header (zero-copy)
         if !self.ext_header.is_empty() {
             buf.extend_from_slice(&self.ext_header);
         }
         
-        // 负载（零拷贝）
+        // Payload (zero-copy)
         buf.extend_from_slice(&self.payload);
         
         buf.freeze()
     }
     
-    /// 🚀 零拷贝反序列化
+    /// [ZEROCOPY] Zero-copy deserialization
     /// 
-    /// 协议格式与 Packet::from_bytes() 完全兼容
+    /// Protocol format fully compatible with Packet::from_bytes()
     pub fn from_bytes_zerocopy(bytes: Bytes) -> Result<Self, PacketError> {
         if bytes.len() < 16 {
             return Err(PacketError::InvalidPacket("Packet too short".to_string()));
         }
         
-        // 解析固定头部（复用现有逻辑）
+        // Parse fixed header (reuse existing logic)
         let header = FixedHeader::from_bytes(&bytes[0..16])?;
         
         let mut offset = 16;
         
-        // 解析扩展头部（零拷贝切片）
+        // Parse extended header (zero-copy slice)
         let ext_header = if header.ext_header_len > 0 {
             let end = offset + header.ext_header_len as usize;
             if bytes.len() < end {
@@ -675,7 +675,7 @@ impl SharedPacket {
             Bytes::new()
         };
         
-        // 解析负载（零拷贝切片）
+        // Parse payload (zero-copy slice)
         let payload = if header.payload_len > 0 {
             let end = offset + header.payload_len as usize;
             if bytes.len() < end {
@@ -693,97 +693,97 @@ impl SharedPacket {
         })
     }
     
-    /// 获取数据包类型
+    /// Get packet type
     pub fn packet_type(&self) -> PacketType {
         self.header.packet_type
     }
     
-    /// 获取消息ID
+    /// Get message ID
     pub fn message_id(&self) -> u32 {
         self.header.message_id
     }
     
-    /// 获取负载大小
+    /// Get payload size
     pub fn payload_len(&self) -> usize {
         self.payload.len()
     }
     
-    /// 获取总大小
+    /// Get total size
     pub fn total_len(&self) -> usize {
         16 + self.ext_header.len() + self.payload.len()
     }
     
-    /// 获取负载的字符串表示（如果是有效UTF-8）
+    /// Get payload as string (if valid UTF-8)
     pub fn payload_as_string(&self) -> Option<String> {
         String::from_utf8(self.payload.to_vec()).ok()
     }
     
-    /// 设置消息ID
+    /// Set message ID
     pub fn set_message_id(&mut self, message_id: u32) {
         self.header.message_id = message_id;
     }
     
-    /// 设置数据包类型
+    /// Set packet type
     pub fn set_packet_type(&mut self, packet_type: PacketType) {
         self.header.packet_type = packet_type;
     }
     
-    /// 设置压缩类型
+    /// Set compression type
     pub fn set_compression(&mut self, compression: CompressionType) {
         self.header.compression = compression;
     }
     
-    /// 设置业务类型
+    /// Set business type
     pub fn set_biz_type(&mut self, biz_type: u8) {
         self.header.biz_type = biz_type;
     }
     
-    /// 获取业务类型
+    /// Get business type
     pub fn biz_type(&self) -> u8 {
         self.header.biz_type
     }
     
-    /// 获取压缩类型
+    /// Get compression type
     pub fn compression(&self) -> CompressionType {
         self.header.compression
     }
 }
 
-/// 🚀 在现有 Packet 中添加零拷贝方法
+/// [ZEROCOPY] Add zero-copy methods to existing Packet
 impl Packet {
-    /// 🚀 零拷贝序列化（新增方法，不影响现有API）
+    /// [ZEROCOPY] Zero-copy serialization (new method, does not affect existing API)
     /// 
-    /// 协议格式与 to_bytes() 完全一致，但返回 Bytes 而不是 Vec<u8>
+    /// Protocol format fully consistent with to_bytes(), but returns Bytes instead of Vec<u8>
     pub fn to_bytes_zerocopy(&self) -> Bytes {
         let total_len = 16 + self.ext_header.len() + self.payload.len();
         let mut buf = BytesMut::with_capacity(total_len);
         
-        // 固定头部
+        // Fixed header
         buf.extend_from_slice(&self.header.to_bytes());
         
-        // 扩展头部
+        // Extended header
         if !self.ext_header.is_empty() {
             buf.extend_from_slice(&self.ext_header);
         }
         
-        // 负载
+        // Payload
         buf.extend_from_slice(&self.payload);
         
         buf.freeze()
     }
     
-    /// 🚀 从 Bytes 创建数据包（零拷贝反序列化）
+    /// [ZEROCOPY] Create packet from Bytes (zero-copy deserialization)
     pub fn from_bytes_zerocopy(bytes: &Bytes) -> Result<Self, PacketError> {
         if bytes.len() < 16 {
             return Err(PacketError::InvalidPacket("Packet too short".to_string()));
         }
         
-        // 解析固定头部
+        // Parse fixed header
         let header = FixedHeader::from_bytes(&bytes[0..16])?;
         
         let mut offset = 16;
         
-        // 解析扩展头部
+        // Parse extended header
         let ext_header = if header.ext_header_len > 0 {
             let end = offset + header.ext_header_len as usize;
             if bytes.len() < end {
@@ -796,7 +796,7 @@ impl Packet {
             Vec::new()
         };
         
-        // 解析负载
+        // Parse payload
         let payload = if header.payload_len > 0 {
             let end = offset + header.payload_len as usize;
             if bytes.len() < end {
@@ -814,7 +814,7 @@ impl Packet {
         })
     }
     
-    /// 🚀 转换为共享数据包（零拷贝）
+    /// [ZEROCOPY] Convert to shared packet (zero-copy)
     pub fn to_shared(&self) -> SharedPacket {
         SharedPacket {
             header: self.header.clone(),
@@ -823,7 +823,7 @@ impl Packet {
         }
     }
     
-    /// 🚀 从共享数据包转换（兼容性）
+    /// [ZEROCOPY] Convert from shared packet (compatibility)
     pub fn from_shared(shared: &SharedPacket) -> Self {
         Self {
             header: shared.header.clone(),
@@ -833,7 +833,7 @@ impl Packet {
     }
 }
 
-/// 🚀 互相转换实现
+/// [ZEROCOPY] Mutual conversion implementation
 impl From<Packet> for SharedPacket {
     fn from(packet: Packet) -> Self {
         Self {
@@ -854,24 +854,24 @@ impl From<SharedPacket> for Packet {
     }
 }
 
-/// 🚀 Arc 包装的共享数据包，用于多线程零拷贝
+/// [ZEROCOPY] Arc-wrapped shared packet for multi-threaded zero-copy
 pub type ArcPacket = Arc<SharedPacket>;
 
-/// 🚀 Arc 共享数据包的辅助函数
+/// [ZEROCOPY] Arc shared packet helper functions
 pub mod arc_packet {
     use super::*;
     
-    /// 创建新的共享数据包
+    /// Create new shared packet
     pub fn new(packet_type: PacketType, message_id: u32, payload: impl Into<Bytes>) -> ArcPacket {
         Arc::new(SharedPacket::one_way(message_id, payload))
     }
     
-    /// 从现有数据包创建共享版本
+    /// Create shared version from existing packet
     pub fn from_packet(packet: Packet) -> ArcPacket {
         Arc::new(packet.into())
     }
     
-    /// 从字节数据创建（零拷贝）
+    /// Create from byte data (zero-copy)
     pub fn from_bytes_zerocopy(bytes: Bytes) -> Result<ArcPacket, PacketError> {
         Ok(Arc::new(SharedPacket::from_bytes_zerocopy(bytes)?))
     }
