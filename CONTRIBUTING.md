@@ -324,7 +324,7 @@ cargo tarpaulin --all-features --out Html
 /// # Examples
 /// 
 /// ```rust
-/// use msgtrans::protocol::TcpClientConfig;
+/// use msgtrans::{protocol::TcpClientConfig, tokio};
 /// 
 /// let config = TcpClientConfig::new("127.0.0.1:8080")?;
 /// let client = TransportClientBuilder::new()

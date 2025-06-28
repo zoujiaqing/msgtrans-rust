@@ -47,7 +47,6 @@
 ```toml
 [dependencies]
 msgtrans = "1.0.0-beta.1"
-tokio = { version = "1.0", features = ["full"] }
 ```
 
 ### Create Multi-Protocol Server
@@ -57,6 +56,7 @@ use msgtrans::{
     transport::TransportServerBuilder,
     protocol::{TcpServerConfig, WebSocketServerConfig, QuicServerConfig},
     event::ServerEvent,
+    tokio,
 };
 
 #[tokio::main]
@@ -113,6 +113,7 @@ use msgtrans::{
     transport::TransportClientBuilder,
     protocol::TcpClientConfig,
     event::ClientEvent,
+    tokio,
 };
 use std::time::Duration;
 
@@ -393,6 +394,7 @@ use msgtrans::{
     protocol::WebSocketServerConfig,
     event::ServerEvent,
     SessionId,
+    tokio,
 };
 use std::collections::HashMap;
 
@@ -458,6 +460,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 use msgtrans::{
     transport::TransportClientBuilder,
     protocol::QuicClientConfig,
+    tokio,
 };
 use std::time::Instant;
 

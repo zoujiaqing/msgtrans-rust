@@ -7,6 +7,7 @@ use msgtrans::{
     protocol::WebSocketServerConfig,
     protocol::QuicServerConfig,
     event::ServerEvent,
+    tokio,
 };
 
 #[tokio::main]

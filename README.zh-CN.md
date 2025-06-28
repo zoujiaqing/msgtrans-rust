@@ -46,8 +46,7 @@
 
 ```toml
 [dependencies]
-msgtrans = "0.1.6"
-tokio = { version = "1.0", features = ["full"] }
+msgtrans = "1.0.0-beta.1"
 ```
 
 ### 创建多协议服务器

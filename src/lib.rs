@@ -96,5 +96,8 @@ pub use protocol::{TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebS
 pub use connection::{Connection, Server, ConnectionFactory};
 pub use plugin::{ProtocolPlugin, PluginManager, PluginInfo};
 
+// Re-export tokio for user convenience
+pub use tokio;
+
 // Convenient type aliases
 pub type Result<T> = std::result::Result<T, TransportError>;
