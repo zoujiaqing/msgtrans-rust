@@ -24,7 +24,7 @@ MsgTrans aims to make multi-protocol communication simple, efficient, and reliab
 
 1. **Fork and Clone**
    ```bash
-   git clone https://github.com/your-username/msgtrans-rust.git
+   git clone https://github.com/zoujiaqing/msgtrans-rust.git
    cd msgtrans-rust
    ```
 
