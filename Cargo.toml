@@ -1,11 +1,11 @@
 [package]
 name = "msgtrans"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 edition = "2021"
 authors = ["Jiaqing Zou <zoujiaqing@gmail.com>"]
 license = "Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/zoujiaqing/msgtrans-rust"
+repository = "https://github.com/zoujiaqing/msgtrans"
 categories = ["asynchronous", "network-programming"]
 keywords = ["tcp", "quic", "websocket", "tokio"]
 description = "Support for a variety of communication protocols such as TCP / QUIC / WebSocket, easy to create server and client network library."
