@@ -325,6 +325,8 @@ pub struct RequestContext {
     pub data: Vec<u8>,
     /// Request ID (for debugging and logging)
     pub request_id: u32,
+    /// Business type from packet header
+    pub biz_type: u8,
     /// Response callback (handles all protocol details internally)
     responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
     /// Ensure response only once (using Arc shared state)
@@ -339,12 +341,14 @@ impl RequestContext {
         peer: Option<SessionId>,
         data: Vec<u8>,
         request_id: u32,
+        biz_type: u8,
         responder: Arc<dyn Fn(Vec<u8>) + Send + Sync + 'static>,
     ) -> Self {
         Self {
             peer,
             data,
             request_id,
+            biz_type,
             responder,
             responded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             is_primary: false, // [FLAG] New instances default to non-primary, waiting for event forwarding to set
@@ -392,6 +396,7 @@ impl Clone for RequestContext {
             peer: self.peer,
             data: self.data.clone(),
             request_id: self.request_id,
+            biz_type: self.biz_type, // [FIX] Share biz_type
             responder: self.responder.clone(), // [FIX] Share response state
             responded: self.responded.clone(), // [FIX] Clone instances are not primary, not responsible for checking response
             is_primary: false, // [FIX] Clone instances are not primary, not responsible for checking response
@@ -405,6 +410,7 @@ impl std::fmt::Debug for RequestContext {
             .field("peer", &self.peer)
             .field("data", &format!("{} bytes", self.data.len()))
             .field("request_id", &self.request_id)
+            .field("biz_type", &self.biz_type)
             .field("responded", &self.responded.load(std::sync::atomic::Ordering::SeqCst))
             .finish()
     }
@@ -509,7 +515,7 @@ impl ServerEvent {
                  let transport_ctx = TransportContext::new_request(
                      Some(session_id),
                      ctx.request_id,
-                     0, // 默认业务类型，需要从RequestContext中传递
+                     ctx.biz_type, // 使用RequestContext中的biz_type
                      None, // 默认无扩展头，需要从RequestContext中传递
                      ctx.data.clone(),
                      ctx.responder.clone()
