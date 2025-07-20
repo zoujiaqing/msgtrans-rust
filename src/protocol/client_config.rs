@@ -5,8 +5,8 @@
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use crate::protocol::{ConfigError, ProtocolConfig};
-use crate::protocol::adapter::{DynProtocolConfig, ClientConfig};
-use crate::Connection;
+use crate::protocol::adapter::DynProtocolConfig;
+
 use std::sync::Arc;
 use crate::{
     transport::transport::Transport,

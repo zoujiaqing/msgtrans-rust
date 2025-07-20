@@ -4,7 +4,7 @@ use crate::command::ConnectionInfo;
 use crate::error::TransportError;
 use crate::packet::Packet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 /// Unified abstraction for transport layer events
@@ -488,7 +488,7 @@ impl ServerEvent {
         }
     }
 
-    /// 新增：通过 session_id 将 TransportEvent 转为 ServerEvent
+    /// New addition: Convert TransportEvent to ServerEvent with session_id
     pub fn from_transport_event_with_session(event: TransportEvent, session_id: SessionId) -> Option<Self> {
         match event {
             TransportEvent::ConnectionEstablished { info } =>
@@ -496,7 +496,7 @@ impl ServerEvent {
             TransportEvent::ConnectionClosed { reason } =>
                 Some(ServerEvent::ConnectionClosed { session_id, reason }),
                          TransportEvent::MessageReceived(packet) => {
-                 // 转换为统一的TransportContext
+                 // Convert to unified TransportContext
                  let context = TransportContext::new_oneway(
                      Some(session_id), 
                      packet.header.message_id,
@@ -511,12 +511,12 @@ impl ServerEvent {
             TransportEvent::TransportError { error } =>
                 Some(ServerEvent::TransportError { session_id: Some(session_id), error }),
                          TransportEvent::RequestReceived(ctx) => {
-                 // 🔧 将RequestContext转换为TransportContext
+                 // 🔧 Convert RequestContext to TransportContext
                  let transport_ctx = TransportContext::new_request(
                      Some(session_id),
                      ctx.request_id,
-                     ctx.biz_type, // 使用RequestContext中的biz_type
-                     None, // 默认无扩展头，需要从RequestContext中传递
+                     ctx.biz_type, // Use biz_type from RequestContext
+                     None, // Default no extension header, needs to be passed from RequestContext
                      ctx.data.clone(),
                      ctx.responder.clone()
                  );
@@ -532,7 +532,7 @@ impl ServerEvent {
 }
 
 impl ClientEvent {
-    /// 从TransportEvent转换为ClientEvent，隐藏会话ID
+    /// Convert TransportEvent to ClientEvent, hiding session ID
     pub fn from_transport_event(event: TransportEvent) -> Option<Self> {
         match event {
             TransportEvent::ConnectionEstablished { info } =>
@@ -542,11 +542,11 @@ impl ClientEvent {
             TransportEvent::MessageReceived(packet) => {
                 match packet.header.packet_type {
                     crate::packet::PacketType::Request => {
-                        // Request包由TransportClient特殊处理
+                        // Request packets are specially handled by TransportClient
                         None
                     }
                     _ => {
-                        // OneWay和Response包正常处理
+                        // OneWay and Response packets are handled normally
                         let context = TransportContext::new_oneway(
                             None, 
                             packet.header.message_id,
@@ -567,7 +567,7 @@ impl ClientEvent {
         }
     }
     
-    /// 判断是否为连接相关事件
+    /// Check if it's a connection related event
     pub fn is_connection_event(&self) -> bool {
         matches!(self, 
             ClientEvent::Connected { .. } | 
@@ -575,7 +575,7 @@ impl ClientEvent {
         )
     }
     
-    /// 判断是否为数据传输事件
+    /// Check if it's a data transmission event
     pub fn is_data_event(&self) -> bool {
         matches!(self, 
             ClientEvent::MessageReceived(..) | 

@@ -182,21 +182,21 @@ pub enum ProtocolEvent {
 
 /// [OPTIMIZED] Flume-driven protocol adapter
 pub struct FlumePoweredProtocolAdapter {
-    // Flume发送管道
+    // Flume send channel
     send_tx: FlumeSender<Packet>,
     send_rx: FlumeReceiver<Packet>,
     
-    // Flume接收管道
+    // Flume receive channel
     recv_tx: FlumeSender<Packet>, 
     recv_rx: FlumeReceiver<Packet>,
     
-    // 事件广播
+    // Event broadcast
     event_tx: FlumeSender<ProtocolEvent>,
     
-    // LockFree统计
+    // LockFree statistics
     stats: Arc<LockFreeProtocolStats>,
     
-    // 会话信息
+    // Session information
     session_id: SessionId,
     connection_info: ConnectionInfo,
     is_connected: std::sync::atomic::AtomicBool,

@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
-use bytes::{Bytes, BytesMut, Buf, BufMut};
+use bytes::{Bytes, BytesMut};
 
 /// Packet types - simplified to 3 core types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,12 +248,12 @@ impl MessageIdManager {
         }
     }
     
-    /// 重置ID计数器（用于连接重建）
+    /// Reset ID counter (for connection rebuilding)
     pub fn reset(&self) {
         self.counter.store(1, Ordering::SeqCst);
     }
     
-    /// 获取当前ID（不递增）
+    /// Get current ID (without incrementing)
     pub fn current_id(&self) -> u32 {
         self.counter.load(Ordering::SeqCst)
     }
@@ -265,7 +265,7 @@ impl Default for MessageIdManager {
     }
 }
 
-/// 数据包结构
+/// Packet structure
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Packet {
     /// Fixed header
@@ -277,7 +277,7 @@ pub struct Packet {
 }
 
 impl Packet {
-    /// 创建新的数据包
+    /// Create new packet
     pub fn new(packet_type: PacketType, message_id: u32) -> Self {
         Self {
             header: FixedHeader::new(packet_type, message_id),
@@ -286,100 +286,100 @@ impl Packet {
         }
     }
     
-    /// 创建单向消息
+    /// Create one-way message
     pub fn one_way(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
         let mut packet = Self::new(PacketType::OneWay, message_id);
         packet.set_payload(payload);
         packet
     }
     
-    /// 创建请求消息
+    /// Create request message
     pub fn request(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
         let mut packet = Self::new(PacketType::Request, message_id);
         packet.set_payload(payload);
         packet
     }
     
-    /// 创建回复消息
+    /// Create response message
     pub fn response(message_id: u32, payload: impl Into<Vec<u8>>) -> Self {
         let mut packet = Self::new(PacketType::Response, message_id);
         packet.set_payload(payload);
         packet
     }
     
-    /// 设置负载
+    /// Set payload
     pub fn set_payload(&mut self, payload: impl Into<Vec<u8>>) {
         self.payload = payload.into();
         self.header.payload_len = self.payload.len() as u32;
     }
     
-    /// 设置消息ID
+    /// Set message ID
     pub fn set_message_id(&mut self, message_id: u32) {
         self.header.message_id = message_id;
     }
     
-    /// 设置数据包类型
+    /// Set packet type
     pub fn set_packet_type(&mut self, packet_type: PacketType) {
         self.header.packet_type = packet_type;
     }
     
-    /// 设置扩展头
+    /// Set extension header
     pub fn set_ext_header(&mut self, ext_header: impl Into<Vec<u8>>) {
         self.ext_header = ext_header.into();
         self.header.ext_header_len = self.ext_header.len() as u16;
     }
     
-    /// 设置压缩类型
+    /// Set compression type
     pub fn set_compression(&mut self, compression: CompressionType) {
         self.header.compression = compression;
     }
     
-    /// 设置分片标志
+    /// Set fragmentation flag
     pub fn set_fragmented(&mut self, fragmented: bool) {
         self.header.reserved = self.header.reserved.with_fragmented(fragmented);
     }
     
-    /// 设置优先级
+    /// Set priority
     pub fn set_priority(&mut self, high_priority: bool) {
         self.header.reserved = self.header.reserved.with_priority(high_priority);
     }
     
-    /// 设置业务类型
+    /// Set business type
     pub fn set_biz_type(&mut self, biz_type: u8) {
         self.header.biz_type = biz_type;
     }
     
-    /// 获取业务类型
+    /// Get business type
     pub fn biz_type(&self) -> u8 {
         self.header.biz_type
     }
     
-    /// 获取压缩类型
+    /// Get compression type
     pub fn compression(&self) -> CompressionType {
         self.header.compression
     }
     
-    /// 检查是否分片
+    /// Check if fragmented
     pub fn is_fragmented(&self) -> bool {
         self.header.reserved.is_fragmented()
     }
     
-    /// 检查是否高优先级
+    /// Check if high priority
     pub fn is_high_priority(&self) -> bool {
         self.header.reserved.is_high_priority()
     }
     
-    /// 设置路由标签
+    /// Set route tag
     pub fn set_route_tag(&mut self, has_route: bool) {
         self.header.reserved = self.header.reserved.with_route_tag(has_route);
     }
     
-    /// 检查是否有路由标签
+    /// Check if has route tag
     pub fn has_route_tag(&self) -> bool {
         self.header.reserved.has_route_tag()
     }
     
-    /// 压缩负载
+    /// Compress payload
     pub fn compress_payload(&mut self) -> Result<(), PacketError> {
         let compression = self.header.compression;
         if compression == CompressionType::None {
@@ -391,7 +391,7 @@ impl Packet {
         Ok(())
     }
     
-    /// 解压负载
+    /// Decompress payload
     pub fn decompress_payload(&mut self) -> Result<(), PacketError> {
         let compression = self.header.compression;
         if compression == CompressionType::None {
@@ -403,36 +403,36 @@ impl Packet {
         Ok(())
     }
     
-    /// 序列化为字节数组
+    /// Serialize to byte array
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         
-        // 固定头部
+        // Fixed header
         bytes.extend_from_slice(&self.header.to_bytes());
         
-        // 扩展头部
+        // Extension header
         if !self.ext_header.is_empty() {
             bytes.extend_from_slice(&self.ext_header);
         }
         
-        // 负载
+        // Payload
         bytes.extend_from_slice(&self.payload);
         
         bytes
     }
     
-    /// 从字节数组反序列化
+    /// Deserialize from byte array
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, PacketError> {
         if bytes.len() < 16 {
             return Err(PacketError::InvalidPacket("Packet too short".to_string()));
         }
         
-        // 解析固定头部
+        // Parse fixed header
         let header = FixedHeader::from_bytes(&bytes[0..16])?;
         
         let mut offset = 16;
         
-        // 解析扩展头部
+        // Parse extension header
         let ext_header = if header.ext_header_len > 0 {
             let end = offset + header.ext_header_len as usize;
             if bytes.len() < end {
@@ -445,7 +445,7 @@ impl Packet {
             Vec::new()
         };
         
-        // 解析负载
+        // Parse payload
         let payload = if header.payload_len > 0 {
             let end = offset + header.payload_len as usize;
             if bytes.len() < end {
@@ -463,32 +463,32 @@ impl Packet {
         })
     }
     
-    /// 获取数据包类型
+    /// Get packet type
     pub fn packet_type(&self) -> PacketType {
         self.header.packet_type
     }
     
-    /// 获取消息ID
+    /// Get message ID
     pub fn message_id(&self) -> u32 {
         self.header.message_id
     }
     
-    /// 获取负载大小
+    /// Get payload size
     pub fn payload_len(&self) -> usize {
         self.payload.len()
     }
     
-    /// 获取总大小
+    /// Get total size
     pub fn total_len(&self) -> usize {
         16 + self.ext_header.len() + self.payload.len()
     }
     
-    /// 获取负载的字符串表示（如果是有效UTF-8）
+    /// Get string representation of payload (if valid UTF-8)
     pub fn payload_as_string(&self) -> Option<String> {
         String::from_utf8(self.payload.clone()).ok()
     }
     
-    /// 压缩数据
+    /// Compress data
     fn compress_data(data: &[u8], compression: CompressionType) -> Result<Vec<u8>, PacketError> {
         match compression {
             CompressionType::None => Ok(data.to_vec()),
@@ -516,7 +516,7 @@ impl Packet {
         }
     }
     
-    /// 解压数据
+    /// Decompress data
     fn decompress_data(data: &[u8], compression: CompressionType) -> Result<Vec<u8>, PacketError> {
         match compression {
             CompressionType::None => Ok(data.to_vec()),
@@ -546,7 +546,7 @@ impl Packet {
     }
 }
 
-/// 数据包错误类型
+/// Packet error type
 #[derive(Debug, thiserror::Error)]
 pub enum PacketError {
     #[error("Invalid header: {0}")]
@@ -862,7 +862,7 @@ pub mod arc_packet {
     use super::*;
     
     /// Create new shared packet
-    pub fn new(packet_type: PacketType, message_id: u32, payload: impl Into<Bytes>) -> ArcPacket {
+    pub fn new(_packet_type: PacketType, message_id: u32, payload: impl Into<Bytes>) -> ArcPacket {
         Arc::new(SharedPacket::one_way(message_id, payload))
     }
     
@@ -973,12 +973,12 @@ mod tests {
     fn test_compression() {
         let original_data = b"Hello, World! This is a test message for compression.".repeat(10);
         
-        // 测试无压缩
+        // Test no compression
         let compressed = Packet::compress_data(&original_data, CompressionType::None).unwrap();
         let decompressed = Packet::decompress_data(&compressed, CompressionType::None).unwrap();
         assert_eq!(original_data, decompressed);
         
-        // 测试 Zlib 压缩（如果启用）
+        // Test Zlib compression (if enabled)
         #[cfg(feature = "flate2")]
         {
             let compressed = Packet::compress_data(&original_data, CompressionType::Zlib).unwrap();
@@ -986,7 +986,7 @@ mod tests {
             assert_eq!(original_data, decompressed);
         }
         
-        // 测试 Zstd 压缩（如果启用）
+        // Test Zstd compression (if enabled)
         #[cfg(feature = "zstd")]
         {
             let compressed = Packet::compress_data(&original_data, CompressionType::Zstd).unwrap();
@@ -1016,7 +1016,7 @@ mod tests {
     fn test_packet_creation_with_new_fields() {
         let mut packet = Packet::one_way(123, b"hello world");
         packet.set_compression(CompressionType::Zstd);
-        packet.set_biz_type(42); // 业务层自定义类型
+        packet.set_biz_type(42); // Custom business layer type
         packet.set_fragmented(true);
         packet.set_priority(true);
         packet.set_route_tag(true);
@@ -1034,7 +1034,7 @@ mod tests {
     #[test]
     fn test_packet_serialization_with_new_format() {
         let mut packet = Packet::request(456, "test message");
-        packet.set_biz_type(123); // 业务层自定义类型
+        packet.set_biz_type(123); // Custom business layer type
         packet.set_compression(CompressionType::Zlib);
         
         let bytes = packet.to_bytes();
@@ -1048,28 +1048,28 @@ mod tests {
     #[test]
     fn test_new_byte_order_format() {
         let mut packet = Packet::request(0x12345678, "test");
-        packet.set_biz_type(255); // 最大业务类型值
+        packet.set_biz_type(255); // Maximum business type value
         packet.set_compression(CompressionType::Zstd);
         
         let bytes = packet.to_bytes();
         
-        // 验证新的字段顺序
+        // Verify new field order
         assert_eq!(bytes[0], 1); // version
         assert_eq!(bytes[1], 1); // compression = Zstd
         assert_eq!(bytes[2], 1); // packet_type = Request
         assert_eq!(bytes[3], 255); // biz_type = 255
         
-        // message_id 在字节 4-7 位置，大端序
+        // message_id at bytes 4-7 position, big endian
         assert_eq!(bytes[4], 0x12);
         assert_eq!(bytes[5], 0x34);
         assert_eq!(bytes[6], 0x56);
         assert_eq!(bytes[7], 0x78);
         
-        // ext_header_len 在字节 8-9
+        // ext_header_len at bytes 8-9
         assert_eq!(bytes[8], 0x00);
         assert_eq!(bytes[9], 0x00);
         
-        // payload_len 在字节 10-13
+        // payload_len at bytes 10-13
         assert_eq!(bytes[10], 0x00);
         assert_eq!(bytes[11], 0x00);
         assert_eq!(bytes[12], 0x00);
@@ -1081,8 +1081,8 @@ mod tests {
         let packet = Packet::request(0x12345678, "test");
         let bytes = packet.to_bytes();
         
-        // 验证 big endian 格式
-        // message_id 在新字段顺序中应该在字节 4-7 位置，大端序
+        // Verify big endian format
+        // message_id should be at bytes 4-7 position in new field order, big endian
         assert_eq!(bytes[4], 0x12);
         assert_eq!(bytes[5], 0x34);
         assert_eq!(bytes[6], 0x56);
@@ -1091,40 +1091,40 @@ mod tests {
 
     #[test]
     fn test_zerocopy_packet_protocol_compatibility() {
-        // 🚀 零拷贝协议兼容性测试
+        // 🚀 Zero-copy protocol compatibility test
         let original_packet = Packet::request(12345, b"test message");
         
-        // 传统序列化
+        // Traditional serialization
         let traditional_bytes = original_packet.to_bytes();
         
-        // 零拷贝序列化
+        // Zero-copy serialization
         let zerocopy_bytes = original_packet.to_bytes_zerocopy();
         
-        // 🎯 确保字节格式完全一致
+        // 🎯 Ensure byte formats are completely identical
         assert_eq!(traditional_bytes, zerocopy_bytes.as_ref());
         
-        // 反序列化测试
+        // Deserialization test
         let recovered_traditional = Packet::from_bytes(&traditional_bytes).unwrap();
         let recovered_zerocopy = Packet::from_bytes_zerocopy(&zerocopy_bytes).unwrap();
         
-        // 🎯 确保反序列化结果一致
+        // 🎯 Ensure deserialization results are consistent
         assert_eq!(recovered_traditional, recovered_zerocopy);
         assert_eq!(recovered_traditional, original_packet);
     }
 
     #[test]
     fn test_shared_packet_compatibility() {
-        // 🚀 SharedPacket 兼容性测试
+        // 🚀 SharedPacket compatibility test
         let original = Packet::one_way(9999, b"shared test");
         let shared = SharedPacket::one_way(9999, Bytes::from("shared test"));
         
-        // 序列化格式必须一致
+        // Serialization format must be consistent
         let original_bytes = original.to_bytes();
         let shared_bytes = shared.to_bytes_zerocopy();
         
         assert_eq!(original_bytes, shared_bytes.as_ref());
         
-        // 转换测试
+        // Conversion test
         let shared_from_original = original.to_shared();
         let original_from_shared = Packet::from_shared(&shared);
         
@@ -1134,14 +1134,14 @@ mod tests {
 
     #[test]
     fn test_arc_packet_creation() {
-        // 🚀 Arc 共享数据包测试
+        // 🚀 Arc shared packet test
         use crate::packet::arc_packet;
         
         let arc_pkt = arc_packet::new(PacketType::Request, 789, Bytes::from("arc test"));
         assert_eq!(arc_pkt.message_id(), 789);
         assert_eq!(arc_pkt.payload_as_string().unwrap(), "arc test");
         
-        // 从传统数据包创建
+        // Create from traditional packet
         let traditional = Packet::response(456, b"traditional");
         let arc_from_traditional = arc_packet::from_packet(traditional.clone());
         
@@ -1151,30 +1151,30 @@ mod tests {
 
     #[test]
     fn test_zerocopy_performance_no_clone() {
-        // 🚀 验证零拷贝确实避免了数据拷贝
+        // 🚀 Verify zero-copy actually avoids data copying
         let large_data = vec![0u8; 1024 * 1024]; // 1MB
         let bytes_data = Bytes::from(large_data);
         
-        // 创建共享数据包（应该是零拷贝）
+        // Create shared packet (should be zero-copy)
         let shared = SharedPacket::one_way(123, bytes_data.clone());
         
-        // 验证内存地址相同（零拷贝证明）
+        // Verify same memory address (zero-copy proof)
         assert_eq!(shared.payload.as_ptr(), bytes_data.as_ptr());
         assert_eq!(shared.payload.len(), bytes_data.len());
         
-        // 切片也应该是零拷贝
+        // Slicing should also be zero-copy
         let serialized = shared.to_bytes_zerocopy();
         let recovered = SharedPacket::from_bytes_zerocopy(serialized).unwrap();
         
-        // 负载部分应该共享内存
+        // Payload part should share memory
         assert_eq!(recovered.payload.len(), 1024 * 1024);
     }
 
     #[test]
     fn test_protocol_format_stability() {
-        // 🚀 协议格式稳定性测试 - 确保跨版本兼容
+        // 🚀 Protocol format stability test - ensure cross-version compatibility
         
-        // 创建包含所有字段的复杂数据包
+        // Create complex packet containing all fields
         let mut packet = Packet::new(PacketType::Request, 0xDEADBEEF);
         packet.set_biz_type(0xFF);
         packet.set_compression(CompressionType::Zlib);
@@ -1184,21 +1184,21 @@ mod tests {
         packet.set_ext_header(b"complex_ext_header");
         packet.set_payload(b"complex_payload_data_for_testing");
         
-        // 传统方式序列化
+        // Traditional serialization
         let traditional_bytes = packet.to_bytes();
         
-        // 零拷贝方式序列化
+        // Zero-copy serialization
         let zerocopy_bytes = packet.to_bytes_zerocopy();
         
-        // SharedPacket 方式序列化
+        // SharedPacket serialization
         let shared = packet.to_shared();
         let shared_bytes = shared.to_bytes_zerocopy();
         
-        // 🎯 所有序列化方式的字节格式必须完全一致
+        // 🎯 All serialization methods must have completely identical byte formats
         assert_eq!(traditional_bytes, zerocopy_bytes.as_ref());
         assert_eq!(traditional_bytes, shared_bytes.as_ref());
         
-        // 🎯 所有反序列化方式的结果必须一致
+        // 🎯 All deserialization methods must have consistent results
         let recovered1 = Packet::from_bytes(&traditional_bytes).unwrap();
         let recovered2 = Packet::from_bytes_zerocopy(&zerocopy_bytes).unwrap();
         let recovered3 = SharedPacket::from_bytes_zerocopy(shared_bytes).unwrap();

@@ -157,11 +157,11 @@ impl PluginManager {
         }
     }
     
-    /// 注册插件
+    /// Register plugin
     pub fn register_plugin(&self, plugin: Arc<dyn ProtocolPlugin>) -> Result<(), TransportError> {
         let name = plugin.name();
         
-        // 检查是否为内置协议
+        // Check if it's a builtin protocol
         if !self.allow_override && self.is_builtin_protocol(name) {
             return Err(TransportError::config_error("plugin", format!(
                 "Cannot override builtin protocol '{}'. Use with_override() to allow this.", name
@@ -171,17 +171,17 @@ impl PluginManager {
         self.registry.register(plugin)
     }
     
-    /// 注销插件
+    /// Unregister plugin
     pub fn unregister_plugin(&self, name: &str) -> Result<(), TransportError> {
         self.registry.unregister(name)
     }
     
-    /// 获取插件
+    /// Get plugin
     pub fn get_plugin(&self, name: &str) -> Option<Arc<dyn ProtocolPlugin>> {
         self.registry.get(name)
     }
     
-    /// 列出所有协议（包括内置和插件）
+    /// List all protocols (including builtin and plugins)
     pub fn list_protocols(&self) -> Vec<String> {
         let mut protocols = vec!["tcp".to_string(), "websocket".to_string(), "quic".to_string()];
         protocols.extend(self.registry.list());
@@ -190,14 +190,14 @@ impl PluginManager {
         protocols
     }
     
-    /// 获取协议信息
+    /// Get protocol information
     pub fn get_protocol_info(&self, name: &str) -> Option<PluginInfo> {
-        // 先检查插件
+        // Check plugins first
         if let Some(info) = self.registry.get_plugin_info(name) {
             return Some(info);
         }
         
-        // 再检查内置协议
+        // Then check builtin protocols
         match name {
             "tcp" => Some(PluginInfo {
                 name: "tcp".to_string(),
@@ -224,12 +224,12 @@ impl PluginManager {
         }
     }
     
-    /// 检查是否为内置协议
+    /// Check if it's a builtin protocol
     fn is_builtin_protocol(&self, name: &str) -> bool {
         matches!(name, "tcp" | "websocket" | "quic")
     }
     
-    /// 创建带插件的服务器
+    /// Create server with plugin
     pub async fn create_server_with_plugin(
         &self, 
         protocol: &str, 
@@ -246,7 +246,7 @@ impl PluginManager {
         }
     }
     
-    /// 创建带插件的连接工厂
+    /// Create connection factory with plugin
     pub async fn create_connection_factory_with_plugin(
         &self,
         protocol: &str,
@@ -270,7 +270,7 @@ impl Default for PluginManager {
     }
 }
 
-/// 用于插件的连接包装器
+/// Connection wrapper for plugins
 pub struct PluginConnection {
     inner: Box<dyn Connection>,
 }

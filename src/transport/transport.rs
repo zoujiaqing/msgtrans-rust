@@ -8,7 +8,6 @@
 
 use std::{
     sync::{Arc, atomic::{AtomicU32, Ordering}},
-    collections::HashMap,
 };
 use tokio::sync::{Mutex, broadcast, oneshot};
 use dashmap::DashMap;
@@ -21,10 +20,10 @@ use crate::{
         memory_pool::OptimizedMemoryPool,
         connection_state::ConnectionStateManager,
     },
-    protocol::{ProtocolRegistry, ProtocolAdapter},
+    protocol::ProtocolRegistry,
     connection::Connection,
     adapters::create_standard_registry,
-    event::{TransportEvent, RequestContext},
+    event::TransportEvent,
 };
 
 /// [TARGET] Single connection transport abstraction - properly aligned with architecture design
@@ -420,7 +419,7 @@ impl Transport {
                                 let session_id = self.session_id.lock().await.as_ref().cloned();
                                 
                                 // [TARGET] Create user-friendly Message
-                                let message = crate::event::Message {
+                                let _message = crate::event::Message {
                                     peer: session_id,
                                     data,
                                     message_id: packet.header.message_id,

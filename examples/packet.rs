@@ -8,7 +8,7 @@ fn main() {
     println!("[START] Packet serialization and deserialization test");
     
     // Test messages
-    let test_message = "Hello, Packet World! 你好，数据包世界！";
+    let test_message = "Hello, Packet World!";
     let extend_data = "Extended payload for testing serialization and deserialization";
     
     // Create different types of packets

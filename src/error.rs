@@ -1,44 +1,44 @@
 use std::time::Duration;
 use crate::{SessionId, event::TransportEvent};
 
-/// 连接关闭原因
+/// Connection close reason
 #[derive(Debug, Clone)]
 pub enum CloseReason {
-    /// 正常关闭
+    /// Normal close
     Normal,
-    /// 超时
+    /// Timeout
     Timeout,
-    /// 错误
+    /// Error
     Error(String),
-    /// 被强制关闭
+    /// Forced close
     Forced,
 }
 
-/// 统一传输错误类型 - 精简版
+/// Unified transport error type - simplified version
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum TransportError {
-    /// 连接相关错误
+    /// Connection-related errors
     #[error("Connection error: {reason} (retryable: {retryable})")]
     Connection { 
         reason: String, 
         retryable: bool,
     },
     
-    /// 协议相关错误
+    /// Protocol-related errors
     #[error("Protocol error ({protocol}): {reason}")]
     Protocol { 
         protocol: String, 
         reason: String,
     },
     
-    /// 配置相关错误
+    /// Configuration-related errors
     #[error("Configuration error in field '{field}': {reason}")]
     Configuration { 
         field: String, 
         reason: String,
     },
     
-    /// 资源相关错误
+    /// Resource-related errors
     #[error("Resource '{resource}' exceeded: current {current}, limit {limit}")]
     Resource { 
         resource: String, 
@@ -46,7 +46,7 @@ pub enum TransportError {
         limit: usize,
     },
     
-    /// 超时错误
+    /// Timeout errors
     #[error("Operation '{operation}' timeout after {duration:?}")]
     Timeout { 
         operation: String, 
@@ -55,18 +55,18 @@ pub enum TransportError {
 }
 
 impl TransportError {
-    /// 判断错误是否可重试
+    /// Check if error is retryable
     pub fn is_retryable(&self) -> bool {
         match self {
             TransportError::Connection { retryable, .. } => *retryable,
-            TransportError::Protocol { .. } => true,  // 协议错误通常可重试
-            TransportError::Configuration { .. } => false, // 配置错误不可重试
-            TransportError::Resource { .. } => true,  // 资源错误可重试（等待资源释放）
-            TransportError::Timeout { .. } => true,   // 超时可重试
+            TransportError::Protocol { .. } => true,  // Protocol errors are usually retryable
+            TransportError::Configuration { .. } => false, // Configuration errors are not retryable
+            TransportError::Resource { .. } => true,  // Resource errors are retryable (wait for resource release)
+            TransportError::Timeout { .. } => true,   // Timeouts are retryable
         }
     }
     
-    /// 获取建议的重试延迟
+    /// Get suggested retry delay
     pub fn retry_delay(&self) -> Option<Duration> {
         if !self.is_retryable() {
             return None;
@@ -81,7 +81,7 @@ impl TransportError {
         }
     }
     
-    /// 获取错误代码
+    /// Get error code
     pub fn error_code(&self) -> &'static str {
         match self {
             TransportError::Connection { .. } => "CONNECTION_ERROR",
@@ -92,7 +92,7 @@ impl TransportError {
         }
     }
     
-    /// 添加会话上下文
+    /// Add session context
     pub fn with_session(mut self, session_id: SessionId) -> Self {
         match &mut self {
             TransportError::Connection { reason, .. } => {
@@ -105,7 +105,7 @@ impl TransportError {
                     *reason = format!("{} (session: {})", reason, session_id);
                 }
             },
-            _ => {} // 其他错误类型不需要会话信息
+            _ => {} // Other error types don't need session information
         }
         self
     }

@@ -11,7 +11,7 @@ use crate::{
     SessionId,
     error::TransportError,
     transport::config::TransportConfig,
-    protocol::adapter::{DynProtocolConfig, DynClientConfig},
+    protocol::adapter::DynClientConfig,
 };
 
 // Internal use of new Transport structure
@@ -199,15 +199,15 @@ impl TransportClientBuilder {
         self
     }
 
-    /// 设置传输层基础配置
+    /// Set transport layer basic configuration
     pub fn transport_config(mut self, config: TransportConfig) -> Self {
         self.transport_config = config;
         self
     }
 
-    /// 构建客户端传输层 - 返回 TransportClient
+    /// Build client transport layer - return TransportClient
     pub async fn build(self) -> Result<TransportClient, TransportError> {
-        // 创建底层 Transport
+        // Create underlying Transport
         let transport = Transport::new(self.transport_config).await?;
         
         Ok(TransportClient::new(

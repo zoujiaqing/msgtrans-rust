@@ -1,6 +1,6 @@
-/// 协议抽象层
+/// Protocol abstraction layer
 /// 
-/// 提供模块化的协议支持，允许用户注册自定义协议
+/// Provides modular protocol support, allowing users to register custom protocols
 
 use async_trait::async_trait;
 use std::collections::HashMap;
@@ -12,40 +12,40 @@ use crate::{
     SessionId,
     error::TransportError,
 
-    connection::{Connection, Server}, // 使用统一的接口
+    connection::{Connection, Server}, // Use unified interface
 };
 
-/// Future类型别名，简化类型签名
+/// Future type alias, simplifying type signatures
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
-/// 协议工厂trait
+/// Protocol factory trait
 /// 
-/// 每个协议模块需要实现这个trait来创建连接和服务器
+/// Each protocol module needs to implement this trait to create connections and servers
 #[async_trait]
 pub trait ProtocolFactory: Send + Sync {
-    /// 协议名称 (如 "tcp", "websocket", "quic")
+    /// Protocol name (e.g. "tcp", "websocket", "quic")
     fn protocol_name(&self) -> &'static str;
     
-    /// 支持的URL schemes (如 ["tcp", "tcp4", "tcp6"])
+    /// Supported URL schemes (e.g. ["tcp", "tcp4", "tcp6"])
     fn supported_schemes(&self) -> Vec<&'static str>;
     
-    /// 创建客户端连接
+    /// Create client connection
     async fn create_connection(
         &self, 
         uri: &str,
         config: Option<Box<dyn std::any::Any + Send + Sync>>
     ) -> Result<Box<dyn Connection>, TransportError>;
     
-    /// 创建服务器
+    /// Create server
     async fn create_server(
         &self,
         bind_addr: &str,
         config: Option<Box<dyn std::any::Any + Send + Sync>>
     ) -> Result<Box<dyn Server>, TransportError>;
     
-    /// 解析URI为连接参数
+    /// Parse URI to connection parameters
     fn parse_uri(&self, uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
-        // 默认实现：简单的 host:port 解析
+        // Default implementation: simple host:port parsing
         if let Ok(addr) = uri.parse::<std::net::SocketAddr>() {
             Ok((addr, HashMap::new()))
         } else {

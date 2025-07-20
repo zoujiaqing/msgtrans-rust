@@ -1,19 +1,19 @@
-/// 协议工厂实现
+/// Protocol factory implementation
 /// 
-/// 为泛型协议适配器提供工厂接口实现
+/// Provides factory interface implementation for generic protocol adapters
 
 use async_trait::async_trait;
 use std::any::Any;
 use std::collections::HashMap;
 use crate::{
     SessionId, TransportError, Packet,
-    connection::{Connection, Server}, // 使用统一的连接接口
+    connection::{Connection, Server}, // Use unified connection interface
     protocol::{ProtocolFactory, TcpClientConfig, TcpServerConfig, WebSocketClientConfig, WebSocketServerConfig, QuicClientConfig, QuicServerConfig},
     command::ConnectionInfo,
 };
 use crate::adapters::tcp;
 
-/// TCP适配器的Connection包装器（客户端）
+/// TCP adapter Connection wrapper (client)
 pub struct TcpClientConnection {
     inner: tcp::TcpAdapter<TcpClientConfig>,
 }
@@ -67,7 +67,7 @@ impl Connection for TcpClientConnection {
     }
 }
 
-/// TCP服务器端连接包装器
+/// TCP server-side connection wrapper
 pub struct TcpServerConnection {
     inner: tcp::TcpAdapter<TcpServerConfig>,
 }
@@ -121,7 +121,7 @@ impl Connection for TcpServerConnection {
     }
 }
 
-/// TCP服务器的Server包装器
+/// TCP server Server wrapper
 pub struct TcpServerWrapper {
     inner: tcp::TcpServer,
 }
@@ -151,7 +151,7 @@ impl Server for TcpServerWrapper {
     }
 }
 
-/// TCP协议工厂
+/// TCP protocol factory
 pub struct TcpFactory;
 
 impl TcpFactory {
@@ -226,7 +226,7 @@ impl ProtocolFactory for TcpFactory {
     }
     
     fn parse_uri(&self, uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
-        // 处理 tcp://host:port 格式
+        // Handle tcp://host:port format
         if let Some(stripped) = uri.strip_prefix("tcp://") {
             if let Ok(addr) = stripped.parse::<std::net::SocketAddr>() {
                 Ok((addr, HashMap::new()))
@@ -234,7 +234,7 @@ impl ProtocolFactory for TcpFactory {
                 Err(TransportError::config_error("general", format!("Invalid TCP URI: {}", uri)))
             }
         } else if let Ok(addr) = uri.parse::<std::net::SocketAddr>() {
-            // 支持没有scheme的 host:port 格式
+            // Support host:port format without scheme
             Ok((addr, HashMap::new()))
         } else {
             Err(TransportError::config_error("general", format!("Invalid TCP URI: {}", uri)))
@@ -242,11 +242,11 @@ impl ProtocolFactory for TcpFactory {
     }
 }
 
-/// WebSocket和QUIC工厂（简化版本，暂未实现）
+/// WebSocket and QUIC factories (simplified version, not yet implemented)
 pub struct WebSocketFactory;
 pub struct QuicFactory;
 
-// 简化的连接包装器
+// Simplified connection wrapper
 pub struct WebSocketConnection {
     inner: crate::adapters::websocket::WebSocketAdapter<crate::protocol::WebSocketClientConfig>,
 }
@@ -375,7 +375,7 @@ impl Server for WebSocketServerWrapper {
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
-        // WebSocket服务器优雅关闭逻辑
+        // WebSocket server graceful shutdown logic
         Ok(())
     }
 }
@@ -508,7 +508,7 @@ impl Server for QuicServerWrapper {
     }
     
     async fn shutdown(&mut self) -> Result<(), TransportError> {
-        // QUIC服务器通常不需要特殊的shutdown逻辑
+        // QUIC servers usually don't need special shutdown logic
         Ok(())
     }
 }
@@ -576,7 +576,7 @@ impl ProtocolFactory for WebSocketFactory {
     }
     
     fn parse_uri(&self, uri: &str) -> Result<(std::net::SocketAddr, HashMap<String, String>), TransportError> {
-        // 解析 ws://host:port/path 或 wss://host:port/path 格式
+        // Parse ws://host:port/path or wss://host:port/path format
         if let Ok(url) = uri.parse::<url::Url>() {
             if let Some(host) = url.host_str() {
                 let port = url.port().unwrap_or(if url.scheme() == "wss" { 443 } else { 80 });
@@ -612,7 +612,7 @@ impl ProtocolFactory for QuicFactory {
             Box::new(QuicClientConfig::default())
         };
         
-        // 从URI中解析地址或使用配置中的地址
+        // Parse address from URI or use address from configuration
         let (addr, _) = self.parse_uri(uri)?;
         
         let adapter = crate::adapters::quic::QuicAdapter::connect(addr, *config).await
@@ -657,7 +657,7 @@ impl ProtocolFactory for QuicFactory {
     }
 }
 
-/// 创建标准协议注册表
+/// Create standard protocol registry
 pub async fn create_standard_registry() -> Result<crate::protocol::ProtocolRegistry, TransportError> {
     let registry = crate::protocol::ProtocolRegistry::new();
     

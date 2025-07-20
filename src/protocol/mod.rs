@@ -1,6 +1,6 @@
-/// 协议抽象层模块
+/// Protocol abstraction layer module
 /// 
-/// 提供协议配置、适配器和工厂等抽象
+/// Provides abstractions for protocol configuration, adapters, and factories
 
 pub mod adapter;
 pub mod protocol;
@@ -8,15 +8,15 @@ pub mod client_config;
 pub mod server_config;
 pub mod protocol_adapter;
 
-// 重新导出核心类型
+// Re-export core types
 pub use adapter::{ProtocolAdapter, AdapterStats};
 pub use protocol::{ProtocolFactory, ProtocolRegistry, BoxFuture, ProtocolSet, StandardProtocols, PluginManager};
 
-// 重新导出配置类型
+// Re-export configuration types
 pub use client_config::{TcpClientConfig, WebSocketClientConfig, QuicClientConfig, RetryConfig};
 pub use server_config::{TcpServerConfig, WebSocketServerConfig, QuicServerConfig};
 
-// 重新导出适配器配置
+// Re-export adapter configuration
 pub use adapter::{
     ProtocolConfig, ConfigError, 
     DynProtocolConfig, DynServerConfig, DynClientConfig,

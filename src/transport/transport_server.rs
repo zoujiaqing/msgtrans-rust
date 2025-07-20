@@ -1,20 +1,19 @@
-/// 服务端传输层实现
+/// Server-side transport layer implementation
 /// 
-/// 提供多协议服务端支持，管理会话和连接
+/// Provides multi-protocol server support, managing sessions and connections
 
 use std::sync::Arc;
 use crate::{
-    SessionId, TransportError, Packet, EventStream,
+    SessionId, TransportError, Packet,
     transport::{
         config::TransportConfig,
         lockfree::LockFreeHashMap,
         connection_state::ConnectionStateManager,
     },
-    error::CloseReason,
-    command::{ConnectionInfo, TransportStats},
-    Connection, Server,
+    command::TransportStats,
+
     event::ServerEvent,
-    protocol::adapter::DynServerConfig,
+
 };
 use tokio::sync::broadcast;
 

@@ -18,7 +18,7 @@ use rustls::{
 };
 use std::{sync::Arc, net::SocketAddr, time::Duration, convert::TryInto};
 use tokio::sync::{broadcast, mpsc};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 
 use crate::{
     SessionId, 
@@ -548,7 +548,7 @@ impl<C> QuicAdapter<C> {
     }
 }
 
-// 客户端适配器实现
+        // Client adapter implementation
 impl QuicAdapter<QuicClientConfig> {
     /// Connect to QUIC server
     pub async fn connect(addr: SocketAddr, config: QuicClientConfig) -> Result<Self, QuicError> {

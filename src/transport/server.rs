@@ -8,10 +8,10 @@ use crate::{
     SessionId,
     error::TransportError,
     transport::config::TransportConfig,
-    protocol::adapter::ServerConfig,
+
 };
 
-// 导入新的 TransportServer
+// Import new TransportServer
 use super::transport_server::TransportServer;
 
 /// Acceptor configuration
@@ -65,7 +65,7 @@ pub trait ServerMiddleware: Send + Sync {
     fn process(&self, session_id: SessionId) -> Result<(), TransportError>;
 }
 
-/// 服务器选项
+/// Server options
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub name: Option<String>,

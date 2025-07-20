@@ -4,20 +4,20 @@ use crate::command::ConnectionInfo;
 use crate::packet::Packet;
 use crate::protocol::{TcpServerConfig, TcpClientConfig, WebSocketServerConfig, WebSocketClientConfig, QuicServerConfig, QuicClientConfig};
 
-/// 适配器统计信息
+/// Adapter statistics information
 #[derive(Debug, Clone)]
 pub struct AdapterStats {
-    /// 发送的数据包数量
+    /// Number of packets sent
     pub packets_sent: u64,
-    /// 接收的数据包数量
+    /// Number of packets received
     pub packets_received: u64,
-    /// 发送的字节数
+    /// Number of bytes sent
     pub bytes_sent: u64,
-    /// 接收的字节数
+    /// Number of bytes received
     pub bytes_received: u64,
-    /// 错误计数
+    /// Error count
     pub errors: u64,
-    /// 最后活动时间
+    /// Last activity time
     pub last_activity: std::time::SystemTime,
 }
 
@@ -57,111 +57,111 @@ impl AdapterStats {
     }
 }
 
-/// 协议适配器trait
+/// Protocol adapter trait
 /// 
-/// 定义了所有协议适配器必须实现的基本接口
-/// 这是事件驱动架构的核心抽象
+/// Defines the basic interface that all protocol adapters must implement
+/// This is the core abstraction of the event-driven architecture
 #[async_trait]
 pub trait ProtocolAdapter: Send + 'static {
     type Config: ProtocolConfig;
     type Error: Into<TransportError> + Send + std::fmt::Debug + 'static;
     
-    /// 发送数据包
+    /// Send packet
     async fn send(&mut self, packet: Packet) -> Result<(), Self::Error>;
     
-    /// 关闭连接
+    /// Close connection
     async fn close(&mut self) -> Result<(), Self::Error>;
     
-    /// 优雅关闭连接
+    /// Gracefully close connection
     /// 
-    /// 发送协议特定的关闭信号，等待对端确认
+    /// Send protocol-specific close signal and wait for peer confirmation
     async fn graceful_close(&mut self) -> Result<(), Self::Error> {
-        // 默认实现：直接调用 close()
+        // Default implementation: directly call close()
         self.close().await
     }
     
-    /// 强制关闭连接
+    /// Force close connection
     /// 
-    /// 立即关闭连接，不等待对端确认
+    /// Immediately close connection without waiting for peer confirmation
     async fn force_close(&mut self) -> Result<(), Self::Error> {
-        // 默认实现：直接调用 close()
+        // Default implementation: directly call close()
         self.close().await
     }
     
-    /// 获取连接信息
+    /// Get connection information
     fn connection_info(&self) -> ConnectionInfo;
     
-    /// 检查连接状态
+    /// Check connection status
     fn is_connected(&self) -> bool;
     
-    /// 获取适配器统计信息
+    /// Get adapter statistics information
     fn stats(&self) -> AdapterStats;
     
-    /// 获取会话ID
+    /// Get session ID
     fn session_id(&self) -> SessionId;
     
-    /// 设置会话ID
+    /// Set session ID
     fn set_session_id(&mut self, session_id: SessionId);
     
-    /// 刷新发送缓冲区
+    /// Flush send buffer
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // 默认实现：在事件驱动模式下由内部事件循环处理
+        // Default implementation: handled by internal event loop in event-driven mode
         Ok(())
     }
 }
 
-/// 协议配置trait
+/// Protocol configuration trait
 pub trait ProtocolConfig: Send + Sync + Clone + std::fmt::Debug + 'static {
-    /// 验证配置是否有效
+    /// Validate if configuration is valid
     fn validate(&self) -> Result<(), ConfigError>;
     
-    /// 获取默认配置
+    /// Get default configuration
     fn default_config() -> Self;
     
-    /// 合并配置
+    /// Merge configurations
     fn merge(self, other: Self) -> Self;
 }
 
-/// Object-safe 的协议配置 trait，用于统一 Builder 接口
+/// Object-safe protocol configuration trait for unified Builder interface
 pub trait DynProtocolConfig: Send + Sync + 'static {
-    /// 获取协议名称
+    /// Get protocol name
     fn protocol_name(&self) -> &'static str;
     
-    /// 验证配置
+    /// Validate configuration
     fn validate_dyn(&self) -> Result<(), ConfigError>;
     
-    /// 转换为 Any 以支持向下转型
+    /// Convert to Any to support downcasting
     fn as_any(&self) -> &dyn std::any::Any;
     
-    /// 克隆为 Box<dyn DynProtocolConfig>
+    /// Clone as Box<dyn DynProtocolConfig>
     fn clone_dyn(&self) -> Box<dyn DynProtocolConfig>;
 }
 
-/// 🔧 服务端专用动态配置
+/// 🔧 Server-specific dynamic configuration
 pub trait DynServerConfig: DynProtocolConfig {
-    /// 动态构建服务器（object-safe）
+    /// Dynamically build server (object-safe)
     fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>>;
     
-    /// 获取绑定地址
+    /// Get bind address
     fn get_bind_address(&self) -> std::net::SocketAddr;
     
-    /// 克隆为 Box<dyn DynServerConfig>
+    /// Clone as Box<dyn DynServerConfig>
     fn clone_server_dyn(&self) -> Box<dyn DynServerConfig>;
 }
 
-/// 🔧 客户端专用动态配置  
+/// 🔧 Client-specific dynamic configuration  
 pub trait DynClientConfig: DynProtocolConfig {
-    /// 动态构建连接（object-safe）
+    /// Dynamically build connection (object-safe)
     fn build_connection_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Connection>, crate::error::TransportError>> + Send + '_>>;
     
-    /// 获取目标信息（可能是 SocketAddr 或 URL）
+    /// Get target information (could be SocketAddr or URL)
     fn get_target_info(&self) -> String;
     
-    /// 克隆为 Box<dyn DynClientConfig>
+    /// Clone as Box<dyn DynClientConfig>
     fn clone_client_dyn(&self) -> Box<dyn DynClientConfig>;
 }
 
-/// 协议配置错误
+/// Protocol configuration error
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("Invalid address '{address}': {reason}")]
@@ -202,7 +202,7 @@ pub enum ConfigError {
     Io(#[from] std::io::Error),
 }
 
-/// TCP适配器配置
+/// TCP adapter configuration
 
 
 impl ServerConfig for TcpServerConfig {
@@ -363,34 +363,34 @@ impl ClientConfig for QuicClientConfig {
     }
 }
 
-/// 服务器配置trait - 用于类型安全的服务器启动
+/// Server configuration trait - for type-safe server startup
 pub trait ServerConfig: Send + Sync + 'static {
     type Server: crate::Server;
     
-    /// 验证配置的正确性
+    /// Validate configuration correctness
     fn validate(&self) -> Result<(), TransportError>;
     
-    /// 构建服务器实例
+    /// Build server instance
     fn build_server(&self) -> impl std::future::Future<Output = Result<Self::Server, TransportError>> + Send;
     
-    /// 获取协议名称
+    /// Get protocol name
     fn protocol_name(&self) -> &'static str;
 }
 
-/// 客户端配置trait - 用于类型安全的客户端连接
+/// Client configuration trait - for type-safe client connections
 pub trait ClientConfig: Send + Sync + 'static {
     type Connection: crate::Connection;
     
-    /// 验证配置的正确性
+    /// Validate configuration correctness
     fn validate(&self) -> Result<(), TransportError>;
     
-    /// 构建连接实例
+    /// Build connection instance
     fn build_connection(&self) -> impl std::future::Future<Output = Result<Self::Connection, TransportError>> + Send;
     
-    /// 获取协议名称
+    /// Get protocol name
     fn protocol_name(&self) -> &'static str;
 }
 
  
 
-// ConnectableConfig 实现已移至 client_config.rs 中
+// ConnectableConfig implementation has been moved to client_config.rs

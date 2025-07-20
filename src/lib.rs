@@ -1,3 +1,12 @@
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+#![allow(dead_code)]
+#![allow(private_bounds)]
+#![allow(private_interfaces)]
+#![allow(async_fn_in_trait)]
+#![allow(unused_must_use)]
+#![allow(non_upper_case_globals)]
+
 /// msgtrans - Unified multi-protocol transport library
 /// 
 /// This is a modern, high-performance Rust transport library providing unified interfaces for TCP, WebSocket and QUIC protocols.

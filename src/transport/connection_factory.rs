@@ -2,7 +2,7 @@
 /// 
 /// Supports progressive migration from traditional connections to lock-free connections
 
-use std::sync::Arc;
+
 use tokio::task::JoinHandle;
 use crate::{
     Connection, SessionId, TransportError,

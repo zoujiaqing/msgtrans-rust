@@ -1,6 +1,6 @@
-/// 协议连接适配器
+/// Protocol connection adapter
 /// 
-/// 将新的Connection trait包装成ProtocolAdapter trait，用于与现有Actor系统兼容
+/// Wraps the new Connection trait as ProtocolAdapter trait for compatibility with existing Actor system
 
 use async_trait::async_trait;
 use crate::{
@@ -14,16 +14,16 @@ use super::{
     adapter::{ProtocolAdapter, AdapterStats, ProtocolConfig},
 };
 
-/// 协议连接适配器
+/// Protocol connection adapter
 /// 
-/// 这个适配器将新的Connection trait包装成ProtocolAdapter trait
+/// This adapter wraps the new Connection trait as ProtocolAdapter trait
 pub struct ProtocolConnectionAdapter {
     connection: Box<dyn Connection>,
     stats: AdapterStats,
 }
 
 impl ProtocolConnectionAdapter {
-    /// 创建新的协议连接适配器
+    /// Create new protocol connection adapter
     pub fn new(connection: Box<dyn Connection>) -> Self {
         Self {
             connection,
@@ -75,19 +75,19 @@ impl ProtocolAdapter for ProtocolConnectionAdapter {
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // 大多数协议连接不需要显式flush
+        // Most protocol connections don't need explicit flush
         Ok(())
     }
 }
 
 impl ProtocolConnectionAdapter {
-    /// 获取事件流 - 事件驱动架构的核心
+    /// Get event stream - core of event-driven architecture
     pub fn subscribe_events(&self) -> Option<tokio::sync::broadcast::Receiver<crate::event::TransportEvent>> {
         self.connection.event_stream()
     }
 }
 
-/// 空配置类型，用于协议连接适配器
+/// Empty configuration type for protocol connection adapter
 #[derive(Debug, Clone)]
 pub struct EmptyConfig;
 

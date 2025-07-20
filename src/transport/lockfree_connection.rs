@@ -438,12 +438,12 @@ impl LockFreeConnection {
             tasks.push(task);
         }
         
-        // 等待所有任务完成
+        // Wait for all tasks to complete
         for task in tasks {
             match task.await {
                 Ok(result) => results.push(result),
                 Err(_) => results.push(Err(TransportError::connection_error(
-                    "任务执行失败", 
+                    "Task execution failed", 
                     false
                 ))),
             }
@@ -459,7 +459,7 @@ mod tests {
     use crate::packet::PacketType;
     use bytes::Bytes;
     
-    // 模拟连接用于测试
+    // Mock connection for testing
     struct MockConnection {
         session_id: SessionId,
         is_connected: bool,
@@ -528,7 +528,7 @@ mod tests {
         let result = lockfree_conn.send_lockfree(packet).await;
         assert!(result.is_ok());
         
-        // 检查统计信息
+        // Check statistics
         assert_eq!(lockfree_conn.stats().packets_sent.load(Ordering::Relaxed), 1);
         assert_eq!(lockfree_conn.stats().bytes_sent.load(Ordering::Relaxed), 4);
     }
@@ -542,7 +542,7 @@ mod tests {
         
         let (lockfree_conn, _handle) = LockFreeConnection::new(mock_conn, SessionId(1), 100);
         
-        // 并发发送100个数据包
+        // Send 100 packets concurrently
         let mut tasks = Vec::new();
         
         for i in 0..100 {
@@ -568,13 +568,13 @@ mod tests {
             tasks.push(task);
         }
         
-        // 等待所有任务完成
+        // Wait for all tasks to complete
         for task in tasks {
             let result = task.await.unwrap();
             assert!(result.is_ok());
         }
         
-        // 检查统计信息
+        // Check statistics
         assert_eq!(lockfree_conn.stats().packets_sent.load(Ordering::Relaxed), 100);
     }
 } 

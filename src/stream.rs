@@ -9,18 +9,18 @@ use crate::{
     packet::Packet,
 };
 
-/// 统一事件流
+/// Unified event stream
 /// 
-/// 提供了对传输事件的流式访问，支持过滤和转换
+/// Provides streaming access to transport events, supporting filtering and transformation
 pub struct EventStream {
-    /// 内部广播流
+    /// Internal broadcast stream
     inner: BroadcastStream<TransportEvent>,
-    /// 可选的会话过滤器
+    /// Optional session filter
     session_filter: Option<SessionId>,
 }
 
 impl EventStream {
-    /// 创建新的事件流
+    /// Create new event stream
     pub fn new(receiver: broadcast::Receiver<TransportEvent>) -> Self {
         Self {
             inner: BroadcastStream::new(receiver),
@@ -28,7 +28,7 @@ impl EventStream {
         }
     }
     
-    /// 创建带会话过滤的事件流
+    /// Create event stream with session filter
     pub fn with_session_filter(receiver: broadcast::Receiver<TransportEvent>, session_id: SessionId) -> Self {
         Self {
             inner: BroadcastStream::new(receiver),
@@ -36,13 +36,13 @@ impl EventStream {
         }
     }
     
-    /// 过滤特定会话的事件
+    /// Filter events for specific session
     pub fn filter_session(mut self, session_id: SessionId) -> Self {
         self.session_filter = Some(session_id);
         self
     }
     
-    /// 获取下一个连接事件
+    /// Get next connection event
     pub async fn next_connection_event(&mut self) -> Option<TransportEvent> {
         while let Some(result) = self.inner.next().await {
             if let Ok(event) = result {
@@ -54,7 +54,7 @@ impl EventStream {
         None
     }
     
-    /// 获取下一个数据事件
+    /// Get next data event
     pub async fn next_data_event(&mut self) -> Option<TransportEvent> {
         while let Some(result) = self.inner.next().await {
             if let Ok(event) = result {
@@ -66,7 +66,7 @@ impl EventStream {
         None
     }
     
-    /// 获取下一个错误事件
+    /// Get next error event
     pub async fn next_error_event(&mut self) -> Option<TransportEvent> {
         while let Some(result) = self.inner.next().await {
             if let Ok(event) = result {
@@ -78,16 +78,16 @@ impl EventStream {
         None
     }
     
-    /// 检查是否应该发出事件（基于过滤器）
+    /// Check if event should be emitted (based on filter)
     fn should_emit_event(&self, event: &TransportEvent) -> bool {
         match self.session_filter {
             Some(filter_session_id) => {
                 match event.session_id() {
                     Some(event_session_id) => event_session_id == filter_session_id,
-                    None => true, // 全局事件总是发出
+                    None => true, // Global events are always emitted
                 }
             }
-            None => true, // 没有过滤器，发出所有事件
+            None => true, // No filter, emit all events
         }
     }
 }
@@ -102,10 +102,10 @@ impl Stream for EventStream {
                     if self.should_emit_event(&event) {
                         return Poll::Ready(Some(event));
                     }
-                    // 继续循环，获取下一个事件
+                    // Continue loop, get next event
                 }
                 Poll::Ready(Some(Err(_))) => {
-                    // 忽略接收错误，继续尝试
+                    // Ignore receive errors, continue trying
                     continue;
                 }
                 Poll::Ready(None) => {
@@ -119,20 +119,20 @@ impl Stream for EventStream {
     }
 }
 
-/// 泛型接收器
+/// Generic receiver
 /// 
-/// 解决了原始Stream trait实现中Future状态管理的问题
-/// 通过保持Future状态避免了poll_next时重新创建Future的问题
+/// Solves Future state management issues in the original Stream trait implementation
+/// Avoids recreating Future on poll_next by maintaining Future state
 pub struct GenericReceiver<T> {
-    /// 内部接收器
+    /// Internal receiver
     receiver: mpsc::Receiver<T>,
-    /// 当前的接收Future（可能为None）
+    /// Current receive Future (may be None)
     #[allow(dead_code)]
     recv_future: Option<Pin<Box<dyn std::future::Future<Output = Option<T>> + Send>>>,
 }
 
 impl<T: Send + 'static> GenericReceiver<T> {
-    /// 创建新的泛型接收器
+    /// Create new generic receiver
     pub fn new(receiver: mpsc::Receiver<T>) -> Self {
         Self {
             receiver,
@@ -140,17 +140,17 @@ impl<T: Send + 'static> GenericReceiver<T> {
         }
     }
     
-    /// 非阻塞尝试接收
+    /// Non-blocking attempt to receive
     pub fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
         self.receiver.try_recv()
     }
     
-    /// 异步接收
+    /// Asynchronous receive
     pub async fn recv(&mut self) -> Option<T> {
         self.receiver.recv().await
     }
     
-    /// 关闭接收器
+    /// Close receiver
     pub fn close(&mut self) {
         self.receiver.close();
     }
@@ -160,35 +160,35 @@ impl<T: Send + 'static> Stream for GenericReceiver<T> {
     type Item = T;
     
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // 直接轮询接收器
+        // Poll receiver directly
         self.receiver.poll_recv(cx)
     }
 }
 
-/// 数据包流
+/// Packet stream
 /// 
-/// 专门用于处理数据包的流
+/// Stream specifically for handling packets
 pub struct PacketStream {
-    /// 内部事件流
+    /// Internal event stream
     event_stream: EventStream,
 }
 
 impl PacketStream {
-    /// 创建新的数据包流
+    /// Create new packet stream
     pub fn new(receiver: broadcast::Receiver<TransportEvent>) -> Self {
         Self {
             event_stream: EventStream::new(receiver),
         }
     }
     
-    /// 创建带会话过滤的数据包流
+    /// Create packet stream with session filter
     pub fn with_session_filter(receiver: broadcast::Receiver<TransportEvent>, session_id: SessionId) -> Self {
         Self {
             event_stream: EventStream::with_session_filter(receiver, session_id),
         }
     }
     
-    /// 获取下一个数据包
+    /// Get next packet
     pub async fn next_packet(&mut self) -> Option<Packet> {
         while let Some(event) = self.event_stream.next().await {
             if let crate::event::TransportEvent::MessageReceived(packet) = event {
@@ -222,23 +222,23 @@ impl Stream for PacketStream {
     }
 }
 
-/// 连接事件流
+/// Connection event stream
 /// 
-/// 专门处理连接建立和关闭事件
+/// Specifically handles connection establishment and closing events
 pub struct ConnectionStream {
-    /// 内部事件流
+    /// Internal event stream
     event_stream: EventStream,
 }
 
 impl ConnectionStream {
-    /// 创建新的连接事件流
+    /// Create new connection event stream
     pub fn new(receiver: broadcast::Receiver<TransportEvent>) -> Self {
         Self {
             event_stream: EventStream::new(receiver),
         }
     }
     
-    /// 获取下一个连接事件
+    /// Get next connection event
     pub async fn next_connection(&mut self) -> Option<ConnectionEvent> {
         while let Some(event) = self.event_stream.next().await {
             match event {
@@ -268,7 +268,7 @@ impl Stream for ConnectionStream {
                     return Poll::Ready(Some(ConnectionEvent::Closed { reason }));
                 }
                 Poll::Ready(Some(_)) => {
-                    // 其他事件，继续循环
+                    // Other events, continue loop
                     continue;
                 }
                 Poll::Ready(None) => {
@@ -282,37 +282,37 @@ impl Stream for ConnectionStream {
     }
 }
 
-/// 连接事件
+/// Connection event
 #[derive(Debug, Clone)]
 pub enum ConnectionEvent {
-    /// 连接建立
+    /// Connection established
     Established { info: crate::command::ConnectionInfo },
-    /// 连接关闭
+    /// Connection closed
     Closed { reason: crate::CloseReason },
 }
 
-/// 流工厂
+/// Stream factory
 /// 
-/// 提供创建各种类型流的便捷方法
+/// Provides convenient methods for creating various types of streams
 pub struct StreamFactory;
 
 impl StreamFactory {
-    /// 创建事件流
+    /// Create event stream
     pub fn event_stream(receiver: broadcast::Receiver<TransportEvent>) -> EventStream {
         EventStream::new(receiver)
     }
     
-    /// 创建数据包流
+    /// Create packet stream
     pub fn packet_stream(receiver: broadcast::Receiver<TransportEvent>) -> PacketStream {
         PacketStream::new(receiver)
     }
     
-    /// 创建连接流
+    /// Create connection stream
     pub fn connection_stream(receiver: broadcast::Receiver<TransportEvent>) -> ConnectionStream {
         ConnectionStream::new(receiver)
     }
     
-    /// 创建会话过滤的事件流
+    /// Create session-filtered event stream
     pub fn session_event_stream(
         receiver: broadcast::Receiver<TransportEvent>, 
         session_id: SessionId
@@ -320,7 +320,7 @@ impl StreamFactory {
         EventStream::with_session_filter(receiver, session_id)
     }
     
-    /// 创建会话过滤的数据包流
+    /// Create session-filtered packet stream
     pub fn session_packet_stream(
         receiver: broadcast::Receiver<TransportEvent>, 
         session_id: SessionId
@@ -328,26 +328,26 @@ impl StreamFactory {
         PacketStream::with_session_filter(receiver, session_id)
     }
     
-    /// 创建客户端事件流（隐藏会话ID）
+    /// Create client event stream (hide session ID)
     pub fn client_event_stream(receiver: tokio::sync::broadcast::Receiver<crate::event::TransportEvent>) -> ClientEventStream {
         ClientEventStream::new(receiver)
     }
 }
 
-/// 流组合器
+/// Stream combinator
 /// 
-/// 提供流的组合和转换功能
+/// Provides stream combination and transformation functionality
 pub struct StreamCombinator;
 
 impl StreamCombinator {
-    /// 合并多个事件流
+    /// Merge multiple event streams
     pub fn merge_event_streams(
         streams: Vec<EventStream>
     ) -> impl Stream<Item = TransportEvent> {
         futures::stream::select_all(streams)
     }
     
-    /// 将事件流转换为数据包流
+    /// Convert event stream to packet stream
     pub fn events_to_packets(event_stream: EventStream) -> impl Stream<Item = Packet> {
         event_stream.filter_map(|event| async move {
             match event {
@@ -357,7 +357,7 @@ impl StreamCombinator {
         })
     }
     
-    /// 将事件流转换为连接事件流
+    /// Convert event stream to connection event stream
     pub fn events_to_connections(
         event_stream: EventStream
     ) -> impl Stream<Item = ConnectionEvent> {
@@ -375,15 +375,15 @@ impl StreamCombinator {
     }
 }
 
-// 为broadcast::Receiver添加扩展trait
+// Add extension trait for broadcast::Receiver
 pub trait ReceiverExt {
-    /// 转换为事件流
+    /// Convert to event stream
     fn into_event_stream(self) -> EventStream;
     
-    /// 转换为数据包流
+    /// Convert to packet stream
     fn into_packet_stream(self) -> PacketStream;
     
-    /// 转换为连接流
+    /// Convert to connection stream
     fn into_connection_stream(self) -> ConnectionStream;
 }
 
@@ -401,49 +401,49 @@ impl ReceiverExt for broadcast::Receiver<TransportEvent> {
     }
 }
 
-/// 客户端事件流 - 隐藏会话ID概念
+/// Client event stream - hides session ID concept
 pub struct ClientEventStream {
     inner: tokio::sync::broadcast::Receiver<crate::event::TransportEvent>,
 }
 
 impl ClientEventStream {
-    /// 创建新的客户端事件流
+    /// Create new client event stream
     pub fn new(receiver: tokio::sync::broadcast::Receiver<crate::event::TransportEvent>) -> Self {
         Self { inner: receiver }
     }
     
-    /// 接收下一个客户端事件
+    /// Receive next client event
     pub async fn next(&mut self) -> Result<crate::event::ClientEvent, crate::error::TransportError> {
         loop {
             match self.inner.recv().await {
                 Ok(transport_event) => {
-                    // 转换为客户端事件，过滤掉不相关的事件
+                    // Convert to client event, filter out irrelevant events
                     if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
                         return Ok(client_event);
                     }
-                    // 如果是不相关的事件，继续循环等待下一个事件
+                    // If it's an irrelevant event, continue looping to wait for next event
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return Err(crate::error::TransportError::connection_error("Event stream closed", false));
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    // 事件流滞后，继续接收
+                    // Event stream lagged, continue receiving
                     continue;
                 }
             }
         }
     }
     
-    /// 尝试接收事件（非阻塞）
+    /// Try to receive event (non-blocking)
     pub fn try_next(&mut self) -> Result<Option<crate::event::ClientEvent>, crate::error::TransportError> {
         loop {
             match self.inner.try_recv() {
                 Ok(transport_event) => {
-                    // 转换为客户端事件，过滤掉不相关的事件
+                    // Convert to client event, filter out irrelevant events
                     if let Some(client_event) = crate::event::ClientEvent::from_transport_event(transport_event) {
                         return Ok(Some(client_event));
                     }
-                    // 如果是不相关的事件，继续循环
+                    // If it's an irrelevant event, continue looping
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
                     return Ok(None);
@@ -452,7 +452,7 @@ impl ClientEventStream {
                     return Err(crate::error::TransportError::connection_error("Event stream closed", false));
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
-                    // 事件流滞后，继续接收
+                    // Event stream lagged, continue receiving
                     continue;
                 }
             }

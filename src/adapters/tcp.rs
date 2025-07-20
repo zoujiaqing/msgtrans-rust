@@ -431,7 +431,7 @@ impl ProtocolAdapter for TcpAdapter<TcpClientConfig> {
     }
     
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // 在事件驱动模式下，flush由事件循环自动处理
+                    // In event-driven mode, flush is handled automatically by the event loop
         Ok(())
     }
 }

@@ -303,7 +303,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
         let protocol_adapter = self.protocol_adapter.clone();  // Clone Arc
         let event_sender = self.event_sender.clone();
         let global_event_sender = self.global_event_sender.clone();
-        let session_id = self.session_id;
+        let _session_id = self.session_id;
         
         let data_task = tokio::spawn(async move {
             info!("[DATA] Starting data processing pipeline (max batch: {})", max_batch_size);
@@ -394,11 +394,11 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
         });
         
         // Start receive processing pipeline
-        let stats = self.stats.clone();
-        let event_sender = self.event_sender.clone();
-        let global_event_sender = self.global_event_sender.clone();
+        let _stats = self.stats.clone();
+        let _event_sender = self.event_sender.clone();
+        let _global_event_sender = self.global_event_sender.clone();
         let protocol_adapter = self.protocol_adapter.clone();  // Clone Arc for receive
-        let session_id = self.session_id;
+        let _session_id = self.session_id;
         
         let recv_task = tokio::spawn(async move {
             info!("[RECV] Starting event-driven receive pipeline");
@@ -434,7 +434,7 @@ impl<A: ProtocolAdapter> OptimizedActor<A> {
         let event_sender = self.event_sender.clone();
         let global_event_sender = self.global_event_sender.clone();
         let data_sender = self.data_sender.clone();  // [CONFIG] Fix: clone data_sender
-        let session_id = self.session_id;
+        let _session_id = self.session_id;
         
         let command_task = tokio::spawn(async move {
             info!("[CONTROL] Starting command processing pipeline");

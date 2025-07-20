@@ -398,28 +398,28 @@ impl WebSocketServerConfig {
     }
 }
 
-/// QUIC服务端配置
+/// QUIC server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuicServerConfig {
-    /// 绑定地址
+    /// Bind address
     pub bind_address: std::net::SocketAddr,
-    /// TLS证书的PEM内容（可选，如果为None则自动生成自签名证书）
+    /// TLS certificate PEM content (optional, if None, auto-generate self-signed certificate)
     pub cert_pem: Option<String>,
-    /// TLS私钥的PEM内容（可选，如果为None则自动生成自签名证书）
+    /// TLS private key PEM content (optional, if None, auto-generate self-signed certificate)
     pub key_pem: Option<String>,
-    /// 最大并发流数
+    /// Maximum concurrent streams
     pub max_concurrent_streams: u64,
-    /// 最大空闲超时
+    /// Maximum idle timeout
     pub max_idle_timeout: Duration,
-    /// keepalive间隔
+    /// Keep-alive interval
     pub keep_alive_interval: Option<Duration>,
-    /// 初始RTT估值
+    /// Initial RTT estimate
     pub initial_rtt: Duration,
-    /// 最大连接数
+    /// Maximum connections
     pub max_connections: usize,
-    /// 接收窗口大小
+    /// Receive window size
     pub receive_window: u32,
-    /// 发送窗口大小
+    /// Send window size
     pub send_window: u32,
 }
 
@@ -489,7 +489,7 @@ impl DynProtocolConfig for QuicServerConfig {
     }
 }
 
-/// 🔧 新增：实现 QUIC 服务端专用配置
+/// 🔧 New addition: Implement QUIC server-specific configuration
 impl crate::protocol::adapter::DynServerConfig for QuicServerConfig {
     fn build_server_dyn(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Box<dyn crate::Server>, crate::error::TransportError>> + Send + '_>> {
         Box::pin(async move {
@@ -508,7 +508,7 @@ impl crate::protocol::adapter::DynServerConfig for QuicServerConfig {
 }
 
 impl QuicServerConfig {
-    /// 创建新的QUIC服务端配置
+    /// Create new QUIC server configuration
     pub fn new(bind_address: &str) -> Result<Self, ConfigError> {
         let addr = bind_address.parse()
             .map_err(|e| ConfigError::InvalidAddress {
@@ -523,24 +523,24 @@ impl QuicServerConfig {
         })
     }
     
-    /// 创建默认配置（用于需要默认地址的场景）
+    /// Create default configuration (for scenarios requiring default address)
     pub fn default_config() -> Self {
         Self::default()
     }
     
-    /// 设置绑定地址
+    /// Set bind address
     pub fn with_bind_address<A: Into<std::net::SocketAddr>>(mut self, addr: A) -> Self {
         self.bind_address = addr.into();
         self
     }
     
-    /// 设置TLS证书PEM
+    /// Set TLS certificate PEM
     pub fn with_cert_pem<S: Into<String>>(mut self, cert_pem: S) -> Self {
         self.cert_pem = Some(cert_pem.into());
         self
     }
     
-    /// 设置TLS私钥PEM
+    /// Set TLS private key PEM
     pub fn with_key_pem<S: Into<String>>(mut self, key_pem: S) -> Self {
         self.key_pem = Some(key_pem.into());
         self
